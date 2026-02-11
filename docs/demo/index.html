@@ -127,6 +127,32 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
   border-radius: 10px; padding: 1px 6px; font-size: 0.65rem; font-weight: 700; }
 .tier-node .node-badge.green { background: var(--green); }
 .tier-node .node-badge.amber { background: var(--amber); color: #000; }
+.tier-node .node-badge.red { background: var(--red); }
+/* Session nodes — numbered circle + colored stat badges */
+.tier-node .node-seq { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+  border-radius: 50%; background: var(--primary); color: white; font-size: 0.7rem; font-weight: 700; margin-bottom: 4px; }
+.tier-node .node-stats { display: flex; gap: 4px; justify-content: center; margin-top: 6px; flex-wrap: wrap; }
+.tier-node .node-stats .ns { padding: 1px 5px; border-radius: 3px; font-size: 0.6rem; font-weight: 700; }
+.ns-tx { background: #3B82F6; color: white; }
+.ns-ext { background: #21C354; color: white; }
+.ns-lkp { background: #EAB308; color: #000; }
+/* Table output nodes — smaller, distinct style */
+.tier-node.table-output { background: var(--surface2); border-style: dashed; min-width: 100px; max-width: 180px; padding: 8px 12px; }
+.tier-node.table-output .node-name { font-size: 0.75rem; }
+.tier-node.table-output .node-class { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+/* Conflict gate nodes — red border, warning icon */
+.tier-node.conflict-gate { border-color: var(--red); background: #1a0a0a; min-width: 140px; }
+.tier-node.conflict-gate .node-name { color: var(--red); }
+/* Connection density sidebar */
+.tier-diagram-wrapper { display: flex; gap: 0; }
+.tier-diagram-main { flex: 1; min-width: 0; }
+.tier-density-sidebar { width: 220px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface);
+  padding: 12px; overflow-y: auto; max-height: 800px; font-size: 0.7rem; }
+.tier-density-sidebar h4 { font-size: 0.75rem; margin: 0 0 8px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+.density-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.density-bar { height: 6px; border-radius: 3px; flex-shrink: 0; min-width: 2px; }
+.density-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text2); max-width: 120px; }
+@media (max-width: 900px) { .tier-density-sidebar { display: none; } .tier-diagram-wrapper { flex-direction: column; } }
 .node-detail { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px;
   margin-top: 12px; font-size: 0.85rem; }
 .node-detail h4 { margin: 0 0 8px; }
@@ -211,7 +237,13 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
       <div id="tierDiagramContainer" class="hidden">
         <h3>Environment Visualization</h3>
         <div id="tierDiagramLegend" class="diagram-legend"></div>
-        <div id="tierDiagram" class="tier-diagram"></div>
+        <div class="tier-diagram-wrapper">
+          <div id="tierDiagram" class="tier-diagram tier-diagram-main"></div>
+          <div id="tierDensitySidebar" class="tier-density-sidebar hidden">
+            <h4>Connection Density</h4>
+            <div id="densityBars"></div>
+          </div>
+        </div>
         <div id="tierNodeDetail"></div>
       </div>
     </div>
@@ -1715,84 +1747,309 @@ function buildDependencyTierData(dep, blueprint) {
   const edges = dep.edges || [];
   const order = dep.order || [];
   const conflicts = dep.conflicts || [];
+  const rawSessions = dep.rawSessions || {};
+  const allTables = dep.allTables || {};
 
-  // Build adjacency for topological depth
+  // ── Step 1: Build session adjacency + topological depth ──
   const depthMap = {};
-  const upstream = {}; // downstream -> [upstream sessions]
+  const upstreamMap = {};   // session -> [upstream session names]
+  const downstreamMap = {}; // session -> [downstream session names]
+  const edgeVia = {};       // "up|down" -> via_table
   edges.forEach(e => {
     const up = e.upstream || e.upstream_session || e.from;
     const down = e.downstream || e.downstream_session || e.to;
-    if (!upstream[down]) upstream[down] = [];
-    upstream[down].push(up);
+    if (!upstreamMap[down]) upstreamMap[down] = [];
+    upstreamMap[down].push(up);
+    if (!downstreamMap[up]) downstreamMap[up] = [];
+    downstreamMap[up].push(down);
+    edgeVia[up + '|' + down] = e.shared_tables ? e.shared_tables.join(', ') : (e.via_table || '');
   });
   const sessionNames = sessions.map(s => s.name);
   function getDepth(sn, visited) {
     if (depthMap[sn] !== undefined) return depthMap[sn];
     if (visited.has(sn)) return 0;
     visited.add(sn);
-    const ups = upstream[sn] || [];
+    const ups = upstreamMap[sn] || [];
     if (!ups.length) { depthMap[sn] = 0; return 0; }
     const maxD = Math.max(...ups.map(u => getDepth(u, new Set(visited))));
     depthMap[sn] = maxD + 1;
     return depthMap[sn];
   }
   sessionNames.forEach(sn => getDepth(sn, new Set()));
-  // If recommended_order exists and depths are all 0, use order index as depth
   if (order.length && Math.max(0, ...Object.values(depthMap)) === 0) {
     order.forEach((sn, i) => { depthMap[sn] = i; });
   }
-  const maxDepth = Math.max(0, ...Object.values(depthMap));
-  // Compress depths into reasonable tiers (max 6 tiers)
-  const tierCount = Math.min(maxDepth + 1, 6);
-  const tierColors = ['#3B82F6','#EAB308','#A855F7','#21C354','#F97316','#EC4899'];
-  const tierBgs = ['rgba(59,130,246,0.06)','rgba(234,179,8,0.06)','rgba(168,85,247,0.06)','rgba(33,195,84,0.06)','rgba(249,115,22,0.06)','rgba(236,72,153,0.06)'];
-  for (let d = 0; d < tierCount; d++) {
-    const ti = d + 1;
-    if (d === 0) tierLabels[ti] = {label:'ROOT SESSIONS — No Upstream Dependencies', color:tierColors[d], bg:tierBgs[d]};
-    else if (d === maxDepth && maxDepth > 0) tierLabels[ti] = {label:'TERMINAL SESSIONS — Final Output', color:tierColors[d % tierColors.length], bg:tierBgs[d % tierBgs.length]};
-    else tierLabels[ti] = {label:`DEPENDENCY WAVE ${d}`, color:tierColors[d % tierColors.length], bg:tierBgs[d % tierBgs.length]};
+  const maxSessionDepth = Math.max(0, ...Object.values(depthMap));
+
+  // ── Step 2: Build table index from raw session data ──
+  const tableWriters = {};  // table -> [session names that write it]
+  const tableReaders = {};  // table -> [session names that read it as source]
+  const tableLookups = {};  // table -> [session names that use it as lookup]
+  for (const [sName, sess] of Object.entries(rawSessions)) {
+    (sess.target_tables || []).forEach(t => {
+      if (!tableWriters[t.name]) tableWriters[t.name] = [];
+      tableWriters[t.name].push(sName);
+    });
+    (sess.source_tables || []).forEach(t => {
+      if (!tableReaders[t.name]) tableReaders[t.name] = [];
+      tableReaders[t.name].push(sName);
+    });
+    (sess.lookup_tables || []).forEach(t => {
+      if (!tableLookups[t.name]) tableLookups[t.name] = [];
+      tableLookups[t.name].push(sName);
+    });
   }
-  // Conflict lookup
-  const conflictSet = new Set(conflicts.map(c => c.table_name));
-  const sessionConflicts = {};
+
+  // ── Step 3: Classify tables ──
+  // Chain tables: written by one session, read/looked-up by different sessions
+  // Independent: written but only read back by the same writer
+  // Conflict: written by multiple sessions
+  const chainTables = {};    // table -> {writers, readers, lookups, isConflict, isChain}
+  const conflictMap = {};
   conflicts.forEach(c => {
-    (c.writers || []).forEach(w => { if (!sessionConflicts[w]) sessionConflicts[w] = []; sessionConflicts[w].push(c); });
+    if (!conflictMap[c.table_name]) conflictMap[c.table_name] = [];
+    conflictMap[c.table_name].push(c);
   });
-  // Build nodes from sessions
-  sessions.forEach(s => {
-    const depth = depthMap[s.name] || 0;
-    const tier = Math.min(depth + 1, tierCount);
-    const hasConflict = !!(sessionConflicts[s.name] && sessionConflicts[s.name].length);
-    nodes.push({
-      id: s.name,
-      name: s.name,
-      tier: tier,
-      type: 'session',
-      subtype: depth === 0 ? 'root' : (upstream[s.name] ? 'dependent' : 'independent'),
-      meta: `${s.sources} src · ${s.targets} tgt · ${s.lookups} lkp`,
-      sources: s.sources,
-      targets: s.targets,
-      lookups: s.lookups,
-      hasConflict: hasConflict,
-      conflictDetails: sessionConflicts[s.name] || [],
-      detail: s
+  const allWrittenTables = Object.keys(tableWriters);
+  allWrittenTables.forEach(tn => {
+    const writers = tableWriters[tn] || [];
+    const readers = (tableReaders[tn] || []).filter(r => !writers.includes(r));
+    const lookups = (tableLookups[tn] || []).filter(l => !writers.includes(l));
+    const isConflict = writers.length > 1 || !!(conflictMap[tn] && conflictMap[tn].length);
+    const isChain = readers.length > 0 || lookups.length > 0;
+    if (isConflict || isChain) {
+      chainTables[tn] = { writers, readers, lookups, isConflict, isChain, conflicts: conflictMap[tn] || [] };
+    }
+  });
+
+  // ── Step 4: Group sessions by depth (wave) ──
+  const waves = {};
+  sessionNames.forEach(sn => {
+    const d = depthMap[sn] || 0;
+    if (!waves[d]) waves[d] = [];
+    waves[d].push(sn);
+  });
+  const sortedWaves = Object.keys(waves).map(Number).sort((a, b) => a - b);
+
+  // ── Step 5: Build interleaved tiers (session → outputs → conflict gate → next session) ──
+  let tierNum = 0;
+  const sessionTier = {};    // session name -> tier number
+  const tableTier = {};      // table name -> tier number (for output tables)
+  const sessionSeqMap = {};  // session name -> execution order number
+  order.forEach((sn, i) => { sessionSeqMap[sn] = i + 1; });
+  // If no order, assign by depth then alphabetical
+  if (!order.length) sessionNames.sort().forEach((sn, i) => { sessionSeqMap[sn] = i + 1; });
+
+  const tierColorPool = ['#3B82F6','#EAB308','#A855F7','#21C354','#F97316','#EC4899','#06B6D4','#8B5CF6','#F43F5E','#10B981'];
+  const tierBgPool = ['rgba(59,130,246,0.06)','rgba(234,179,8,0.06)','rgba(168,85,247,0.06)','rgba(33,195,84,0.06)','rgba(249,115,22,0.06)','rgba(236,72,153,0.06)','rgba(6,182,212,0.06)','rgba(139,92,246,0.06)','rgba(244,63,94,0.06)','rgba(16,185,129,0.06)'];
+  function tierColor(n) { return tierColorPool[n % tierColorPool.length]; }
+  function tierBg(n) { return tierBgPool[n % tierBgPool.length]; }
+
+  // Pre-compute: for each multi-writer conflict table, find which wave contains its LAST writer
+  const conflictLastWave = {};  // table name -> wave index of last writer
+  allWrittenTables.forEach(tn => {
+    const info = chainTables[tn];
+    if (info && info.isConflict && info.writers.length > 1) {
+      let maxWave = 0;
+      info.writers.forEach(w => {
+        const d = depthMap[w] || 0;
+        if (d > maxWave) maxWave = d;
+      });
+      conflictLastWave[tn] = maxWave;
+    }
+  });
+  const placedTables = new Set();  // Track globally placed table nodes
+
+  sortedWaves.forEach((waveIdx, wi) => {
+    const waveSessions = waves[waveIdx];
+
+    // ── Session tier ──
+    tierNum++;
+    const sLabel = waveIdx === 0 ? 'INDEPENDENT PARALLEL EXECUTION'
+      : (wi === sortedWaves.length - 1 && sortedWaves.length > 1) ? 'END OF PIPELINE'
+      : `EXECUTION WAVE ${waveIdx}`;
+    tierLabels[tierNum] = { label: `TIER ${wi + 1} — ${sLabel}`, color: tierColor(tierNum), bg: tierBg(tierNum) };
+
+    waveSessions.forEach(sn => {
+      sessionTier[sn] = tierNum;
+      const sess = rawSessions[sn] || {};
+      const srcCount = (sess.source_tables || []).length;
+      const tgtCount = (sess.target_tables || []).length;
+      const lkpCount = (sess.lookup_tables || []).length;
+      const sConflicts = [];
+      Object.values(conflictMap).forEach(cArr => cArr.forEach(c => {
+        if ((c.writers || []).includes(sn)) sConflicts.push(c);
+      }));
+      nodes.push({
+        id: sn, name: sn, tier: tierNum,
+        type: 'session', subtype: waveIdx === 0 ? 'root' : 'dependent',
+        seq: sessionSeqMap[sn] || 0,
+        srcCount, tgtCount, lkpCount,
+        hasConflict: sConflicts.length > 0,
+        conflictDetails: sConflicts,
+        detail: { sources: srcCount, targets: tgtCount, lookups: lkpCount,
+          source_tables: sess.source_tables, target_tables: sess.target_tables, lookup_tables: sess.lookup_tables }
+      });
+    });
+
+    // ── Collect output tables for this wave ──
+    const waveOutputTables = [];
+    const waveConflictTables = [];
+    waveSessions.forEach(sn => {
+      const sess = rawSessions[sn] || {};
+      (sess.target_tables || []).forEach(t => {
+        if (placedTables.has(t.name)) return;  // Already placed in an earlier tier
+        const info = chainTables[t.name];
+        if (info && info.isConflict && info.writers.length > 1) {
+          // Multi-writer conflict — only place gate after the LAST writer's wave
+          if (conflictLastWave[t.name] === waveIdx && !waveConflictTables.find(x => x.name === t.name)) {
+            waveConflictTables.push({ name: t.name, info });
+          }
+        } else if (!info) {
+          if (!waveOutputTables.find(x => x.name === t.name)) {
+            waveOutputTables.push({ name: t.name, isChain: false, isConflict: false, writer: sn, loadType: t.load_type || '' });
+          }
+        } else {
+          if (!waveOutputTables.find(x => x.name === t.name)) {
+            waveOutputTables.push({ name: t.name, isChain: info.isChain, isConflict: info.isConflict, writer: sn, loadType: t.load_type || '' });
+          }
+        }
+      });
+    });
+
+    // ── Output tables tier (if any) ──
+    if (waveOutputTables.length) {
+      tierNum++;
+      tierLabels[tierNum] = { label: `TIER ${wi + 1} OUTPUTS${waveOutputTables.some(t=>t.isChain) ? ' & CHAIN TABLES' : ''}`, color: '#6366F1', bg: 'rgba(99,102,241,0.04)' };
+      waveOutputTables.forEach(t => {
+        placedTables.add(t.name);
+        tableTier[t.name] = tierNum;
+        const cls = t.isChain ? 'chain' : 'independent';
+        nodes.push({
+          id: 'tbl_' + t.name, name: t.name, tier: tierNum,
+          type: 'table_output', subtype: cls,
+          isConflict: t.isConflict, isChain: t.isChain,
+          writer: t.writer, loadType: t.loadType,
+          detail: { writers: tableWriters[t.name] || [], readers: tableReaders[t.name] || [], lookups: tableLookups[t.name] || [], conflicts: conflictMap[t.name] || [] }
+        });
+      });
+    }
+
+    // ── Conflict gate tier (for multi-writer tables whose last writer is in THIS wave) ──
+    if (waveConflictTables.length) {
+      tierNum++;
+      const gateLabel = waveConflictTables.length === 1
+        ? `CRITICAL GATE — ${waveConflictTables[0].name} CONFLICT`
+        : `CRITICAL GATE — ${waveConflictTables.length} CONFLICT TABLES`;
+      tierLabels[tierNum] = { label: gateLabel, color: '#EF4444', bg: 'rgba(239,68,68,0.06)' };
+      waveConflictTables.forEach(t => {
+        placedTables.add(t.name);
+        tableTier[t.name] = tierNum;
+        const info = t.info;
+        nodes.push({
+          id: 'gate_' + t.name, name: t.name, tier: tierNum,
+          type: 'conflict_gate',
+          writerCount: info.writers.length,
+          readerCount: info.readers.length,
+          lookupCount: info.lookups.length,
+          conflictTypes: info.conflicts.map(c => c.conflict_type),
+          detail: { writers: info.writers, readers: info.readers, lookups: info.lookups, conflicts: info.conflicts }
+        });
+      });
+    }
+  });
+
+  // ── Final outputs tier — target tables from the terminal sessions ──
+  const terminalWave = sortedWaves[sortedWaves.length - 1];
+  const terminalSessions = waves[terminalWave] || [];
+  const finalOutputs = [];
+  terminalSessions.forEach(sn => {
+    const sess = rawSessions[sn] || {};
+    (sess.target_tables || []).forEach(t => {
+      if (!placedTables.has(t.name) && !finalOutputs.find(x => x.name === t.name)) {
+        const info = chainTables[t.name];
+        finalOutputs.push({ name: t.name, isConflict: !!(info && info.isConflict), isChain: !!(info && info.isChain), writer: sn });
+      }
     });
   });
-  // Build connections from dependency edges
-  edges.forEach((e, i) => {
+  if (finalOutputs.length) {
+    tierNum++;
+    tierLabels[tierNum] = { label: 'FINAL OUTPUTS & CONFLICTS', color: '#EF4444', bg: 'rgba(239,68,68,0.04)' };
+    finalOutputs.forEach(t => {
+      tableTier[t.name] = tierNum;
+      nodes.push({
+        id: 'final_' + t.name, name: t.name, tier: tierNum,
+        type: 'table_output', subtype: t.isChain ? 'chain' : 'independent',
+        isConflict: t.isConflict, isChain: t.isChain, writer: t.writer,
+        detail: { writers: tableWriters[t.name] || [], readers: tableReaders[t.name] || [], lookups: tableLookups[t.name] || [], conflicts: conflictMap[t.name] || [] }
+      });
+    });
+  }
+
+  // ── Step 6: Build connections ──
+  // Session → its output tables
+  for (const [sn, sess] of Object.entries(rawSessions)) {
+    (sess.target_tables || []).forEach(t => {
+      const tableId = nodes.find(n => (n.type === 'table_output' || n.type === 'conflict_gate') && n.name === t.name);
+      if (tableId) {
+        connections.push({ from: sn, to: tableId.id, label: '', type: 'produces', color: '#6366F1', width: 1.5 });
+      }
+    });
+  }
+  // Output/gate tables → downstream sessions that read them
+  nodes.filter(n => n.type === 'table_output' || n.type === 'conflict_gate').forEach(tblNode => {
+    const readers = (tableReaders[tblNode.name] || []).filter(r => !((tableWriters[tblNode.name] || []).includes(r)));
+    const lookups = (tableLookups[tblNode.name] || []).filter(l => !((tableWriters[tblNode.name] || []).includes(l)));
+    readers.forEach(r => {
+      if (nodes.find(n => n.id === r)) {
+        connections.push({ from: tblNode.id, to: r, label: 'reads', type: 'dependency', color: '#6366F1', width: 1.5 });
+      }
+    });
+    lookups.forEach(l => {
+      if (nodes.find(n => n.id === l)) {
+        connections.push({ from: tblNode.id, to: l, label: 'lookup', type: 'lookup', color: '#F59E0B', width: 1, dash: true });
+      }
+    });
+  });
+  // Direct session → session edges where no intermediate table node exists
+  edges.forEach(e => {
     const up = e.upstream || e.upstream_session || e.from;
     const down = e.downstream || e.downstream_session || e.to;
     const via = e.shared_tables ? e.shared_tables.join(', ') : (e.via_table || '');
-    const hasConflict = e.shared_tables ? e.shared_tables.some(t => conflictSet.has(t)) : conflictSet.has(via);
-    connections.push({
-      from: up, to: down,
-      label: via ? 'via ' + via : '',
-      type: hasConflict ? 'conflict' : 'dependency',
-      color: hasConflict ? '#EF4444' : '#6366F1',
-      width: hasConflict ? 2.5 : 1.5
-    });
+    // Check if we already have session→table→session path for this edge
+    const viaTableNode = via ? nodes.find(n => (n.type === 'table_output' || n.type === 'conflict_gate') && n.name === via) : null;
+    if (!viaTableNode) {
+      const isConflict = via ? !!(conflictMap[via] && conflictMap[via].length) : false;
+      connections.push({
+        from: up, to: down, label: via ? 'via ' + via : '',
+        type: isConflict ? 'conflict' : 'dependency',
+        color: isConflict ? '#EF4444' : '#6366F1', width: isConflict ? 2.5 : 1.5
+      });
+    }
   });
-  return {nodes, connections, tierLabels, diagramType: 'dependency_graph'};
+
+  // Deduplicate connections (same from→to→type)
+  const connKeys = new Set();
+  const dedupedConns = [];
+  connections.forEach(c => {
+    const key = `${c.from}|${c.to}|${c.type}`;
+    if (!connKeys.has(key)) { connKeys.add(key); dedupedConns.push(c); }
+  });
+  connections.length = 0;
+  connections.push(...dedupedConns);
+
+  // ── Step 7: Connection density data for sidebar ──
+  const densityData = [];
+  Object.keys(tableWriters).forEach(tn => {
+    const w = (tableWriters[tn] || []).length;
+    const r = (tableReaders[tn] || []).filter(x => !(tableWriters[tn] || []).includes(x)).length;
+    const l = (tableLookups[tn] || []).filter(x => !(tableWriters[tn] || []).includes(x)).length;
+    const total = w + r + l;
+    if (total > 0) densityData.push({ name: tn, writers: w, readers: r, lookups: l, total, isConflict: !!(conflictMap[tn] && conflictMap[tn].length) });
+  });
+  densityData.sort((a, b) => b.total - a.total);
+
+  return { nodes, connections, tierLabels, diagramType: 'dependency_graph', densityData };
 }
 
 // ================================================================
@@ -1873,7 +2130,7 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
   container.innerHTML = '';
   container.style.minHeight = '200px';
 
-  const {nodes, connections, tierLabels, diagramType} = tierData;
+  const {nodes, connections, tierLabels, diagramType, densityData} = tierData;
   if (!nodes.length) { container.innerHTML = '<p style="text-align:center;padding:20px;color:var(--text2)">No nodes to display</p>'; return; }
 
   // Group nodes by tier
@@ -1883,7 +2140,7 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
     tierGroups[n.tier].push(n);
   });
 
-  // Render tier bands
+  // Render tier bands — supports up to 100 tiers, only renders used ones
   const sortedTiers = Object.keys(tierGroups).map(Number).sort((a,b)=>a-b);
   const nodeEls = {};
 
@@ -1905,37 +2162,115 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
 
     tierGroups[tier].forEach(node => {
       const el = document.createElement('div');
-      el.className = 'tier-node';
       el.dataset.nodeId = node.id;
-      if (node.state === 'DISABLED' || node.state === 'STOPPED') el.style.opacity = '0.5';
-      // Color code by type
-      if (node.subtype === 'source') el.style.borderTopColor = '#3B82F6';
-      else if (node.subtype === 'sink') el.style.borderTopColor = '#21C354';
-      else if (node.subtype === 'route') el.style.borderTopColor = '#EAB308';
-      else if (node.subtype === 'transform') el.style.borderTopColor = '#A855F7';
-      else if (node.type === 'session' && node.hasConflict) { el.style.borderTopColor = '#EF4444'; el.style.borderColor = '#EF4444'; }
-      else if (node.type === 'session' && node.subtype === 'root') el.style.borderTopColor = '#3B82F6';
-      else if (node.type === 'session') el.style.borderTopColor = '#6366F1';
-      else if (node.type === 'table') el.style.borderTopColor = '#3B82F6';
-      el.style.borderTopWidth = '3px';
 
-      const nameEl = document.createElement('div');
-      nameEl.className = 'node-name';
-      nameEl.textContent = node.name.length > 25 ? node.name.substring(0,22) + '...' : node.name;
-      nameEl.title = node.name;
-      el.appendChild(nameEl);
-
-      if (node.meta) {
+      // ── Dependency graph: session nodes ──
+      if (node.type === 'session') {
+        el.className = 'tier-node';
+        if (node.hasConflict) { el.style.borderColor = '#EF4444'; el.style.borderTopColor = '#EF4444'; }
+        else if (node.subtype === 'root') el.style.borderTopColor = '#3B82F6';
+        else el.style.borderTopColor = '#6366F1';
+        el.style.borderTopWidth = '3px';
+        // Sequence number badge
+        if (node.seq) {
+          const seqEl = document.createElement('div');
+          seqEl.className = 'node-seq';
+          seqEl.textContent = node.seq;
+          if (node.hasConflict) seqEl.style.background = '#EF4444';
+          el.appendChild(seqEl);
+        }
+        // Name
+        const nameEl = document.createElement('div');
+        nameEl.className = 'node-name';
+        const shortName = node.name.replace(/^s_m_(?:Load_|LOAD_)?/i, '');
+        nameEl.textContent = shortName.length > 22 ? shortName.substring(0, 19) + '...' : shortName;
+        nameEl.title = node.name;
+        el.appendChild(nameEl);
+        // Colored stat badges
+        const statsDiv = document.createElement('div');
+        statsDiv.className = 'node-stats';
+        statsDiv.innerHTML = `<span class="ns ns-tx">${node.srcCount} tx</span><span class="ns ns-ext">${node.tgtCount} ext</span>` + (node.lkpCount ? `<span class="ns ns-lkp">${node.lkpCount} lkp</span>` : '');
+        el.appendChild(statsDiv);
+        // Conflict badge
+        if (node.hasConflict) {
+          const badge = document.createElement('div');
+          badge.className = 'node-badge red';
+          badge.textContent = '!';
+          badge.title = node.conflictDetails.map(c => c.table_name + ': ' + c.conflict_type).join(', ');
+          el.appendChild(badge);
+        }
+      }
+      // ── Table output nodes ──
+      else if (node.type === 'table_output') {
+        el.className = 'tier-node table-output';
+        if (node.isConflict) { el.style.borderColor = '#EF4444'; }
+        else if (node.isChain) { el.style.borderColor = '#F59E0B'; }
+        else el.style.borderColor = '#21C354';
+        // Icon
+        const icon = document.createElement('div');
+        icon.style.cssText = 'font-size:0.8rem;margin-bottom:2px';
+        icon.textContent = node.isConflict ? '\u26A0' : node.isChain ? '\u2161' : '\u2713';
+        el.appendChild(icon);
+        const nameEl = document.createElement('div');
+        nameEl.className = 'node-name';
+        nameEl.textContent = node.name.length > 20 ? node.name.substring(0, 17) + '...' : node.name;
+        nameEl.title = node.name;
+        el.appendChild(nameEl);
+        const cls = document.createElement('div');
+        cls.className = 'node-class';
+        cls.style.color = node.isConflict ? '#FCA5A5' : node.isChain ? '#FDE68A' : '#86EFAC';
+        cls.textContent = node.isConflict ? 'CONFLICT' : node.isChain ? 'CHAIN' : 'INDEPENDENT';
+        el.appendChild(cls);
+      }
+      // ── Conflict gate nodes ──
+      else if (node.type === 'conflict_gate') {
+        el.className = 'tier-node conflict-gate';
+        const icon = document.createElement('div');
+        icon.style.cssText = 'font-size:1.2rem;margin-bottom:2px';
+        icon.textContent = '\u26A0';
+        el.appendChild(icon);
+        const nameEl = document.createElement('div');
+        nameEl.className = 'node-name';
+        nameEl.textContent = node.name.length > 25 ? node.name.substring(0, 22) + '...' : node.name;
+        nameEl.title = node.name;
+        el.appendChild(nameEl);
         const metaEl = document.createElement('div');
         metaEl.className = 'node-meta';
-        metaEl.textContent = node.meta;
+        metaEl.textContent = `${node.writerCount}W / ${node.readerCount}R / ${node.lookupCount}L`;
         el.appendChild(metaEl);
+        const clsEl = document.createElement('div');
+        clsEl.className = 'node-class';
+        clsEl.style.color = '#FCA5A5';
+        clsEl.textContent = 'CONFLICT';
+        el.appendChild(clsEl);
       }
-      if (node.rows) {
-        const badge = document.createElement('div');
-        badge.className = 'node-badge';
-        badge.textContent = node.rows >= 1000 ? Math.round(node.rows/1000)+'K' : node.rows;
-        el.appendChild(badge);
+      // ── Generic nodes (NiFi, SQL, flat) ──
+      else {
+        el.className = 'tier-node';
+        if (node.state === 'DISABLED' || node.state === 'STOPPED') el.style.opacity = '0.5';
+        if (node.subtype === 'source') el.style.borderTopColor = '#3B82F6';
+        else if (node.subtype === 'sink') el.style.borderTopColor = '#21C354';
+        else if (node.subtype === 'route') el.style.borderTopColor = '#EAB308';
+        else if (node.subtype === 'transform') el.style.borderTopColor = '#A855F7';
+        else if (node.type === 'table') el.style.borderTopColor = '#3B82F6';
+        el.style.borderTopWidth = '3px';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'node-name';
+        nameEl.textContent = node.name.length > 25 ? node.name.substring(0, 22) + '...' : node.name;
+        nameEl.title = node.name;
+        el.appendChild(nameEl);
+        if (node.meta) {
+          const metaEl = document.createElement('div');
+          metaEl.className = 'node-meta';
+          metaEl.textContent = node.meta;
+          el.appendChild(metaEl);
+        }
+        if (node.rows) {
+          const badge = document.createElement('div');
+          badge.className = 'node-badge';
+          badge.textContent = node.rows >= 1000 ? Math.round(node.rows / 1000) + 'K' : node.rows;
+          el.appendChild(badge);
+        }
       }
 
       // Hover: highlight connected
@@ -1957,10 +2292,46 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
     renderConnections(container, connections, nodeEls);
   });
 
+  // Connection density sidebar
+  const sidebarEl = document.getElementById('tierDensitySidebar');
+  const barsEl = document.getElementById('densityBars');
+  if (sidebarEl && barsEl && densityData && densityData.length) {
+    sidebarEl.classList.remove('hidden');
+    barsEl.innerHTML = '';
+    const maxTotal = Math.max(...densityData.map(d => d.total));
+    densityData.forEach(d => {
+      const row = document.createElement('div');
+      row.className = 'density-row';
+      const wPct = Math.max(2, (d.writers / maxTotal) * 60);
+      const rPct = Math.max(0, (d.readers / maxTotal) * 60);
+      const lPct = Math.max(0, (d.lookups / maxTotal) * 60);
+      let barsHTML = `<span class="density-bar" style="width:${wPct}px;background:#EF4444" title="${d.writers} writer(s)"></span>`;
+      if (d.readers) barsHTML += `<span class="density-bar" style="width:${rPct}px;background:#3B82F6" title="${d.readers} reader(s)"></span>`;
+      if (d.lookups) barsHTML += `<span class="density-bar" style="width:${lPct}px;background:#F59E0B" title="${d.lookups} lookup(s)"></span>`;
+      row.innerHTML = barsHTML + `<span class="density-label" title="${d.name}">${d.name}</span>`;
+      barsEl.appendChild(row);
+    });
+  } else if (sidebarEl) {
+    sidebarEl.classList.add('hidden');
+  }
+
   // Legend
   if (legendEl) {
     legendEl.innerHTML = '';
-    if (diagramType === 'nifi_flow') {
+    const sessionCount = nodes.filter(n => n.type === 'session').length;
+    const tableCount = nodes.filter(n => n.type === 'table_output' || n.type === 'conflict_gate').length;
+    if (diagramType === 'dependency_graph') {
+      legendEl.innerHTML = [
+        `<span>${sessionCount} Sessions</span>`,
+        `<span>${tableCount} Tables</span>`,
+        `<span style="color:#EF4444">${nodes.filter(n => n.hasConflict || n.type === 'conflict_gate').length} Conflicts</span>`,
+        '<span><span class="leg-line" style="background:#6366F1"></span> Dependency</span>',
+        '<span><span class="leg-line" style="background:#F59E0B;border-top:2px dashed #F59E0B"></span> Lookup</span>',
+        '<span><span class="leg-line" style="background:#EF4444"></span> Conflict</span>',
+        '<span><span class="leg-line" style="background:#21C354"></span> Independent</span>',
+        '<span><span class="leg-line" style="background:#F59E0B"></span> Chain</span>',
+      ].join('');
+    } else if (diagramType === 'nifi_flow') {
       legendEl.innerHTML = [
         '<span><span class="leg-line" style="background:#3B82F6"></span> Source</span>',
         '<span><span class="leg-line" style="background:#EAB308"></span> Route/Transform</span>',
@@ -2106,12 +2477,34 @@ function showNodeDetail(node, detailEl, diagramType) {
       if (propKeys.length > 20) h += `... +${propKeys.length-20} more\n`;
       h += '</pre>';
     }
-  } else if (diagramType === 'dependency_graph' && node.detail) {
+  } else if (diagramType === 'dependency_graph' && node.type === 'session' && node.detail) {
     const s = node.detail;
     h += `<p><strong>Sources:</strong> ${s.sources} · <strong>Targets:</strong> ${s.targets} · <strong>Lookups:</strong> ${s.lookups}</p>`;
+    if (node.seq) h += `<p><strong>Execution Order:</strong> #${node.seq}</p>`;
+    if (s.source_tables && s.source_tables.length) {
+      h += `<p style="margin-top:6px"><strong>Source Tables:</strong></p><ul style="font-size:0.8rem;margin:4px 0 4px 16px">`;
+      s.source_tables.slice(0, 10).forEach(t => { h += `<li>${t.name}</li>`; });
+      if (s.source_tables.length > 10) h += `<li style="color:var(--text2)">+${s.source_tables.length - 10} more</li>`;
+      h += '</ul>';
+    }
+    if (s.target_tables && s.target_tables.length) {
+      h += `<p><strong>Target Tables:</strong></p><ul style="font-size:0.8rem;margin:4px 0 4px 16px">`;
+      s.target_tables.forEach(t => { h += `<li>${t.name}${t.load_type ? ' <code style="font-size:0.7rem">' + t.load_type + '</code>' : ''}</li>`; });
+      h += '</ul>';
+    }
     if (node.hasConflict && node.conflictDetails.length) {
       h += '<div class="alert alert-warn" style="margin:8px 0;padding:8px 12px;font-size:0.8rem"><strong>Conflicts:</strong><br>';
       node.conflictDetails.forEach(c => { h += `${c.table_name} — ${c.conflict_type}<br>`; });
+      h += '</div>';
+    }
+  } else if (diagramType === 'dependency_graph' && (node.type === 'table_output' || node.type === 'conflict_gate') && node.detail) {
+    const d = node.detail;
+    if (d.writers.length) h += `<p><strong>Writers:</strong> ${d.writers.join(', ')}</p>`;
+    if (d.readers.length) h += `<p><strong>Readers:</strong> ${d.readers.join(', ')}</p>`;
+    if (d.lookups.length) h += `<p><strong>Lookup Readers:</strong> ${d.lookups.join(', ')}</p>`;
+    if (d.conflicts && d.conflicts.length) {
+      h += '<div class="alert alert-warn" style="margin:8px 0;padding:8px 12px;font-size:0.8rem"><strong>Conflicts:</strong><br>';
+      d.conflicts.forEach(c => { h += `${c.conflict_type}${c.writers ? ' — Writers: ' + c.writers.join(', ') : ''}<br>`; });
       h += '</div>';
     }
   } else if (node.detail && node.detail.columns) {
