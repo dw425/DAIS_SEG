@@ -2235,6 +2235,8 @@ function generateData() {
   document.getElementById('generateResults').innerHTML = h;
   document.getElementById('conformNotReady').classList.add('hidden');
   document.getElementById('conformReady').classList.remove('hidden');
+  // Update tier diagram with row count badges
+  try { updateTierDiagramBadges(tables); } catch(e) { console.warn('Badge update error:', e); }
   setTabStatus('generate', 'done');
   unlockTab('conform');
 }
@@ -2292,6 +2294,8 @@ function runConform() {
   document.getElementById('conformResults').innerHTML = h;
   document.getElementById('validateNotReady').classList.add('hidden');
   document.getElementById('validateReady').classList.remove('hidden');
+  // Add medallion tiers to diagram
+  try { addMedallionTiers(); } catch(e) { console.warn('Medallion tier error:', e); }
   setTabStatus('conform', 'done');
   unlockTab('validate');
 }
@@ -2333,7 +2337,113 @@ function runValidation() {
   h += tableHTML(['Level','Threshold','Meaning'],[['🟢 Green','≥ 90%','Ready for production cutover'],['🟡 Amber','≥ 70%','Needs attention'],['🔴 Red','< 70%','Not ready']]);
   h += '<div class="alert alert-success">Validation complete! Your synthetic environment is ready.</div>';
   document.getElementById('validateResults').innerHTML = h;
+  // Add validation scoring to diagram
+  try { addValidationTier(val, avg); } catch(e) { console.warn('Validation tier error:', e); }
   setTabStatus('validate', 'done');
+}
+
+// ================================================================
+// TIER DIAGRAM — Progressive Updates
+// ================================================================
+function updateTierDiagramBadges(tables) {
+  const container = document.getElementById('tierDiagram');
+  if (!container) return;
+  container.querySelectorAll('.tier-node').forEach(el => {
+    const nodeId = el.dataset.nodeId;
+    if (!nodeId) return;
+    // Find matching table data
+    const name = nodeId.split('_')[0] || nodeId;
+    for (const [tn, data] of Object.entries(tables)) {
+      if (nodeId === tn || nodeId.startsWith(tn)) {
+        const cols = Object.keys(data);
+        const rc = data[cols[0]] ? data[cols[0]].length : 0;
+        let badge = el.querySelector('.node-badge');
+        if (!badge) { badge = document.createElement('div'); badge.className = 'node-badge'; el.appendChild(badge); }
+        badge.textContent = rc >= 1000 ? Math.round(rc/1000) + 'K' : rc;
+        badge.classList.add('green');
+        break;
+      }
+    }
+  });
+}
+
+function addMedallionTiers() {
+  const container = document.getElementById('tierDiagram');
+  if (!container) return;
+  // Add medallion tier bands
+  const medallionTiers = [
+    {label:'BRONZE — Raw Ingestion', color:'#CD7F32', bg:'rgba(205,127,50,0.08)'},
+    {label:'SILVER — Cleansed & Deduped', color:'#C0C0C0', bg:'rgba(192,192,192,0.08)'},
+    {label:'GOLD — Aggregated & Profiled', color:'#FFD700', bg:'rgba(255,215,0,0.08)'},
+  ];
+  medallionTiers.forEach((tier, i) => {
+    const band = document.createElement('div');
+    band.className = 'tier-band';
+    band.style.background = tier.bg;
+    band.style.borderLeft = `3px solid ${tier.color}`;
+    const label = document.createElement('div');
+    label.className = 'tier-band-label';
+    label.style.color = tier.color;
+    label.textContent = tier.label;
+    band.appendChild(label);
+    const nodesDiv = document.createElement('div');
+    nodesDiv.className = 'tier-nodes';
+    // Add a flow arrow node
+    const arrow = document.createElement('div');
+    arrow.className = 'tier-node';
+    arrow.style.borderTopWidth = '3px';
+    arrow.style.borderTopColor = tier.color;
+    arrow.style.minWidth = '80px';
+    arrow.innerHTML = `<div class="node-name" style="font-size:1.2rem">${i===0?'&#x2B07;':i===1?'&#x2B07;':'&#x2705;'}</div><div class="node-meta">${['Raw data loaded','Cleaned & validated','Ready for analytics'][i]}</div>`;
+    nodesDiv.appendChild(arrow);
+    band.appendChild(nodesDiv);
+    container.appendChild(band);
+  });
+  // Add connections between medallion tiers
+  requestAnimationFrame(() => renderConnections(container, [], {}));
+}
+
+function addValidationTier(val, avg) {
+  const container = document.getElementById('tierDiagram');
+  if (!container) return;
+  const color = avg >= 0.9 ? '#21C354' : avg >= 0.7 ? '#FACA15' : '#FF4B4B';
+  const level = avg >= 0.9 ? 'GREEN' : avg >= 0.7 ? 'AMBER' : 'RED';
+  const band = document.createElement('div');
+  band.className = 'tier-band';
+  band.style.background = avg >= 0.9 ? 'rgba(33,195,84,0.08)' : avg >= 0.7 ? 'rgba(250,202,21,0.08)' : 'rgba(255,75,75,0.08)';
+  band.style.borderLeft = `3px solid ${color}`;
+  const label = document.createElement('div');
+  label.className = 'tier-band-label';
+  label.style.color = color;
+  label.textContent = `VALIDATION — ${level} ${Math.round(avg*100)}%`;
+  band.appendChild(label);
+  const nodesDiv = document.createElement('div');
+  nodesDiv.className = 'tier-nodes';
+  // Per-table validation nodes
+  val.forEach(v => {
+    const el = document.createElement('div');
+    el.className = 'tier-node';
+    const nc = v.overall_score >= 0.9 ? '#21C354' : v.overall_score >= 0.7 ? '#FACA15' : '#FF4B4B';
+    el.style.borderTopWidth = '3px';
+    el.style.borderTopColor = nc;
+    el.innerHTML = `<div class="node-name">${v.table}</div><div class="node-meta">${Math.round(v.overall_score*100)}%</div>`;
+    const badge = document.createElement('div');
+    badge.className = 'node-badge ' + (v.overall_score >= 0.9 ? 'green' : v.overall_score >= 0.7 ? 'amber' : '');
+    badge.textContent = v.overall_score >= 0.9 ? '✓' : v.overall_score >= 0.7 ? '!' : '✗';
+    el.appendChild(badge);
+    nodesDiv.appendChild(el);
+  });
+  band.appendChild(nodesDiv);
+  container.appendChild(band);
+  // Color existing nodes by health
+  container.querySelectorAll('.tier-node[data-node-id]').forEach(el => {
+    const nodeId = el.dataset.nodeId;
+    const vResult = val.find(v => nodeId === v.table || nodeId.startsWith(v.table));
+    if (vResult) {
+      const sc = vResult.overall_score;
+      el.style.borderColor = sc >= 0.9 ? '#21C354' : sc >= 0.7 ? '#FACA15' : '#FF4B4B';
+    }
+  });
 }
 </script>
 </body>
