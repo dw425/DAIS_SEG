@@ -377,8 +377,11 @@ function detectXMLFormat(content) {
   if (/<(REPOSITORY|FOLDER|POWERMART|INFORMATICA)/i.test(content)) return 'informatica_xml';
   if (/<(SOURCE\s|TARGET\s).*?(DATABASETYPE|SOURCEFIELD|TARGETFIELD)/i.test(content)) return 'informatica_xml';
   if (/<(TalendProperties|talendfile|ProcessType|talend)/i.test(content)) return 'talend_xml';
-  if (/<(flowController|processor|connection|rootGroup|snippet)/i.test(content)) return 'nifi_xml';
-  if (/<(template|processGroupFlow|processGroup)\b/i.test(content)) return 'nifi_xml';
+  // NiFi: template exports have <template><snippet><processGroups>
+  if (/<template[\s>][\s\S]{0,500}<snippet>/i.test(content.substring(0,2000))) return 'nifi_xml';
+  if (/<snippet>[\s\S]{0,500}<(processGroups|controllerServices|processors)/i.test(content.substring(0,5000))) return 'nifi_xml';
+  if (/<(flowController|rootGroup|processGroupFlow)\b/i.test(content)) return 'nifi_xml';
+  if (/org\.apache\.nifi\./i.test(content.substring(0,10000))) return 'nifi_xml';
   return 'xml';
 }
 
@@ -817,83 +820,206 @@ function parseTalendXML(doc, sourceName) {
 }
 
 // ================================================================
-// PARSERS — Apache NiFi XML (flow definition)
+// PARSERS — Apache NiFi XML (template / flow definition)
 // ================================================================
 function parseNiFiXML(doc, sourceName) {
-  const tables = [], processors = [], connections = [], controllerServices = [];
-  // Extract processors
-  doc.querySelectorAll('processor, processors > processor').forEach(proc => {
-    const name = proc.querySelector('name')?.textContent||'';
-    const type = proc.querySelector('class, type')?.textContent||'';
-    const shortType = type.split('.').pop();
-    const props = {};
-    proc.querySelectorAll('property > name, config > property > name').forEach(pn => {
-      const val = pn.nextElementSibling; if(val) props[pn.textContent] = val.textContent;
+  const tables = [], processors = [], connections = [], controllerServices = [], processGroups = [];
+  const idToName = {};
+
+  // NiFi templates nest everything: template > snippet > processGroups > contents > processors
+  // Recursively extract all processors, connections, etc. from nested processGroups
+  function extractFromGroup(groupEl, groupName) {
+    const contents = groupEl.querySelector(':scope > contents') || groupEl;
+    // Processors — direct children of contents
+    contents.querySelectorAll(':scope > processors').forEach(proc => {
+      const name = getChildText(proc, 'name');
+      const type = getChildText(proc, 'type');
+      const shortType = type.split('.').pop();
+      const state = getChildText(proc, 'state');
+      const props = extractProperties(proc);
+      const schedPeriod = proc.querySelector('config > schedulingPeriod')?.textContent || '';
+      const schedStrategy = proc.querySelector('config > schedulingStrategy')?.textContent || '';
+      const id = getChildText(proc, 'id');
+      if (id) idToName[id] = name || shortType;
+      processors.push({name, type:shortType, fullType:type, state, properties:props, group:groupName, schedulingPeriod:schedPeriod, schedulingStrategy:schedStrategy});
     });
-    // Also try config > properties > entry format
-    proc.querySelectorAll('config > properties > entry, properties > entry').forEach(entry => {
-      const key = entry.querySelector('key')?.textContent||entry.getAttribute('key')||'';
-      const val = entry.querySelector('value')?.textContent||entry.getAttribute('value')||'';
-      if(key) props[key] = val;
+    // Connections — direct children of contents
+    contents.querySelectorAll(':scope > connections').forEach(conn => {
+      const srcId = conn.querySelector('source > id')?.textContent || getChildText(conn, 'sourceId') || '';
+      const dstId = conn.querySelector('destination > id')?.textContent || getChildText(conn, 'destinationId') || '';
+      const srcType = conn.querySelector('source > type')?.textContent || '';
+      const dstType = conn.querySelector('destination > type')?.textContent || '';
+      const rels = [];
+      conn.querySelectorAll(':scope > selectedRelationships').forEach(r => { if(r.textContent) rels.push(r.textContent); });
+      const bp = getChildText(conn, 'backPressureObjectThreshold');
+      connections.push({sourceId:srcId, destinationId:dstId, sourceType:srcType, destinationType:dstType, relationships:rels, backPressure:bp});
     });
-    processors.push({name,type:shortType,fullType:type,properties:props});
-  });
-  // Extract connections
-  doc.querySelectorAll('connection, connections > connection').forEach(conn => {
-    const src = conn.querySelector('sourceId, source > id')?.textContent||'';
-    const dst = conn.querySelector('destinationId, destination > id')?.textContent||'';
-    const rels = []; conn.querySelectorAll('relationship, selectedRelationships').forEach(r => rels.push(r.textContent||r.getAttribute('name')||''));
-    connections.push({source:src,destination:dst,relationships:rels});
-  });
-  // Extract controller services
-  doc.querySelectorAll('controllerService, controllerServices > controllerService').forEach(cs => {
-    const name = cs.querySelector('name')?.textContent||'';
-    const type = cs.querySelector('class, type')?.textContent||'';
-    const props = {};
-    cs.querySelectorAll('property > name').forEach(pn => { const val=pn.nextElementSibling; if(val)props[pn.textContent]=val.textContent; });
-    cs.querySelectorAll('properties > entry, config > properties > entry').forEach(entry => {
-      const key=entry.querySelector('key')?.textContent||''; const val=entry.querySelector('value')?.textContent||'';
-      if(key)props[key]=val;
+    // Input/output ports
+    contents.querySelectorAll(':scope > inputPorts').forEach(p => {
+      const id = getChildText(p, 'id'), name = getChildText(p, 'name');
+      if(id) idToName[id] = name || 'input_port';
     });
-    controllerServices.push({name,type:type.split('.').pop(),fullType:type,properties:props});
-  });
-  // Try to extract schema info from processors that have SQL or schema definitions
-  processors.forEach(p => {
-    const allProps = Object.entries(p.properties).map(([k,v])=>v).join(' ');
-    if (/CREATE\s+TABLE/i.test(allProps)) {
-      const ddlProp = Object.values(p.properties).find(v=>/CREATE\s+TABLE/i.test(v));
-      if (ddlProp) { const r = parseDDL(ddlProp, p.name); tables.push(...r.tables); }
-    }
-    // Extract table name from common NiFi properties
-    const tn = p.properties['Table Name']||p.properties['table-name']||p.properties['put-db-record-table-name']||'';
-    const cols = p.properties['Column Names']||p.properties['Columns']||'';
-    if (tn && cols) {
-      const colList = cols.split(',').map(c=>c.trim()).filter(Boolean).map(c=>({name:c,data_type:'varchar',raw_type:'varchar',nullable:true,is_primary_key:c.toLowerCase()==='id',is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}));
-      if (colList.length) tables.push({name:tn,schema:'nifi',columns:colList,foreign_keys:[],row_count:1000});
-    }
-  });
-  // Build a virtual "NiFi Flow" table showing processors as rows (for visualization)
-  if (!tables.length && processors.length) {
-    const flowCols = [{name:'processor_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
-      {name:'processor_type',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:processors.map(p=>p.type).filter((v,i,a)=>a.indexOf(v)===i),max_length:200,precision:null,scale:null,default_value:null},
-      {name:'config_json',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}];
-    tables.push({name:'nifi_processors',schema:'nifi_flow',columns:flowCols,foreign_keys:[],row_count:processors.length});
-    if (connections.length) {
-      const connCols = [{name:'connection_id',data_type:'int',raw_type:'int',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
-        {name:'source_processor',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
-        {name:'destination_processor',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
-        {name:'relationship',data_type:'varchar',raw_type:'string',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:100,precision:null,scale:null,default_value:null}];
-      tables.push({name:'nifi_connections',schema:'nifi_flow',columns:connCols,foreign_keys:[{fk_column:'source_processor',referenced_table:'nifi_processors',referenced_column:'processor_name'}],row_count:connections.length});
-    }
-    if (controllerServices.length) {
-      const csCols = [{name:'service_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
-        {name:'service_type',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:controllerServices.map(s=>s.type).filter((v,i,a)=>a.indexOf(v)===i),max_length:200,precision:null,scale:null,default_value:null},
-        {name:'config_json',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}];
-      tables.push({name:'nifi_controller_services',schema:'nifi_flow',columns:csCols,foreign_keys:[],row_count:controllerServices.length});
-    }
+    contents.querySelectorAll(':scope > outputPorts').forEach(p => {
+      const id = getChildText(p, 'id'), name = getChildText(p, 'name');
+      if(id) idToName[id] = name || 'output_port';
+    });
+    // Nested processGroups
+    contents.querySelectorAll(':scope > processGroups').forEach(pg => {
+      const pgName = getChildText(pg, 'name');
+      const pgId = getChildText(pg, 'id');
+      if(pgId) idToName[pgId] = pgName;
+      processGroups.push({name:pgName, parentGroup:groupName});
+      extractFromGroup(pg, pgName);
+    });
   }
-  const result = {source_name:sourceName||'Apache NiFi Flow',source_type:'nifi',tables,input_format:'nifi_xml',parse_warnings:[]};
-  result._nifi = {processors, connections, controllerServices};
+
+  function getChildText(el, tag) {
+    const child = el.querySelector(':scope > ' + tag);
+    return child ? child.textContent.trim() : '';
+  }
+
+  function extractProperties(el) {
+    const props = {};
+    // NiFi template format: config > properties > entry > key + value
+    el.querySelectorAll('config > properties > entry').forEach(entry => {
+      const key = entry.querySelector(':scope > key')?.textContent || '';
+      const valEl = entry.querySelector(':scope > value');
+      if (key && valEl) props[key] = valEl.textContent || '';
+    });
+    // Also try direct properties > entry (for controllerServices at snippet level)
+    if (!Object.keys(props).length) {
+      el.querySelectorAll(':scope > properties > entry').forEach(entry => {
+        const key = entry.querySelector(':scope > key')?.textContent || '';
+        const valEl = entry.querySelector(':scope > value');
+        if (key && valEl) props[key] = valEl.textContent || '';
+      });
+    }
+    return props;
+  }
+
+  // Start from snippet (template format) or root
+  const snippet = doc.querySelector('template > snippet') || doc.querySelector('snippet') || doc.documentElement;
+
+  // Top-level controllerServices
+  snippet.querySelectorAll(':scope > controllerServices').forEach(cs => {
+    const name = getChildText(cs, 'name');
+    const type = getChildText(cs, 'type');
+    const state = getChildText(cs, 'state');
+    const props = {};
+    cs.querySelectorAll(':scope > properties > entry').forEach(entry => {
+      const key = entry.querySelector(':scope > key')?.textContent || '';
+      const valEl = entry.querySelector(':scope > value');
+      if (key && valEl) props[key] = valEl.textContent || '';
+    });
+    controllerServices.push({name, type:type.split('.').pop(), fullType:type, state, properties:props});
+  });
+
+  // Top-level processGroups
+  snippet.querySelectorAll(':scope > processGroups').forEach(pg => {
+    const pgName = getChildText(pg, 'name');
+    const pgId = getChildText(pg, 'id');
+    if(pgId) idToName[pgId] = pgName;
+    processGroups.push({name:pgName, parentGroup:'(root)'});
+    extractFromGroup(pg, pgName);
+  });
+
+  // Also check for top-level processors directly in snippet
+  snippet.querySelectorAll(':scope > processors').forEach(proc => {
+    const name = getChildText(proc, 'name');
+    const type = getChildText(proc, 'type');
+    const id = getChildText(proc, 'id');
+    if(id) idToName[id] = name || type.split('.').pop();
+    const props = extractProperties(proc);
+    processors.push({name, type:type.split('.').pop(), fullType:type, state:getChildText(proc,'state'), properties:props, group:'(root)', schedulingPeriod:'', schedulingStrategy:''});
+  });
+
+  // Resolve connection IDs to processor names
+  connections.forEach(c => {
+    c.sourceName = idToName[c.sourceId] || c.sourceId.substring(0,12)+'...';
+    c.destinationName = idToName[c.destinationId] || c.destinationId.substring(0,12)+'...';
+  });
+
+  // Extract SQL and table refs from processor properties
+  const sqlTables = new Set();
+  processors.forEach(p => {
+    Object.values(p.properties).forEach(v => {
+      if (!v) return;
+      // Try to find CREATE TABLE
+      if (/CREATE\s+(?:EXTERNAL\s+)?TABLE/i.test(v)) {
+        try { const r = parseDDL(v, p.name); tables.push(...r.tables); } catch(e) {}
+      }
+      // Extract table name refs from SQL
+      const tblRefs = v.match(/(?:FROM|JOIN|INTO|TABLE|UPDATE)\s+(?:\$\{[^}]+\}|[\w.]+)/gi);
+      if (tblRefs) tblRefs.forEach(m => {
+        const tn = m.replace(/^(FROM|JOIN|INTO|TABLE|UPDATE)\s+/i,'').trim();
+        if (tn && !tn.startsWith('(') && tn.length > 2 && !/^(select|where|set|and|or|as|on)$/i.test(tn)) sqlTables.add(tn);
+      });
+    });
+    // Extract table names from specific NiFi properties
+    ['Table Name','table-name','put-db-record-table-name'].forEach(k => {
+      if (p.properties[k]) sqlTables.add(p.properties[k]);
+    });
+  });
+
+  // Build NiFi flow inventory tables (always — this IS the synthetic env for a NiFi flow)
+  const procTypes = processors.map(p=>p.type).filter((v,i,a)=>a.indexOf(v)===i);
+  const procGroups = processors.map(p=>p.group).filter((v,i,a)=>a.indexOf(v)===i);
+  const procStates = processors.map(p=>p.state).filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i);
+
+  tables.push({name:'nifi_processors', schema:'nifi_flow', row_count:processors.length, columns:[
+    {name:'processor_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+    {name:'processor_type',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:procTypes.slice(0,50),max_length:200,precision:null,scale:null,default_value:null},
+    {name:'process_group',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:procGroups,max_length:200,precision:null,scale:null,default_value:null},
+    {name:'state',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:procStates,max_length:20,precision:null,scale:null,default_value:null},
+    {name:'scheduling_strategy',data_type:'varchar',raw_type:'string',nullable:true,is_primary_key:false,is_unique:false,check_constraints:['TIMER_DRIVEN','CRON_DRIVEN','EVENT_DRIVEN'],max_length:30,precision:null,scale:null,default_value:null},
+    {name:'scheduling_period',data_type:'varchar',raw_type:'string',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:50,precision:null,scale:null,default_value:null},
+    {name:'property_count',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}
+  ], foreign_keys:[]});
+
+  if (connections.length) {
+    const relTypes = connections.flatMap(c=>c.relationships).filter((v,i,a)=>a.indexOf(v)===i);
+    tables.push({name:'nifi_connections', schema:'nifi_flow', row_count:connections.length, columns:[
+      {name:'connection_id',data_type:'int',raw_type:'int',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+      {name:'source_processor',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'destination_processor',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'relationship',data_type:'varchar',raw_type:'string',nullable:true,is_primary_key:false,is_unique:false,check_constraints:relTypes.slice(0,20),max_length:100,precision:null,scale:null,default_value:null},
+      {name:'back_pressure_threshold',data_type:'int',raw_type:'int',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}
+    ], foreign_keys:[{fk_column:'source_processor',referenced_table:'nifi_processors',referenced_column:'processor_name'}]});
+  }
+
+  if (processGroups.length) {
+    tables.push({name:'nifi_process_groups', schema:'nifi_flow', row_count:processGroups.length, columns:[
+      {name:'group_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'parent_group',data_type:'varchar',raw_type:'string',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'processor_count',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+      {name:'connection_count',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}
+    ], foreign_keys:[]});
+  }
+
+  if (controllerServices.length) {
+    tables.push({name:'nifi_controller_services', schema:'nifi_flow', row_count:controllerServices.length, columns:[
+      {name:'service_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'service_type',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:controllerServices.map(s=>s.type).filter((v,i,a)=>a.indexOf(v)===i),max_length:200,precision:null,scale:null,default_value:null},
+      {name:'state',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:['ENABLED','DISABLED','ENABLING','DISABLING'],max_length:20,precision:null,scale:null,default_value:null},
+      {name:'config_json',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}
+    ], foreign_keys:[]});
+  }
+
+  // If SQL references found, add a reference table
+  if (sqlTables.size) {
+    const refs = [...sqlTables];
+    tables.push({name:'nifi_sql_table_refs', schema:'nifi_flow', row_count:refs.length, columns:[
+      {name:'table_reference',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'reference_type',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:['table','variable','external_table'],max_length:50,precision:null,scale:null,default_value:null},
+      {name:'referenced_by_processor',data_type:'varchar',raw_type:'string',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null}
+    ], foreign_keys:[]});
+  }
+
+  const warnings = [];
+  if (sqlTables.size) warnings.push(`Found ${sqlTables.size} SQL table references: ${[...sqlTables].slice(0,10).join(', ')}${sqlTables.size>10?'...':''}`);
+
+  const result = {source_name:sourceName||'Apache NiFi Flow', source_type:'nifi', tables, input_format:'nifi_xml', parse_warnings:warnings};
+  result._nifi = {processors, connections, controllerServices, processGroups, sqlTables:[...sqlTables]};
   return result;
 }
 
@@ -1229,22 +1355,35 @@ function parseInput() {
   // NiFi-specific details
   if (parsed._nifi) {
     const nf = parsed._nifi;
+    h += metricsHTML([['Processors',nf.processors.length],['Connections',nf.connections.length],['Process Groups',nf.processGroups.length],['Controller Services',nf.controllerServices.length]]);
+    if (nf.processGroups.length) {
+      const pgRows = nf.processGroups.map(pg => {
+        const pc = nf.processors.filter(p=>p.group===pg.name).length;
+        return [pg.name, pg.parentGroup, pc];
+      });
+      h += expanderHTML(`<strong>Process Groups</strong> (${nf.processGroups.length})`, tableHTML(['Group Name','Parent','Processors'], pgRows));
+    }
     if (nf.processors.length) {
-      h += '<h3>NiFi Processors</h3>';
-      const pRows = nf.processors.map(p => [p.name, p.type, Object.keys(p.properties).length+' props']);
-      h += tableHTML(['Processor Name','Type','Properties'], pRows);
+      // Group by type for summary
+      const byType = {}; nf.processors.forEach(p=>{ byType[p.type]=(byType[p.type]||0)+1; });
+      const typeRows = Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([t,c])=>[t,c]);
+      let procBody = '<h3 style="margin-top:0">By Type</h3>' + tableHTML(['Processor Type','Count'], typeRows);
+      // Show first 30 processors
+      const pRows = nf.processors.slice(0,30).map(p => [p.name, p.type, p.group, p.state||'', Object.keys(p.properties).length]);
+      procBody += `<h3>Processors (first 30 of ${nf.processors.length})</h3>` + tableHTML(['Name','Type','Group','State','Props'], pRows);
+      h += expanderHTML(`<strong>Processors</strong> (${nf.processors.length})`, procBody);
     }
     if (nf.connections.length) {
-      h += '<h3>NiFi Connections</h3>';
-      // Resolve IDs to names where possible
-      const idMap = {}; nf.processors.forEach((p,i)=> { /* ID mapping not always available */ });
-      const cRows = nf.connections.map(c => [c.source.substring(0,12)+'...', c.destination.substring(0,12)+'...', c.relationships.join(', ')]);
-      h += tableHTML(['Source','Destination','Relationships'], cRows);
+      const cRows = nf.connections.slice(0,30).map(c => [c.sourceName, c.destinationName, c.relationships.join(', ')]);
+      h += expanderHTML(`<strong>Connections</strong> (${nf.connections.length})`, tableHTML(['Source','Destination','Relationships'], cRows) + (nf.connections.length>30?`<p style="color:var(--text2)">...and ${nf.connections.length-30} more</p>`:''));
     }
     if (nf.controllerServices.length) {
-      h += '<h3>Controller Services</h3>';
-      const csRows = nf.controllerServices.map(s => [s.name, s.type, Object.keys(s.properties).length+' props']);
-      h += tableHTML(['Service Name','Type','Properties'], csRows);
+      const csRows = nf.controllerServices.map(s => [s.name, s.type, s.state||'', Object.keys(s.properties).length+' props']);
+      h += expanderHTML(`<strong>Controller Services</strong> (${nf.controllerServices.length})`, tableHTML(['Service','Type','State','Properties'], csRows));
+    }
+    if (nf.sqlTables && nf.sqlTables.length) {
+      const stRows = nf.sqlTables.map(t => [t, t.startsWith('$')?'variable':'table']);
+      h += expanderHTML(`<strong>SQL Table References</strong> (${nf.sqlTables.length})`, tableHTML(['Table Reference','Type'], stRows));
     }
   }
   if (parsed.parse_warnings && parsed.parse_warnings.length) {
