@@ -108,6 +108,31 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 .detected-source { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px;
   background: var(--surface); border: 1px solid var(--green); border-radius: 6px; margin: 8px 0; font-size: 0.9rem; }
 .detected-source .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+/* Tier Diagram */
+.tier-diagram { position: relative; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); min-height: 200px; margin: 16px 0; }
+.tier-diagram svg.tier-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.tier-band { padding: 16px 20px; border-bottom: 1px solid var(--border); position: relative; z-index: 2; }
+.tier-band:last-child { border-bottom: none; }
+.tier-band-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; margin-bottom: 10px; opacity: 0.8; }
+.tier-nodes { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.tier-node { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px;
+  min-width: 120px; max-width: 200px; text-align: center; cursor: pointer; transition: all 0.2s; position: relative; z-index: 3; }
+.tier-node:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+.tier-node.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(255,75,75,0.3); }
+.tier-node.highlighted { border-color: var(--green); }
+.tier-node.dimmed { opacity: 0.3; }
+.tier-node .node-name { font-weight: 600; font-size: 0.85rem; word-break: break-all; }
+.tier-node .node-meta { font-size: 0.7rem; color: var(--text2); margin-top: 4px; }
+.tier-node .node-badge { position: absolute; top: -6px; right: -6px; background: var(--primary); color: white;
+  border-radius: 10px; padding: 1px 6px; font-size: 0.65rem; font-weight: 700; }
+.tier-node .node-badge.green { background: var(--green); }
+.tier-node .node-badge.amber { background: var(--amber); color: #000; }
+.node-detail { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px;
+  margin-top: 12px; font-size: 0.85rem; }
+.node-detail h4 { margin: 0 0 8px; }
+.diagram-legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0; font-size: 0.75rem; color: var(--text2); }
+.diagram-legend span { display: flex; align-items: center; gap: 4px; }
+.diagram-legend .leg-line { width: 20px; height: 2px; border-radius: 1px; }
 </style>
 </head>
 <body>
@@ -192,6 +217,12 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
         <button class="btn btn-primary" onclick="assembleBlueprint()">Assemble Blueprint</button>
       </div>
       <div id="blueprintResults"></div>
+      <div id="tierDiagramContainer" class="hidden">
+        <h3>Environment Visualization</h3>
+        <div id="tierDiagramLegend" class="diagram-legend"></div>
+        <div id="tierDiagram" class="tier-diagram"></div>
+        <div id="tierNodeDetail"></div>
+      </div>
     </div>
   </div>
 
@@ -286,6 +317,178 @@ function handleFile() {
   const reader = new FileReader();
   reader.onload = e => { uploadedContent = e.target.result; };
   reader.readAsText(f);
+}
+
+// ================================================================
+// SMART PARSE ENGINE — Resilient Cascading Parser
+// ================================================================
+function cleanInput(content) {
+  if (!content) return '';
+  let c = content;
+  // Strip BOM
+  if (c.charCodeAt(0) === 0xFEFF) c = c.substring(1);
+  // Normalize line endings
+  c = c.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  // Remove NULL bytes
+  c = c.replace(/\x00/g, '');
+  // Replace non-breaking spaces
+  c = c.replace(/\u00A0/g, ' ');
+  // Replace smart quotes
+  c = c.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'");
+  return c.trim();
+}
+
+function rankFormats(content, filename) {
+  const candidates = [];
+  // Extension-based (high confidence)
+  if (filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const extMap = {sql:'ddl',ddl:'ddl',hql:'ddl',bteq:'ddl',psql:'ddl',csv:'csv',tsv:'csv',json:'json',avsc:'avro',yaml:'yaml',yml:'yaml',xml:'xml',py:'pyspark',scala:'scala',proto:'protobuf'};
+    if (extMap[ext]) {
+      let fmt = extMap[ext];
+      if (fmt === 'xml') fmt = detectXMLFormat(content);
+      if (fmt === 'json') { try { const d=JSON.parse(content.trim()); if(d.type==='record'&&d.fields) fmt='avro'; } catch(e){} }
+      candidates.push({format: fmt, confidence: 0.9});
+    }
+  }
+  const s = content.trim();
+  // NiFi template
+  if (/<template[\s>][\s\S]{0,1000}<snippet>/i.test(s.substring(0,3000))) candidates.push({format:'nifi_xml',confidence:0.95});
+  if (/org\.apache\.nifi\./i.test(s.substring(0,15000))) candidates.push({format:'nifi_xml',confidence:0.90});
+  // Informatica
+  if (/<(REPOSITORY|FOLDER|POWERMART|INFORMATICA)/i.test(s)) candidates.push({format:'informatica_xml',confidence:0.95});
+  // Talend
+  if (/<(TalendProperties|talendfile|ProcessType)/i.test(s)) candidates.push({format:'talend_xml',confidence:0.95});
+  // Protobuf
+  if (/\bmessage\s+\w+\s*\{[\s\S]*?(?:string|int32|int64|bool|double)\s+\w+\s*=\s*\d+/i.test(s.substring(0,5000))) candidates.push({format:'protobuf',confidence:0.88});
+  // PySpark
+  if (/StructType\s*\(|StructField\s*\(/i.test(s)) candidates.push({format:'pyspark',confidence:0.88});
+  // Scala
+  if (/case\s+class\s+\w+/i.test(s)) candidates.push({format:'scala',confidence:0.85});
+  // Spark printSchema
+  if (/root\s*\n\s*\|--/.test(s)) candidates.push({format:'spark_schema',confidence:0.90});
+  // dbt
+  if (/\{\{\s*(ref|source|config)\s*\(/.test(s)) candidates.push({format:'dbt',confidence:0.88});
+  // Avro
+  if (s.startsWith('{')) { try { const d=JSON.parse(s); if(d.type==='record'&&d.fields) candidates.push({format:'avro',confidence:0.92}); } catch(e){} }
+  // DDL
+  if (/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMPORARY\s+|GLOBAL\s+TEMPORARY\s+|VOLATILE\s+|TRANSIENT\s+|EXTERNAL\s+|MULTISET\s+|SET\s+|COLUMN\s+|ROW\s+|UNLOGGED\s+|TEMP\s+)*TABLE\b/i.test(s)) candidates.push({format:'ddl',confidence:0.82});
+  // JSON
+  if (s.startsWith('{') || s.startsWith('[')) { try { JSON.parse(s); candidates.push({format:'json',confidence:0.70}); } catch(e){} }
+  // XML
+  if (s.startsWith('<')) candidates.push({format:'xml',confidence:0.60});
+  // YAML
+  if (/^(tables|models|sources)\s*:/m.test(s)) candidates.push({format:'yaml',confidence:0.80});
+  // CSV
+  const fl = s.split('\n')[0].toLowerCase();
+  if (['source_table','target_table','src_table','tgt_table','table_name','column_name'].some(h => fl.includes(h))) candidates.push({format:'csv',confidence:0.80});
+  // Fallback DDL from type keywords
+  if (/\b(INT|VARCHAR|DECIMAL|TIMESTAMP|BOOLEAN|BIGINT|FLOAT|DOUBLE|NUMBER)\b/i.test(s)) candidates.push({format:'ddl',confidence:0.30});
+  // Always include DDL as absolute fallback
+  if (!candidates.some(c=>c.format==='ddl')) candidates.push({format:'ddl',confidence:0.10});
+  // Dedupe: keep highest confidence per format
+  const best = {};
+  candidates.forEach(c => { if (!best[c.format] || c.confidence > best[c.format].confidence) best[c.format] = c; });
+  return Object.values(best).sort((a,b) => b.confidence - a.confidence);
+}
+
+function routeParser(format, content, filename) {
+  const sn = filename || 'Parsed Input';
+  if (format==='yaml') return parseYAML(content, sn);
+  if (format==='pyspark') return parsePySpark(content, sn);
+  if (format==='scala') return parseScala(content, sn);
+  if (format==='dbt') return parseDBT(content, sn);
+  if (format==='avro') return parseAvro(content, sn);
+  if (format==='protobuf') return parseProtobuf(content, sn);
+  if (format==='spark_schema') return parseSparkSchema(content, sn);
+  if (format==='informatica_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); return parseInformaticaXML(doc, sn); }
+  if (format==='talend_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); return parseTalendXML(doc, sn); }
+  if (format==='nifi_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); return parseNiFiXML(doc, sn); }
+  if (format==='json') return parseJSON(content, sn);
+  if (format==='xml') return parseXML(content, sn);
+  if (format==='csv') return parseCSV(content, sn);
+  return parseDDL(content, sn);
+}
+
+function validateParseResult(result) {
+  let score = 0;
+  const warnings = [];
+  if (!result || !result.tables) return {score:0, warnings:['No result'], result};
+  if (result.tables.length > 0) score += 0.3;
+  const withCols = result.tables.filter(t => t.columns && t.columns.length > 0);
+  if (withCols.length === result.tables.length) score += 0.3;
+  else if (withCols.length > 0) { score += 0.15; warnings.push(`${result.tables.length - withCols.length} tables have no columns`); }
+  const allCols = result.tables.flatMap(t => t.columns || []);
+  const typedCols = allCols.filter(c => c.data_type && c.data_type !== 'varchar');
+  if (typedCols.length > allCols.length * 0.3) score += 0.2;
+  else if (allCols.length > 0) score += 0.1;
+  const namedTables = result.tables.filter(t => t.name && t.name.length > 0);
+  if (namedTables.length === result.tables.length) score += 0.1;
+  const names = result.tables.map(t => t.name);
+  if (new Set(names).size === names.length) score += 0.1;
+  return {score, warnings, result};
+}
+
+function bruteForceExtract(content, filename, priorErrors) {
+  const tables = [];
+  // Strategy 1: column-type patterns
+  const colPattern = /\b(\w{2,30})\s+(INT(?:EGER)?|VARCHAR\d*|CHAR|TEXT|DECIMAL|FLOAT|DOUBLE|DATE|TIMESTAMP|BOOLEAN|BIGINT|SMALLINT|TINYINT|NUMBER|STRING|BINARY|BLOB|CLOB)\b/gi;
+  const matches = [...content.matchAll(colPattern)];
+  if (matches.length >= 2) {
+    const seen = new Set();
+    const cols = matches.filter(m => { const k=m[1].toLowerCase(); if(seen.has(k))return false; seen.add(k); return true; }).map(m => ({
+      name:m[1], data_type:TYPE_NORM[m[2].toLowerCase()]||m[2].toLowerCase(), raw_type:m[2],
+      nullable:true, is_primary_key:false, is_unique:false, check_constraints:[], max_length:null, precision:null, scale:null, default_value:null
+    }));
+    if (cols.length >= 2) tables.push({name:filename?filename.replace(/\.[^.]+$/,''):'extracted_table', schema:'unknown', columns:cols, foreign_keys:[], row_count:1000});
+  }
+  // Strategy 2: XML name/type attributes
+  if (content.trim().startsWith('<')) {
+    try {
+      const doc = new DOMParser().parseFromString(content, 'text/xml');
+      const groups = {};
+      doc.querySelectorAll('*').forEach(el => {
+        const name = el.getAttribute('name')||el.getAttribute('Name')||el.getAttribute('NAME');
+        const type = el.getAttribute('type')||el.getAttribute('Type')||el.getAttribute('TYPE')||el.getAttribute('datatype')||el.getAttribute('DATATYPE');
+        if (name && type) {
+          const parent = el.parentElement?.getAttribute('name')||el.parentElement?.getAttribute('Name')||'xml_table';
+          if (!groups[parent]) groups[parent] = [];
+          groups[parent].push({name, data_type:TYPE_NORM[type.toLowerCase()]||type.toLowerCase(), raw_type:type,
+            nullable:true, is_primary_key:false, is_unique:false, check_constraints:[], max_length:null, precision:null, scale:null, default_value:null});
+        }
+      });
+      Object.entries(groups).forEach(([tn, cols]) => {
+        if (cols.length >= 2 && !tables.find(t=>t.name===tn)) tables.push({name:tn, schema:'unknown', columns:cols, foreign_keys:[], row_count:1000});
+      });
+    } catch(e) {}
+  }
+  const warnings = ['Primary parsers failed — used brute-force extraction'];
+  if (priorErrors && priorErrors.length) priorErrors.forEach(e => warnings.push(`${e.format}: ${e.error}`));
+  return {source_name:filename||'Unknown', source_type:'brute_force', tables, input_format:'unknown', parse_warnings:warnings};
+}
+
+function smartParse(content, filename) {
+  content = cleanInput(content);
+  if (!content) return null;
+  const candidates = rankFormats(content, filename);
+  const errors = [];
+  for (const {format, confidence} of candidates) {
+    try {
+      const result = routeParser(format, content, filename);
+      if (result && result.tables && result.tables.length > 0) {
+        const validated = validateParseResult(result);
+        if (validated.score > 0.3) {
+          result.detected_format = format;
+          result.parse_confidence = confidence;
+          result.parse_attempts = errors.length + 1;
+          if (validated.warnings.length) result.parse_warnings = (result.parse_warnings||[]).concat(validated.warnings);
+          return result;
+        }
+      }
+    } catch(e) { errors.push({format, error: e.message}); }
+  }
+  // Final fallback
+  return bruteForceExtract(content, filename, errors);
 }
 
 // ================================================================
@@ -385,20 +588,34 @@ function detectXMLFormat(content) {
   return 'xml';
 }
 
+function prepareDDL(content) {
+  // Strip block comments (non-nested)
+  let clean = content.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  // Strip line comments
+  clean = clean.replace(/--[^\n]*/g, '');
+  // Replace string literals with safe placeholders to prevent paren confusion
+  clean = clean.replace(/'(?:[^'\\]|\\.)*'/g, match => "'" + ' '.repeat(Math.max(0,match.length-2)) + "'");
+  return clean;
+}
+
 function parseDDL(content, sourceName) {
   const tables = [], warnings = [];
-  const hp = /CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMPORARY\s+|GLOBAL\s+TEMPORARY\s+|VOLATILE\s+|TRANSIENT\s+|EXTERNAL\s+|MULTISET\s+|SET\s+|COLUMN\s+|ROW\s+|UNLOGGED\s+)*TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)\s*\(/gi;
+  const prepared = prepareDDL(content);
+  const hp = /CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMPORARY\s+|GLOBAL\s+TEMPORARY\s+|VOLATILE\s+|TRANSIENT\s+|EXTERNAL\s+|MULTISET\s+|SET\s+|COLUMN\s+|ROW\s+|UNLOGGED\s+|TEMP\s+)*TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)\s*\(/gi;
   let hm;
-  while ((hm = hp.exec(content)) !== null) {
+  while ((hm = hp.exec(prepared)) !== null) {
     const rawName = hm[1]; let start = hm.index + hm[0].length, depth = 1, i = start;
-    while (i < content.length && depth > 0) { if (content[i]==='(') depth++; else if (content[i]===')') depth--; i++; }
+    let limit = 100000;
+    while (i < prepared.length && depth > 0 && limit-- > 0) { if (prepared[i]==='(') depth++; else if (prepared[i]===')') depth--; i++; }
     if (depth === 0) {
+      // Use original content for body to preserve actual defaults/strings
       const body = content.substring(start, i-1);
       const clean = rawName.replace(/[\[\]`"]/g,''); const parts = clean.split('.');
       const tName = parts[parts.length-1], schema = parts.length>=2 ? parts[parts.length-2] : 'dbo';
       const {cols, fks} = parseTableBody(body);
-      tables.push({name:tName, schema, columns:cols, foreign_keys:fks, row_count:1000});
-    }
+      if (cols.length > 0) tables.push({name:tName, schema, columns:cols, foreign_keys:fks, row_count:1000});
+      else warnings.push(`Table ${tName}: no columns extracted`);
+    } else { warnings.push(`Table ${rawName}: unbalanced parentheses`); }
   }
   // ALTER TABLE FKs
   const ap = /ALTER\s+TABLE\s+(\S+)\s+ADD\s+(?:CONSTRAINT\s+\S+\s+)?FOREIGN\s+KEY\s*\(\s*[\[`"]?(\w+)[\]`"]?\s*\)\s*REFERENCES\s+(\S+)\s*\(\s*[\[`"]?(\w+)[\]`"]?\s*\)/gi;
@@ -497,8 +714,10 @@ function extractParensList(el) {
 }
 
 function parseJSON(content, sourceName) {
-  const data = JSON.parse(content.trim());
-  const tables = (data.tables||[]).map(t => {
+  let data;
+  try { data = JSON.parse(content.trim()); } catch(e) { return {source_name:sourceName||'JSON',source_type:'json',tables:[],input_format:'json',parse_warnings:['Invalid JSON: '+e.message]}; }
+  const src = data.tables || data.models || (Array.isArray(data) ? data : []);
+  const tables = (Array.isArray(src) ? src : Object.values(src)).map(t => {
     const cols = (t.columns||[]).map(c => {
       if (typeof c === 'string') { const p = c.split(':'); return {name:p[0].trim(), data_type:p[1]?p[1].trim():'varchar', raw_type:p[1]||'varchar', nullable:true, is_primary_key:false, is_unique:false, check_constraints:[], max_length:null, precision:null, scale:null, default_value:null}; }
       return {name:c.name||c.column_name||'', data_type:c.type||c.data_type||'varchar', raw_type:c.type||c.data_type||'varchar', nullable:c.nullable!==false, is_primary_key:!!c.pk||!!c.primary_key||!!c.is_primary_key, is_unique:false, check_constraints:c.values||c.allowed_values||[], max_length:c.length||c.max_length||null, precision:null, scale:null, default_value:null};
@@ -510,32 +729,42 @@ function parseJSON(content, sourceName) {
 }
 
 function parseXML(content, sourceName) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(content, 'text/xml');
+  let doc;
+  try { doc = new DOMParser().parseFromString(content, 'text/xml'); } catch(e) { return {source_name:sourceName||'XML',source_type:'xml',tables:[],input_format:'xml',parse_warnings:['Invalid XML: '+e.message]}; }
+  // Check for parse errors
+  const parseErr = doc.querySelector('parsererror');
+  if (parseErr) return {source_name:sourceName||'XML',source_type:'xml',tables:[],input_format:'xml',parse_warnings:['XML parse error: '+parseErr.textContent.substring(0,200)]};
   const tables = [];
-  const tableEls = doc.querySelectorAll('table, Table');
+  function getAttrCI(el, names) { for (const n of names) { const v = el.getAttribute(n); if (v) return v; } return ''; }
+  function isBoolTrue(v) { return ['true','yes','1','y'].includes((v||'').toLowerCase()); }
+  // Find table elements (case-insensitive, namespace-aware)
+  const allEls = doc.querySelectorAll('*');
+  const tableEls = [...allEls].filter(el => el.localName.toLowerCase() === 'table');
   tableEls.forEach(te => {
-    const name = te.getAttribute('name') || te.getAttribute('Name') || '';
-    if (!name) return;
+    const name = getAttrCI(te, ['name','Name','NAME']); if (!name) return;
     const cols = [], fks = [];
-    te.querySelectorAll('column, Column').forEach(ce => {
-      const cn = ce.getAttribute('name')||ce.getAttribute('Name')||'';
-      if (!cn) return;
-      const rt = ce.getAttribute('type')||ce.getAttribute('Type')||ce.getAttribute('dataType')||'varchar';
-      const dt = rt.toLowerCase().split('(')[0];
-      const nullable = (ce.getAttribute('nullable')||'true').toLowerCase() !== 'false';
-      const pk = (ce.getAttribute('primaryKey')||ce.getAttribute('pk')||'false').toLowerCase()==='true';
-      const ml = ce.getAttribute('length'); const checkStr = ce.getAttribute('check')||ce.getAttribute('values')||'';
+    const colEls = [...te.querySelectorAll('*')].filter(el => el.localName.toLowerCase() === 'column');
+    colEls.forEach(ce => {
+      const cn = getAttrCI(ce, ['name','Name','NAME']); if (!cn) return;
+      const rt = getAttrCI(ce, ['type','Type','TYPE','dataType','datatype','DATATYPE'])||'varchar';
+      const dtRaw = rt.toLowerCase().split('(')[0];
+      const dt = TYPE_NORM[dtRaw] || dtRaw;
+      const nullable = !['false','no','0'].includes((getAttrCI(ce, ['nullable','Nullable','NULLABLE'])||'true').toLowerCase());
+      const pk = isBoolTrue(getAttrCI(ce, ['primaryKey','pk','PK','primary_key','isPrimaryKey','KEYTYPE']));
+      const ml = getAttrCI(ce, ['length','Length','LENGTH','maxLength','PRECISION']);
+      const checkStr = getAttrCI(ce, ['check','values','Values','CHECK','accepted_values'])||'';
       const checks = checkStr ? checkStr.split(',').map(v=>v.trim()).filter(Boolean) : [];
-      cols.push({name:cn, data_type:dt, raw_type:rt, nullable, is_primary_key:pk, is_unique:false, check_constraints:checks, max_length:ml?parseInt(ml):null, precision:null, scale:null, default_value:null});
-      const ref = ce.getAttribute('references');
+      cols.push({name:cn, data_type:dt, raw_type:rt, nullable, is_primary_key:pk, is_unique:false, check_constraints:checks, max_length:ml?parseInt(ml)||null:null, precision:null, scale:null, default_value:null});
+      const ref = getAttrCI(ce, ['references','References','REFERENCES']);
       if (ref) { const r = parseRefStr(cn, ref); if (r) fks.push(r); }
     });
-    te.querySelectorAll('foreignKey, foreign_key, fk').forEach(fe => {
-      const col = fe.getAttribute('column')||'', ref = fe.getAttribute('references')||'';
+    const fkEls = [...te.querySelectorAll('*')].filter(el => ['foreignkey','foreign_key','fk'].includes(el.localName.toLowerCase()));
+    fkEls.forEach(fe => {
+      const col = getAttrCI(fe, ['column','Column','COLUMN'])||'';
+      const ref = getAttrCI(fe, ['references','References','REFERENCES'])||'';
       if (col && ref) { const r = parseRefStr(col, ref); if (r) fks.push(r); }
     });
-    tables.push({name, schema:te.getAttribute('schema')||'dbo', columns:cols, foreign_keys:fks, row_count:1000});
+    tables.push({name, schema:getAttrCI(te, ['schema','Schema','SCHEMA'])||'dbo', columns:cols, foreign_keys:fks, row_count:1000});
   });
   return {source_name:sourceName||'XML Import', source_type:'xml', tables, input_format:'xml', parse_warnings:[]};
 }
@@ -547,10 +776,26 @@ function parseRefStr(fkCol, refStr) {
   return {fk_column:fkCol, referenced_table:refStr.trim(), referenced_column:'id'};
 }
 
+function splitCSVLine(line) {
+  const fields = [];
+  let current = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQuotes && line[i+1] === '"') { current += '"'; i++; }
+      else inQuotes = !inQuotes;
+    } else if (c === ',' && !inQuotes) { fields.push(current.trim()); current = ''; }
+    else if (c === '\r') { /* skip */ }
+    else current += c;
+  }
+  fields.push(current.trim());
+  return fields;
+}
+
 function parseCSV(content, sourceName) {
   const lines = content.trim().split('\n');
   if (lines.length < 2) return {source_name:sourceName, source_type:'csv', tables:[], input_format:'csv', parse_warnings:['No data rows']};
-  const headers = lines[0].split(',').map(h=>h.trim().toLowerCase());
+  const headers = splitCSVLine(lines[0]).map(h=>h.toLowerCase());
   const findH = (syns) => { for (const s of syns) { const i = headers.indexOf(s); if (i>=0) return i; } return -1; };
   const iTT = findH(['target_table','tgt_table','to_table','dest_table','source_table','src_table']);
   const iTC = findH(['target_column','tgt_column','to_column','dest_column','source_column','src_column']);
@@ -561,7 +806,7 @@ function parseCSV(content, sourceName) {
   const iFKC = findH(['foreign_key_column','fk_column','ref_column','references_column']);
   const tablesMap = {};
   for (let r = 1; r < lines.length; r++) {
-    const vals = lines[r].split(',').map(v=>v.trim());
+    const vals = splitCSVLine(lines[r]);
     const tbl = iTT>=0?vals[iTT]:''; const col = iTC>=0?vals[iTC]:'';
     if (!tbl||!col) continue;
     if (!tablesMap[tbl]) tablesMap[tbl] = {columns:[], foreign_keys:[]};
@@ -580,7 +825,14 @@ function parseCSV(content, sourceName) {
 // PARSERS — YAML (table definitions + dbt schema.yml)
 // ================================================================
 function parseSimpleYAML(text) {
-  const lines = text.split('\n').map((l,i)=>({raw:l,ind:l.search(/\S/)<0?999:l.search(/\S/),tr:l.trim(),i})).filter(l=>l.tr&&!l.tr.startsWith('#'));
+  // Normalize tabs to 2 spaces and strip inline comments
+  let normalized = text.replace(/\t/g, '  ');
+  const lines = normalized.split('\n').map((l,i) => {
+    // Strip inline comments (outside quotes)
+    let tr = l.replace(/\s+#(?![^'"]*['"][^'"]*$).*$/, '').trimEnd();
+    const ind = tr.search(/\S/) < 0 ? 999 : tr.search(/\S/);
+    return {raw:l, ind, tr:tr.trim(), i};
+  }).filter(l=>l.tr&&!l.tr.startsWith('#'));
   let pos = 0;
   function scalar(s) { s=s.trim(); if(s==='true')return true; if(s==='false')return false; if(s==='null'||s==='~'||!s)return null; if(/^-?\d+$/.test(s))return parseInt(s); if(/^-?\d+\.\d+$/.test(s))return parseFloat(s); return s.replace(/^['"]|['"]$/g,''); }
   function parseAt(base) {
@@ -640,16 +892,17 @@ function parseYAML(content, sourceName) {
 // ================================================================
 function parsePySpark(content, sourceName) {
   const tables = [], warnings = [];
-  const sparkTypeMap = {string:'varchar',integer:'int',long:'bigint',short:'smallint',byte:'tinyint',float:'float',double:'double',decimal:'decimal',boolean:'boolean',date:'date',timestamp:'timestamp',binary:'binary',array:'text',map:'text',struct:'text'};
+  const sparkTypeMap = {string:'varchar',integer:'int',long:'bigint',short:'smallint',byte:'tinyint',float:'float',double:'double',decimal:'decimal',boolean:'boolean',date:'date',timestamp:'timestamp',binary:'binary',array:'text',map:'text',struct:'text',int:'int'};
   const stPat = /(?:(\w+)\s*=\s*)?StructType\s*\(\s*\[([\s\S]*?)\]\s*\)/g;
   let m;
   while ((m=stPat.exec(content))!==null) {
     const varName = m[1]||'table'; const body = m[2]; const cols = [];
-    const fPat = /StructField\s*\(\s*["'](\w+)["']\s*,\s*(\w+?)(?:Type)?\s*\(\s*(?:(\d+)(?:\s*,\s*(\d+))?)?\s*\)\s*(?:,\s*(True|False))?\s*\)/g;
+    // Flexible: handles StringType() or StringType or "string" — with or without Type suffix
+    const fPat = /StructField\s*\(\s*["']([^"']+)["']\s*,\s*(?:["'])?(\w+?)(?:Type)?(?:["'])?\s*(?:\(\s*(?:(\d+)(?:\s*,\s*(\d+))?)?\s*\))?\s*(?:,\s*(True|False|true|false))?\s*\)/g;
     let fm;
     while ((fm=fPat.exec(body))!==null) {
       const dt = sparkTypeMap[fm[2].toLowerCase()]||'varchar';
-      cols.push({name:fm[1],data_type:dt,raw_type:fm[2]+'Type',nullable:fm[5]!=='False',is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:fm[3]?parseInt(fm[3]):null,scale:fm[4]?parseInt(fm[4]):null,default_value:null});
+      cols.push({name:fm[1],data_type:dt,raw_type:fm[2]+'Type',nullable:fm[5]?fm[5].toLowerCase()!=='false':true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:fm[3]?parseInt(fm[3]):null,scale:fm[4]?parseInt(fm[4]):null,default_value:null});
     }
     if (cols.length) { const tn=varName.replace(/_?schema$/i,'')||'table'; tables.push({name:tn,schema:'default',columns:cols,foreign_keys:[],row_count:1000}); }
   }
@@ -664,8 +917,9 @@ function parsePySpark(content, sourceName) {
 // ================================================================
 function parseScala(content, sourceName) {
   const tables = [];
-  const scalaTypeMap = {String:'varchar',Int:'int',Long:'bigint',Short:'smallint',Double:'double',Float:'float',BigDecimal:'decimal',Boolean:'boolean','java.sql.Date':'date','java.sql.Timestamp':'timestamp',Byte:'tinyint'};
-  const ccPat = /case\s+class\s+(\w+)\s*\(([\s\S]*?)\)/g;
+  const scalaTypeMap = {String:'varchar',Int:'int',Long:'bigint',Short:'smallint',Double:'double',Float:'float',BigDecimal:'decimal',Boolean:'boolean',Date:'date',Timestamp:'timestamp',Byte:'tinyint',Char:'char',Array:'text',List:'text',Seq:'text',Set:'text',Map:'text',Vector:'text',UUID:'varchar'};
+  // Handle generic type params: case class Foo[T](...) — skip the [T] part
+  const ccPat = /case\s+class\s+(\w+)(?:\[[\w\s,<>\[\]]+\])?\s*\(([\s\S]*?)\)/g;
   let m;
   while ((m=ccPat.exec(content))!==null) {
     const className = m[1]; const body = m[2]; const cols = [];
@@ -673,9 +927,18 @@ function parseScala(content, sourceName) {
     let fm;
     while ((fm=fPat.exec(body))!==null) {
       const nullable = !!fm[2]; let st = fm[3].trim().replace(/\s/g,'');
-      cols.push({name:fm[1],data_type:scalaTypeMap[st]||'varchar',raw_type:st,nullable,is_primary_key:fm[1].toLowerCase()==='id',is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null});
+      // Extract inner type from generics: List[String] → String, Map[String,Int] → text
+      if (/^(List|Seq|Set|Vector|Array)\[/.test(st)) st = 'Array';
+      else if (/^Map\[/.test(st)) st = 'Map';
+      else if (/^Option\[/.test(st)) { const inner = st.match(/^Option\[(\w+)\]/); if(inner) st = inner[1]; }
+      // Smart CamelCase: HTTPServer → http_server, not h_t_t_p_server
+      const dt = scalaTypeMap[st] || scalaTypeMap[st.replace(/.*\./, '')] || 'varchar';
+      cols.push({name:fm[1],data_type:dt,raw_type:st,nullable,is_primary_key:fm[1].toLowerCase()==='id',is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null});
     }
-    if (cols.length) { const tn=className.replace(/([A-Z])/g,'_$1').toLowerCase().replace(/^_/,''); tables.push({name:tn,schema:'default',columns:cols,foreign_keys:[],row_count:1000}); }
+    if (cols.length) {
+      const tn = className.replace(/([A-Z]+)([A-Z][a-z])/g,'$1_$2').replace(/([a-z])([A-Z])/g,'$1_$2').toLowerCase();
+      tables.push({name:tn,schema:'default',columns:cols,foreign_keys:[],row_count:1000});
+    }
   }
   return {source_name:sourceName||'Scala Case Classes',source_type:'scala',tables,input_format:'scala',parse_warnings:[]};
 }
@@ -688,13 +951,19 @@ function parseDBT(content, sourceName) {
   const refs = [];
   const refPat = /\{\{\s*(?:ref|source)\s*\(\s*['"](\w+)['"](?:\s*,\s*['"](\w+)['"])?\s*\)\s*\}\}/g;
   let rm; while ((rm=refPat.exec(content))!==null) refs.push(rm[2]||rm[1]);
-  const cleanSQL = content.replace(/\{\{[\s\S]*?\}\}/g,'__JINJA__').replace(/\{%[\s\S]*?%\}/g,'');
+  let cleanSQL = content.replace(/\{\{[\s\S]*?\}\}/g,'__JINJA__').replace(/\{%[\s\S]*?%\}/g,'');
+  // Strip window functions OVER(...) before column extraction
+  cleanSQL = cleanSQL.replace(/\bOVER\s*\([^)]*\)/gi, '');
   if (/CREATE\s+TABLE/i.test(cleanSQL)) return parseDDL(cleanSQL.replace(/__JINJA__/g,'dual'), sourceName||'dbt Model');
-  const selM = cleanSQL.match(/SELECT\s+([\s\S]*?)\s+FROM/i);
+  // Handle CTEs: WITH cte AS (SELECT ...) SELECT ... — use the final SELECT
+  let selectSQL = cleanSQL;
+  const cteMatch = cleanSQL.match(/\bWITH\b[\s\S]*?\)\s*(SELECT[\s\S]*$)/i);
+  if (cteMatch) selectSQL = cteMatch[1];
+  const selM = selectSQL.match(/SELECT\s+([\s\S]*?)\s+FROM/i);
   if (selM) {
     const cols = []; const parts = selM[1].split(',').map(c=>c.trim()).filter(Boolean);
     for (const p of parts) {
-      if (p==='*') continue;
+      if (p==='*' || p==='__JINJA__') continue;
       const asM = p.match(/(?:AS\s+)?["']?(\w+)["']?\s*$/i); if (!asM) continue;
       let dt = 'varchar'; const castM = p.match(/(?:CAST\s*\(.*?AS\s+(\w+)|::(\w+))/i);
       if (castM) dt = (castM[1]||castM[2]).toLowerCase();
@@ -713,7 +982,8 @@ function avroTypeMap(t) {
   return m[t]||'varchar';
 }
 function parseAvro(content, sourceName) {
-  const data = JSON.parse(content.trim()); const tables = [];
+  let data; try { data = JSON.parse(content.trim()); } catch(e) { return {source_name:sourceName||'Avro',source_type:'avro',tables:[],input_format:'avro',parse_warnings:['Invalid JSON in Avro: '+e.message]}; }
+  const tables = [];
   function parseRecord(rec) {
     if (!rec||rec.type!=='record'||!rec.fields) return null;
     const cols = rec.fields.map(f => {
@@ -737,15 +1007,55 @@ function parseAvro(content, sourceName) {
 function parseProtobuf(content, sourceName) {
   const tables = [];
   const protoTypeMap={double:'double',float:'float',int32:'int',int64:'bigint',uint32:'int',uint64:'bigint',sint32:'int',sint64:'bigint',fixed32:'int',fixed64:'bigint',sfixed32:'int',sfixed64:'bigint',bool:'boolean',string:'varchar',bytes:'binary'};
-  const msgPat = /message\s+(\w+)\s*\{([\s\S]*?)\}/g;
-  let m;
-  while ((m=msgPat.exec(content))!==null) {
-    const cols = []; const fPat = /(?:(optional|required|repeated)\s+)?(\w+)\s+(\w+)\s*=\s*\d+/g;
-    let fm; while ((fm=fPat.exec(m[2]))!==null) {
-      cols.push({name:fm[3],data_type:protoTypeMap[fm[2]]||'varchar',raw_type:fm[2],nullable:fm[1]!=='required',is_primary_key:fm[3].toLowerCase()==='id',is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null});
+  // Strip comments
+  let clean = content.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, '');
+  // Depth-aware message extraction to handle nested messages
+  function extractMessages(src, prefix) {
+    const msgPat = /message\s+(\w+)\s*\{/g;
+    let mm;
+    while ((mm=msgPat.exec(src))!==null) {
+      const msgName = mm[1]; let depth=1, i=mm.index+mm[0].length;
+      while (i < src.length && depth > 0) { if(src[i]==='{')depth++; else if(src[i]==='}')depth--; i++; }
+      const body = src.substring(mm.index+mm[0].length, i-1);
+      const cols = [];
+      // Parse fields including map<K,V>
+      const fPat = /(?:(optional|required|repeated)\s+)?(?:map\s*<\s*\w+\s*,\s*\w+\s*>|(\w+))\s+(\w+)\s*=\s*\d+/g;
+      let fm;
+      while ((fm=fPat.exec(body))!==null) {
+        if (fm[0].includes('map<')) {
+          cols.push({name:fm[3],data_type:'text',raw_type:'map',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null});
+        } else if (fm[2] && !['message','enum','oneof','option','reserved','extensions'].includes(fm[2])) {
+          cols.push({name:fm[3],data_type:protoTypeMap[fm[2]]||'varchar',raw_type:fm[2],nullable:fm[1]!=='required',is_primary_key:fm[3].toLowerCase()==='id',is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null});
+        }
+      }
+      // Extract oneof fields
+      const oneofPat = /oneof\s+\w+\s*\{([\s\S]*?)\}/g;
+      let om;
+      while ((om=oneofPat.exec(body))!==null) {
+        const ofPat = /(\w+)\s+(\w+)\s*=\s*\d+/g; let ofm;
+        while ((ofm=ofPat.exec(om[1]))!==null) {
+          cols.push({name:ofm[2],data_type:protoTypeMap[ofm[1]]||'varchar',raw_type:ofm[1],nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null});
+        }
+      }
+      // Extract enum values as check constraints
+      const enumPat = /enum\s+(\w+)\s*\{([\s\S]*?)\}/g;
+      let em;
+      while ((em=enumPat.exec(body))!==null) {
+        const enumVals = []; const evPat = /(\w+)\s*=\s*\d+/g; let evm;
+        while ((evm=evPat.exec(em[2]))!==null) enumVals.push(evm[1]);
+        const enumCol = cols.find(c=>c.raw_type.toLowerCase()===em[1].toLowerCase());
+        if (enumCol) enumCol.check_constraints = enumVals;
+      }
+      if (cols.length) {
+        const fullName = prefix ? prefix+'_'+msgName : msgName;
+        const tn = fullName.replace(/([A-Z]+)([A-Z][a-z])/g,'$1_$2').replace(/([a-z])([A-Z])/g,'$1_$2').toLowerCase();
+        tables.push({name:tn,schema:'default',columns:cols,foreign_keys:[],row_count:1000});
+      }
+      // Recurse for nested messages
+      extractMessages(body, prefix ? prefix+'_'+msgName : msgName);
     }
-    if (cols.length) { const tn=m[1].replace(/([A-Z])/g,'_$1').toLowerCase().replace(/^_/,''); tables.push({name:tn,schema:'default',columns:cols,foreign_keys:[],row_count:1000}); }
   }
+  extractMessages(clean, '');
   return {source_name:sourceName||'Protobuf Schema',source_type:'protobuf',tables,input_format:'protobuf',parse_warnings:[]};
 }
 
@@ -769,29 +1079,36 @@ function parseSparkSchema(content, sourceName) {
 // ================================================================
 function parseInformaticaXML(doc, sourceName) {
   const tables = [];
-  function parseFields(parent, tagName) {
-    const cols = [], fks = [];
-    parent.querySelectorAll(tagName).forEach(sf => {
-      const cn = sf.getAttribute('NAME')||sf.getAttribute('name')||''; if(!cn) return;
-      const rt = sf.getAttribute('DATATYPE')||sf.getAttribute('datatype')||'varchar';
-      const prec = parseInt(sf.getAttribute('PRECISION')||sf.getAttribute('precision')||'0');
-      const scale = parseInt(sf.getAttribute('SCALE')||sf.getAttribute('scale')||'0');
-      const nullable = (sf.getAttribute('NULLABLE')||sf.getAttribute('nullable')||'NULL')!=='NOTNULL';
-      const pk = (sf.getAttribute('KEYTYPE')||sf.getAttribute('keytype')||'')==='PRIMARY KEY';
+  const allEls = [...doc.querySelectorAll('*')];
+  function findByLocal(name) { return allEls.filter(el => el.localName.toLowerCase() === name.toLowerCase()); }
+  function getAttr(el, names) { for (const n of names) { const v = el.getAttribute(n); if (v != null) return v; } return ''; }
+  function parseFields(parent, fieldNames) {
+    const cols = [];
+    const children = [...parent.querySelectorAll('*')].filter(el => fieldNames.some(fn => el.localName.toLowerCase() === fn));
+    children.forEach(sf => {
+      const cn = getAttr(sf, ['NAME','name','Name']); if(!cn) return;
+      const rt = getAttr(sf, ['DATATYPE','datatype','DataType','type'])||'varchar';
+      const prec = parseInt(getAttr(sf, ['PRECISION','precision','Precision'])||'0')||0;
+      const scale = parseInt(getAttr(sf, ['SCALE','scale','Scale'])||'0')||0;
+      const nullVal = getAttr(sf, ['NULLABLE','nullable','Nullable'])||'NULL';
+      const nullable = nullVal !== 'NOTNULL' && nullVal.toLowerCase() !== 'false';
+      const keyType = getAttr(sf, ['KEYTYPE','keytype','KeyType'])||'';
+      const pk = keyType === 'PRIMARY KEY' || keyType.toLowerCase() === 'primary';
       const dt = TYPE_NORM[rt.toLowerCase()]||rt.toLowerCase().split('(')[0];
       cols.push({name:cn,data_type:dt,raw_type:rt,nullable,is_primary_key:pk,is_unique:false,check_constraints:[],max_length:prec||null,precision:['decimal','numeric','number'].includes(dt)?prec:null,scale:scale||null,default_value:null});
     });
-    return {cols, fks};
+    return cols;
   }
-  doc.querySelectorAll('SOURCE, source').forEach(src => {
-    const name = src.getAttribute('NAME')||src.getAttribute('name')||''; if(!name) return;
-    const {cols} = parseFields(src, 'SOURCEFIELD, sourcefield');
+  // Find SOURCE elements (any case, any namespace)
+  findByLocal('source').forEach(src => {
+    const name = getAttr(src, ['NAME','name','Name']); if(!name) return;
+    const cols = parseFields(src, ['sourcefield']);
     if (cols.length) tables.push({name,schema:'dbo',columns:cols,foreign_keys:[],row_count:1000});
   });
-  doc.querySelectorAll('TARGET, target').forEach(tgt => {
-    const name = tgt.getAttribute('NAME')||tgt.getAttribute('name')||''; if(!name) return;
+  findByLocal('target').forEach(tgt => {
+    const name = getAttr(tgt, ['NAME','name','Name']); if(!name) return;
     if (tables.find(t=>t.name===name)) return;
-    const {cols} = parseFields(tgt, 'TARGETFIELD, targetfield');
+    const cols = parseFields(tgt, ['targetfield']);
     if (cols.length) tables.push({name,schema:'dbo',columns:cols,foreign_keys:[],row_count:1000});
   });
   return {source_name:sourceName||'Informatica Import',source_type:'informatica',tables,input_format:'informatica_xml',parse_warnings:[]};
@@ -897,8 +1214,10 @@ function parseNiFiXML(doc, sourceName) {
     return props;
   }
 
-  // Start from snippet (template format) or root
-  const snippet = doc.querySelector('template > snippet') || doc.querySelector('snippet') || doc.documentElement;
+  // Start from snippet (template format), flowController (NiFi registry), or root
+  const snippet = doc.querySelector('template > snippet') || doc.querySelector('snippet') ||
+    doc.querySelector('flowController > rootGroup') || doc.querySelector('rootGroup') ||
+    doc.querySelector('processGroupFlow > flow') || doc.documentElement;
 
   // Top-level controllerServices
   snippet.querySelectorAll(':scope > controllerServices').forEach(cs => {
@@ -1094,6 +1413,451 @@ function assembleBlueprint_fn(parsed, rowCount) {
   const rels = [];
   parsed.tables.forEach(pt => pt.foreign_keys.forEach(fk => rels.push({from_table:`${pt.schema}.${pt.name}`,to_table:`${pt.schema}.${fk.referenced_table}`,relationship_type:'one_to_many',join_columns:[{from_column:fk.fk_column,to_column:fk.referenced_column}]})));
   return {blueprint_id:bid, source_system:{name:parsed.source_name,type:parsed.source_type}, tables, relationships:rels};
+}
+
+// ================================================================
+// TIER DIAGRAM — Adaptive Environment Visualization
+// ================================================================
+const NIFI_ROLE_MAP = {
+  // Sources (Tier 1)
+  GetFile:'source',GetHTTP:'source',GetSFTP:'source',GetFTP:'source',ConsumeKafka:'source',
+  ConsumeKafka_2_6:'source',ConsumeKafkaRecord_2_6:'source',ListenHTTP:'source',
+  QueryDatabaseTable:'source',QueryDatabaseTableRecord:'source',GenerateFlowFile:'source',
+  GetHDFS:'source',ListS3:'source',FetchS3Object:'source',GetS3Object:'source',
+  ListFile:'source',FetchFile:'source',ConsumeJMS:'source',ListenTCP:'source',
+  ListenUDP:'source',GetMongo:'source',GetElasticsearch:'source',TailFile:'source',
+  // Routing (Tier 2)
+  RouteOnAttribute:'route',RouteOnContent:'route',DistributeLoad:'route',ControlRate:'route',
+  RouteText:'route',DetectDuplicate:'route',ValidateRecord:'route',
+  // Transform (Tier 2)
+  UpdateAttribute:'transform',JoltTransformJSON:'transform',ReplaceText:'transform',
+  ConvertRecord:'transform',SplitRecord:'transform',MergeContent:'transform',MergeRecord:'transform',
+  ExecuteScript:'transform',ExecuteStreamCommand:'transform',ConvertJSONToSQL:'transform',
+  TransformXml:'transform',SplitJson:'transform',SplitXml:'transform',SplitText:'transform',
+  EvaluateJsonPath:'transform',ExtractText:'transform',CompressContent:'transform',
+  EncryptContent:'transform',HashContent:'transform',Base64EncodeContent:'transform',
+  ConvertCharacterSet:'transform',FlattenJson:'transform',ConvertAvroToJSON:'transform',
+  ConvertJSONToAvro:'transform',
+  // Processing (Tier 3)
+  ExecuteSQL:'process',ExecuteSQLRecord:'process',PutDatabaseRecord:'process',
+  LookupAttribute:'process',LookupRecord:'process',InvokeHTTP:'process',
+  ExecuteProcess:'process',HandleHttpRequest:'process',HandleHttpResponse:'process',
+  // Sinks (Tier 4)
+  PutFile:'sink',PutHDFS:'sink',PutS3Object:'sink',PutSQL:'sink',PutKafka:'sink',
+  PutKafkaRecord:'sink',PutEmail:'sink',PutSFTP:'sink',PutFTP:'sink',PublishKafka:'sink',
+  PublishKafka_2_6:'sink',PublishKafkaRecord_2_6:'sink',PutMongo:'sink',PutElasticsearch:'sink',
+  PutDatabaseRecord:'sink',PutSyslog:'sink',PutTCP:'sink',
+  // Utility
+  LogMessage:'utility',LogAttribute:'utility',Wait:'utility',Notify:'utility',
+  DebugFlow:'utility',CountText:'utility',AttributesToJSON:'utility',
+};
+
+function classifyNiFiProcessor(type) {
+  return NIFI_ROLE_MAP[type] || (
+    /^(Get|List|Consume|Listen|Fetch|Tail|Query)/i.test(type) ? 'source' :
+    /^(Put|Publish|Send|Post)/i.test(type) ? 'sink' :
+    /^(Route|Distribute|Control|Validate|Detect)/i.test(type) ? 'route' :
+    /^(Convert|Split|Merge|Replace|Transform|Extract|Evaluate|Flatten|Compress|Encrypt|Hash)/i.test(type) ? 'transform' :
+    /^(Execute|Invoke|Lookup|Handle)/i.test(type) ? 'process' :
+    /^(Log|Debug|Count|Wait|Notify)/i.test(type) ? 'utility' :
+    'process'
+  );
+}
+
+function buildTierData(blueprint, parsed) {
+  const fmt = parsed ? parsed.input_format : '';
+  if (fmt === 'nifi_xml' && parsed._nifi) return buildNiFiTierData(parsed._nifi, blueprint);
+  if (blueprint.relationships && blueprint.relationships.length > 0) return buildSQLTierData(blueprint);
+  return buildFlatTierData(blueprint);
+}
+
+function buildNiFiTierData(nifi, blueprint) {
+  const nodes = [], connections = [];
+  const tierLabels = {
+    1: {label:'INGESTION — Source Processors', color:'#3B82F6', bg:'rgba(59,130,246,0.06)'},
+    2: {label:'ROUTING & TRANSFORMATION', color:'#EAB308', bg:'rgba(234,179,8,0.06)'},
+    3: {label:'PROCESSING', color:'#A855F7', bg:'rgba(168,85,247,0.06)'},
+    4: {label:'OUTPUT — Sink Processors', color:'#21C354', bg:'rgba(33,195,84,0.06)'},
+    5: {label:'UTILITY', color:'#808495', bg:'rgba(128,132,149,0.06)'},
+  };
+  const roleTier = {source:1, route:2, transform:2, process:3, sink:4, utility:5};
+  // Build nodes from processors
+  nifi.processors.forEach(p => {
+    const role = classifyNiFiProcessor(p.type);
+    nodes.push({
+      id: p.name + '_' + p.type,
+      name: p.name || p.type,
+      tier: roleTier[role] || 3,
+      type: 'processor',
+      subtype: role,
+      meta: p.type,
+      group: p.group,
+      state: p.state,
+      propCount: Object.keys(p.properties).length,
+      detail: p
+    });
+  });
+  // Build connections
+  nifi.connections.forEach((c, i) => {
+    const srcNode = nodes.find(n => n.name === c.sourceName || n.id.startsWith(c.sourceName));
+    const dstNode = nodes.find(n => n.name === c.destinationName || n.id.startsWith(c.destinationName));
+    if (srcNode && dstNode) {
+      connections.push({
+        from: srcNode.id, to: dstNode.id,
+        label: c.relationships.join(', '),
+        type: 'flow', color: '#4B5563', width: 1.5
+      });
+    }
+  });
+  // Remove utility tier if empty
+  if (!nodes.some(n => n.tier === 5)) delete tierLabels[5];
+  return {nodes, connections, tierLabels, diagramType: 'nifi_flow'};
+}
+
+function buildSQLTierData(blueprint) {
+  const nodes = [], connections = [];
+  const tierLabels = {};
+  // Compute dependency depth via topological sort
+  const depthMap = {};
+  const tableNames = blueprint.tables.map(t => t.name);
+  const fkTargets = {};
+  blueprint.tables.forEach(t => {
+    t.foreign_keys.forEach(fk => {
+      const ref = fk.references_table;
+      if (!fkTargets[t.name]) fkTargets[t.name] = [];
+      fkTargets[t.name].push(ref);
+    });
+  });
+  function getDepth(tn, visited) {
+    if (depthMap[tn] !== undefined) return depthMap[tn];
+    if (visited.has(tn)) return 0; // cycle
+    visited.add(tn);
+    const deps = fkTargets[tn] || [];
+    if (!deps.length) { depthMap[tn] = 0; return 0; }
+    const maxDep = Math.max(...deps.map(d => getDepth(d, new Set(visited))));
+    depthMap[tn] = maxDep + 1;
+    return depthMap[tn];
+  }
+  tableNames.forEach(tn => getDepth(tn, new Set()));
+  const maxDepth = Math.max(0, ...Object.values(depthMap));
+  // Build tier labels
+  for (let d = 0; d <= maxDepth; d++) {
+    if (d === 0) tierLabels[1] = {label:'INDEPENDENT TABLES', color:'#3B82F6', bg:'rgba(59,130,246,0.06)'};
+    else tierLabels[d+1] = {label:`DEPENDENCY LEVEL ${d}`, color: d===1?'#EAB308':d===2?'#A855F7':'#21C354', bg: d===1?'rgba(234,179,8,0.06)':d===2?'rgba(168,85,247,0.06)':'rgba(33,195,84,0.06)'};
+  }
+  // Build nodes
+  blueprint.tables.forEach(t => {
+    const depth = depthMap[t.name] || 0;
+    const pkCols = t.columns.filter(c => c.is_primary_key);
+    nodes.push({
+      id: t.name,
+      name: t.name,
+      tier: depth + 1,
+      type: 'table',
+      meta: `${t.columns.length} cols${pkCols.length?' · PK: '+pkCols.map(c=>c.name).join(','):''}`,
+      rows: t.row_count,
+      fkCount: t.foreign_keys.length,
+      detail: t
+    });
+  });
+  // Build connections from relationships
+  blueprint.relationships.forEach(r => {
+    const fromName = r.from_table.split('.').pop();
+    const toName = r.to_table.split('.').pop();
+    const colLabel = r.join_columns.map(j => `${j.from_column}→${j.to_column}`).join(', ');
+    connections.push({
+      from: fromName, to: toName,
+      label: colLabel,
+      type: 'foreign_key', color: '#3B82F6', width: 2
+    });
+  });
+  return {nodes, connections, tierLabels, diagramType: 'sql_tables'};
+}
+
+function buildFlatTierData(blueprint) {
+  const nodes = [], connections = [];
+  const tierLabels = {1:{label:'SCHEMA OBJECTS',color:'#3B82F6',bg:'rgba(59,130,246,0.06)'}};
+  blueprint.tables.forEach(t => {
+    nodes.push({
+      id: t.name, name: t.name, tier: 1, type: 'table',
+      meta: `${t.columns.length} cols`,
+      rows: t.row_count, detail: t
+    });
+  });
+  // Look for implicit connections: shared column names between tables
+  const colToTables = {};
+  blueprint.tables.forEach(t => {
+    t.columns.forEach(c => {
+      const cn = c.name.toLowerCase();
+      if (!colToTables[cn]) colToTables[cn] = [];
+      colToTables[cn].push(t.name);
+    });
+  });
+  Object.entries(colToTables).forEach(([cn, tbls]) => {
+    if (tbls.length === 2 && (cn.endsWith('_id') || cn === 'id')) {
+      connections.push({from:tbls[0], to:tbls[1], label:cn, type:'implicit', color:'#4B5563', width:1, dash:true});
+    }
+  });
+  return {nodes, connections, tierLabels, diagramType: 'flat'};
+}
+
+// ================================================================
+// TIER DIAGRAM — SVG Rendering Engine
+// ================================================================
+function renderTierDiagram(tierData, containerId, detailId, legendId) {
+  const container = document.getElementById(containerId);
+  const detailEl = document.getElementById(detailId);
+  const legendEl = document.getElementById(legendId);
+  if (!container) return;
+  container.innerHTML = '';
+  container.style.minHeight = '200px';
+
+  const {nodes, connections, tierLabels, diagramType} = tierData;
+  if (!nodes.length) { container.innerHTML = '<p style="text-align:center;padding:20px;color:var(--text2)">No nodes to display</p>'; return; }
+
+  // Group nodes by tier
+  const tierGroups = {};
+  nodes.forEach(n => {
+    if (!tierGroups[n.tier]) tierGroups[n.tier] = [];
+    tierGroups[n.tier].push(n);
+  });
+
+  // Render tier bands
+  const sortedTiers = Object.keys(tierGroups).map(Number).sort((a,b)=>a-b);
+  const nodeEls = {};
+
+  sortedTiers.forEach(tier => {
+    const config = tierLabels[tier] || {label:`TIER ${tier}`, color:'#808495', bg:'rgba(128,132,149,0.06)'};
+    const band = document.createElement('div');
+    band.className = 'tier-band';
+    band.style.background = config.bg;
+    band.style.borderLeft = `3px solid ${config.color}`;
+
+    const label = document.createElement('div');
+    label.className = 'tier-band-label';
+    label.style.color = config.color;
+    label.textContent = config.label;
+    band.appendChild(label);
+
+    const nodesDiv = document.createElement('div');
+    nodesDiv.className = 'tier-nodes';
+
+    tierGroups[tier].forEach(node => {
+      const el = document.createElement('div');
+      el.className = 'tier-node';
+      el.dataset.nodeId = node.id;
+      if (node.state === 'DISABLED' || node.state === 'STOPPED') el.style.opacity = '0.5';
+      // Color code by type
+      if (node.subtype === 'source') el.style.borderTopColor = '#3B82F6';
+      else if (node.subtype === 'sink') el.style.borderTopColor = '#21C354';
+      else if (node.subtype === 'route') el.style.borderTopColor = '#EAB308';
+      else if (node.subtype === 'transform') el.style.borderTopColor = '#A855F7';
+      else if (node.type === 'table') el.style.borderTopColor = '#3B82F6';
+      el.style.borderTopWidth = '3px';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'node-name';
+      nameEl.textContent = node.name.length > 25 ? node.name.substring(0,22) + '...' : node.name;
+      nameEl.title = node.name;
+      el.appendChild(nameEl);
+
+      if (node.meta) {
+        const metaEl = document.createElement('div');
+        metaEl.className = 'node-meta';
+        metaEl.textContent = node.meta;
+        el.appendChild(metaEl);
+      }
+      if (node.rows) {
+        const badge = document.createElement('div');
+        badge.className = 'node-badge';
+        badge.textContent = node.rows >= 1000 ? Math.round(node.rows/1000)+'K' : node.rows;
+        el.appendChild(badge);
+      }
+
+      // Hover: highlight connected
+      el.addEventListener('mouseenter', () => highlightConnected(node.id, nodes, connections, nodeEls, container));
+      el.addEventListener('mouseleave', () => clearHighlight(nodeEls, container));
+      // Click: show detail
+      el.addEventListener('click', () => showNodeDetail(node, detailEl, diagramType));
+
+      nodesDiv.appendChild(el);
+      nodeEls[node.id] = el;
+    });
+
+    band.appendChild(nodesDiv);
+    container.appendChild(band);
+  });
+
+  // Render SVG connections after DOM is laid out
+  requestAnimationFrame(() => {
+    renderConnections(container, connections, nodeEls);
+  });
+
+  // Legend
+  if (legendEl) {
+    legendEl.innerHTML = '';
+    if (diagramType === 'nifi_flow') {
+      legendEl.innerHTML = [
+        '<span><span class="leg-line" style="background:#3B82F6"></span> Source</span>',
+        '<span><span class="leg-line" style="background:#EAB308"></span> Route/Transform</span>',
+        '<span><span class="leg-line" style="background:#A855F7"></span> Process</span>',
+        '<span><span class="leg-line" style="background:#21C354"></span> Sink</span>',
+        '<span><span class="leg-line" style="background:#4B5563;border-top:2px solid #4B5563"></span> Flow Connection</span>',
+      ].join('');
+    } else if (diagramType === 'sql_tables') {
+      legendEl.innerHTML = [
+        '<span><span class="leg-line" style="background:#3B82F6;border-top:2px solid #3B82F6"></span> Foreign Key</span>',
+        `<span>${nodes.length} tables · ${connections.length} relationships</span>`,
+      ].join('');
+    } else {
+      legendEl.innerHTML = [
+        `<span>${nodes.length} objects</span>`,
+        connections.length ? `<span><span class="leg-line" style="background:#4B5563;border-top:2px dashed #4B5563"></span> Shared columns</span>` : '',
+      ].join('');
+    }
+  }
+
+  document.getElementById('tierDiagramContainer').classList.remove('hidden');
+}
+
+function renderConnections(container, connections, nodeEls) {
+  // Remove old SVG
+  const oldSvg = container.querySelector('svg.tier-svg');
+  if (oldSvg) oldSvg.remove();
+
+  if (!connections.length) return;
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.classList.add('tier-svg');
+  svg.style.position = 'absolute';
+  svg.style.top = '0';
+  svg.style.left = '0';
+  svg.style.width = container.scrollWidth + 'px';
+  svg.style.height = container.scrollHeight + 'px';
+  svg.style.pointerEvents = 'none';
+  svg.style.zIndex = '1';
+  svg.setAttribute('viewBox', `0 0 ${container.scrollWidth} ${container.scrollHeight}`);
+
+  // Arrow marker
+  const defs = document.createElementNS('http://www.w3.org/2000/svg','defs');
+  const marker = document.createElementNS('http://www.w3.org/2000/svg','marker');
+  marker.setAttribute('id','arrow');
+  marker.setAttribute('viewBox','0 0 10 8');
+  marker.setAttribute('refX','10');
+  marker.setAttribute('refY','4');
+  marker.setAttribute('markerWidth','8');
+  marker.setAttribute('markerHeight','6');
+  marker.setAttribute('orient','auto');
+  const arrowPath = document.createElementNS('http://www.w3.org/2000/svg','path');
+  arrowPath.setAttribute('d','M0,0 L10,4 L0,8 Z');
+  arrowPath.setAttribute('fill','#4B5563');
+  marker.appendChild(arrowPath);
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+
+  const cRect = container.getBoundingClientRect();
+
+  connections.forEach(conn => {
+    const fromEl = nodeEls[conn.from];
+    const toEl = nodeEls[conn.to];
+    if (!fromEl || !toEl) return;
+
+    const fromRect = fromEl.getBoundingClientRect();
+    const toRect = toEl.getBoundingClientRect();
+
+    const fromX = fromRect.left + fromRect.width/2 - cRect.left + container.scrollLeft;
+    const fromY = fromRect.top + fromRect.height - cRect.top + container.scrollTop;
+    const toX = toRect.left + toRect.width/2 - cRect.left + container.scrollLeft;
+    const toY = toRect.top - cRect.top + container.scrollTop;
+
+    const dy = toY - fromY;
+    const cp = Math.max(Math.abs(dy) * 0.35, 30);
+    const cpx = (toX - fromX) * 0.15;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', `M${fromX},${fromY} C${fromX+cpx},${fromY+cp} ${toX-cpx},${toY-cp} ${toX},${toY}`);
+    path.setAttribute('stroke', conn.color || '#4B5563');
+    path.setAttribute('stroke-width', conn.width || 1.5);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('marker-end', 'url(#arrow)');
+    path.setAttribute('opacity', '0.6');
+    if (conn.dash) path.setAttribute('stroke-dasharray', '6,4');
+    path.dataset.from = conn.from;
+    path.dataset.to = conn.to;
+    svg.appendChild(path);
+  });
+
+  container.style.position = 'relative';
+  container.insertBefore(svg, container.firstChild);
+}
+
+function highlightConnected(nodeId, nodes, connections, nodeEls, container) {
+  const connected = new Set([nodeId]);
+  connections.forEach(c => {
+    if (c.from === nodeId) connected.add(c.to);
+    if (c.to === nodeId) connected.add(c.from);
+  });
+  Object.entries(nodeEls).forEach(([id, el]) => {
+    if (connected.has(id)) { el.classList.add('highlighted'); el.classList.remove('dimmed'); }
+    else { el.classList.add('dimmed'); el.classList.remove('highlighted'); }
+  });
+  // Highlight SVG paths
+  const svg = container.querySelector('svg.tier-svg');
+  if (svg) {
+    svg.querySelectorAll('path[data-from]').forEach(p => {
+      if (p.dataset.from === nodeId || p.dataset.to === nodeId) {
+        p.setAttribute('opacity','1'); p.setAttribute('stroke-width', String(parseFloat(p.getAttribute('stroke-width'))+1));
+      } else { p.setAttribute('opacity','0.15'); }
+    });
+  }
+}
+
+function clearHighlight(nodeEls, container) {
+  Object.values(nodeEls).forEach(el => { el.classList.remove('highlighted','dimmed'); });
+  const svg = container.querySelector('svg.tier-svg');
+  if (svg) {
+    svg.querySelectorAll('path[data-from]').forEach(p => {
+      p.setAttribute('opacity','0.6');
+      // Reset width
+      const w = parseFloat(p.getAttribute('stroke-width'));
+      if (w > 2) p.setAttribute('stroke-width', String(w-1));
+    });
+  }
+}
+
+function showNodeDetail(node, detailEl, diagramType) {
+  if (!detailEl) return;
+  let h = '<div class="node-detail">';
+  h += `<h4>${node.name}</h4>`;
+  if (diagramType === 'nifi_flow' && node.detail) {
+    const p = node.detail;
+    h += `<p><strong>Type:</strong> ${p.type} <code style="font-size:0.7rem">${p.fullType||''}</code></p>`;
+    h += `<p><strong>Group:</strong> ${p.group || '(root)'}</p>`;
+    h += `<p><strong>State:</strong> ${p.state || 'N/A'}</p>`;
+    if (p.schedulingStrategy) h += `<p><strong>Scheduling:</strong> ${p.schedulingStrategy} / ${p.schedulingPeriod}</p>`;
+    const propKeys = Object.keys(p.properties);
+    if (propKeys.length) {
+      h += `<p><strong>Properties (${propKeys.length}):</strong></p><pre style="max-height:200px;overflow:auto;font-size:0.75rem">`;
+      propKeys.slice(0,20).forEach(k => { h += `${k}: ${(p.properties[k]||'').substring(0,100)}\n`; });
+      if (propKeys.length > 20) h += `... +${propKeys.length-20} more\n`;
+      h += '</pre>';
+    }
+  } else if (node.detail && node.detail.columns) {
+    const t = node.detail;
+    h += `<p><strong>Schema:</strong> ${t.schema || 'dbo'} · <strong>Rows:</strong> ${t.row_count}</p>`;
+    h += '<table style="font-size:0.75rem"><thead><tr><th>Column</th><th>Type</th><th>PK</th><th>Null</th></tr></thead><tbody>';
+    t.columns.slice(0,15).forEach(c => {
+      h += `<tr><td>${c.name}</td><td>${c.data_type}</td><td>${c.is_primary_key?'Y':''}</td><td>${c.nullable?'Y':'N'}</td></tr>`;
+    });
+    if (t.columns.length > 15) h += `<tr><td colspan="4" style="color:var(--text2)">+${t.columns.length-15} more columns</td></tr>`;
+    h += '</tbody></table>';
+    if (t.foreign_keys.length) {
+      h += '<p style="margin-top:8px"><strong>Foreign Keys:</strong></p>';
+      t.foreign_keys.forEach(fk => { h += `<p style="font-size:0.8rem"><code>${fk.column||fk.fk_column}</code> → <code>${fk.references_table}(${fk.references_column})</code></p>`; });
+    }
+  }
+  h += '</div>';
+  detailEl.innerHTML = h;
 }
 
 // ================================================================
@@ -1324,33 +2088,27 @@ function parseInput() {
   const content = uploadedContent || document.getElementById('pasteInput').value.trim();
   if (!content) { alert('Upload a file or paste text first.'); return; }
   setTabStatus('parse', 'processing');
-  const fmt = detectFormat(content, uploadedName);
-  const sn = uploadedName || 'Pasted Input';
+  // Use smart parse cascade
   let parsed;
   try {
-    if (fmt==='yaml') parsed = parseYAML(content, sn);
-    else if (fmt==='pyspark') parsed = parsePySpark(content, sn);
-    else if (fmt==='scala') parsed = parseScala(content, sn);
-    else if (fmt==='dbt') parsed = parseDBT(content, sn);
-    else if (fmt==='avro') parsed = parseAvro(content, sn);
-    else if (fmt==='protobuf') parsed = parseProtobuf(content, sn);
-    else if (fmt==='spark_schema') parsed = parseSparkSchema(content, sn);
-    else if (fmt==='informatica_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); parsed=parseInformaticaXML(doc, sn); }
-    else if (fmt==='talend_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); parsed=parseTalendXML(doc, sn); }
-    else if (fmt==='nifi_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); parsed=parseNiFiXML(doc, sn); }
-    else if (fmt==='json') parsed = parseJSON(content, sn);
-    else if (fmt==='xml') parsed = parseXML(content, sn);
-    else if (fmt==='csv') parsed = parseCSV(content, sn);
-    else parsed = parseDDL(content, sn);
+    parsed = smartParse(content, uploadedName || null);
   } catch(e) { setTabStatus('parse', 'ready'); alert('Parse error: '+e.message); return; }
-  if (!parsed || !parsed.tables.length) { setTabStatus('parse', 'ready'); alert('No tables found. Check your input format.'); return; }
+  if (!parsed || !parsed.tables || !parsed.tables.length) {
+    setTabStatus('parse', 'ready');
+    const warnings = parsed && parsed.parse_warnings ? parsed.parse_warnings.join('\n') : '';
+    alert('No tables found. Check your input format.' + (warnings ? '\n\n' + warnings : ''));
+    return;
+  }
   STATE.parsed = parsed; STATE.blueprint = STATE.tables = STATE.medallion = STATE.validation = null;
   // Detect source system
+  const fmt = parsed.detected_format || parsed.input_format || 'unknown';
   const src = detectSourceSystem(content, fmt);
   const tc = parsed.tables.reduce((a,t)=>a+t.columns.length,0);
   const tf = parsed.tables.reduce((a,t)=>a+t.foreign_keys.length,0);
   let h = '<hr class="divider">';
   h += `<div class="detected-source"><span class="dot"></span><strong>${src.name}</strong>&nbsp;—&nbsp;${src.type}<span style="margin-left:12px;color:var(--text2);font-size:0.85rem">(${fmt.replace(/_/g,' ')})</span></div>`;
+  // Show parse quality info
+  if (parsed.parse_attempts && parsed.parse_attempts > 1) h += `<div class="alert alert-info">Smart parser tried ${parsed.parse_attempts} format(s) before finding a match (confidence: ${Math.round((parsed.parse_confidence||0)*100)}%)</div>`;
   h += metricsHTML([['Tables',parsed.tables.length],['Columns',tc],['Foreign Keys',tf],['Source',src.name]]);
   // NiFi-specific details
   if (parsed._nifi) {
@@ -1426,6 +2184,13 @@ function assembleBlueprint() {
   document.getElementById('blueprintResults').innerHTML = h;
   document.getElementById('generateNotReady').classList.add('hidden');
   document.getElementById('generateReady').classList.remove('hidden');
+  // Render adaptive tier diagram
+  try {
+    const tierData = buildTierData(bp, STATE.parsed);
+    if (tierData && tierData.nodes.length) {
+      renderTierDiagram(tierData, 'tierDiagram', 'tierNodeDetail', 'tierDiagramLegend');
+    }
+  } catch(e) { console.warn('Tier diagram error:', e); }
   setTabStatus('blueprint', 'done');
   unlockTab('generate');
 }
