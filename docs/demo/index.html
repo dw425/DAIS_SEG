@@ -1602,6 +1602,57 @@ function buildFlatTierData(blueprint) {
 }
 
 // ================================================================
+// ENVIRONMENT SUMMARY — Source-specific dashboard
+// ================================================================
+function buildEnvironmentSummary(parsed, bp) {
+  if (!parsed) return '';
+  const fmt = parsed.input_format || '';
+  let h = '<h3>Environment Overview</h3>';
+  if (fmt === 'nifi_xml' && parsed._nifi) {
+    const nf = parsed._nifi;
+    // NiFi environment reconstruction
+    const byRole = {};
+    nf.processors.forEach(p => {
+      const role = classifyNiFiProcessor(p.type);
+      if (!byRole[role]) byRole[role] = [];
+      byRole[role].push(p);
+    });
+    h += '<div class="alert alert-info"><strong>NiFi Flow Environment</strong> — reconstructed from template XML</div>';
+    h += '<div class="row">';
+    // Flow topology card
+    h += '<div class="col-3">';
+    h += metricsHTML([['Sources', (byRole.source||[]).length], ['Transforms', (byRole.transform||[]).length + (byRole.route||[]).length]]);
+    h += '</div><div class="col-3">';
+    h += metricsHTML([['Processors', (byRole.process||[]).length], ['Sinks', (byRole.sink||[]).length]]);
+    h += '</div><div class="col-3">';
+    // Scheduling profile
+    const schedTypes = {};
+    nf.processors.forEach(p => { const s = p.schedulingStrategy||'TIMER_DRIVEN'; schedTypes[s]=(schedTypes[s]||0)+1; });
+    const schedInfo = Object.entries(schedTypes).map(([k,v])=>`${k}: ${v}`).join(', ');
+    h += metricsHTML([['Scheduling', schedInfo], ['Controller Svc', nf.controllerServices.length]]);
+    h += '</div></div>';
+    // Data lineage
+    if (nf.sqlTables && nf.sqlTables.length) {
+      h += `<div class="alert alert-warn">SQL Lineage: ${nf.sqlTables.length} table references found across processors — ${nf.sqlTables.slice(0,5).join(', ')}${nf.sqlTables.length>5?'...':''}</div>`;
+    }
+  } else {
+    // Generic environment summary
+    const totalCols = bp.tables.reduce((a,t)=>a+t.columns.length,0);
+    const pkTables = bp.tables.filter(t => t.columns.some(c=>c.is_primary_key));
+    const fkCount = bp.relationships.length;
+    const types = {};
+    bp.tables.forEach(t => t.columns.forEach(c => { types[c.data_type]=(types[c.data_type]||0)+1; }));
+    const topTypes = Object.entries(types).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([t,c])=>`${t}(${c})`).join(', ');
+    h += `<div class="alert alert-info"><strong>${parsed.source_name||'Source'}</strong> — ${bp.tables.length} tables, ${totalCols} columns, ${fkCount} relationships</div>`;
+    h += `<p style="font-size:0.85rem;color:var(--text2);margin:8px 0">Tables with PKs: ${pkTables.length}/${bp.tables.length} · Top types: ${topTypes}</p>`;
+    if (fkCount === 0 && bp.tables.length > 1) {
+      h += '<div class="alert alert-warn">No foreign key relationships detected — tables will be generated independently</div>';
+    }
+  }
+  return h;
+}
+
+// ================================================================
 // TIER DIAGRAM — SVG Rendering Engine
 // ================================================================
 function renderTierDiagram(tierData, containerId, detailId, legendId) {
@@ -2170,6 +2221,8 @@ function assembleBlueprint() {
   const bp = STATE.blueprint;
   let h = '<hr class="divider">';
   h += metricsHTML([['Blueprint ID',bp.blueprint_id.substring(0,8)+'...'],['Tables',bp.tables.length],['Relationships',bp.relationships.length],['Source',bp.source_system.type]]);
+  // Environment Summary
+  h += buildEnvironmentSummary(STATE.parsed, bp);
   if (bp.relationships.length) {
     h += '<h3>Relationships</h3>';
     bp.relationships.forEach(r => { const ft=r.from_table.split('.').pop(), tt=r.to_table.split('.').pop(), j=r.join_columns[0]; h += `<p><code>${ft}</code>.${j.from_column} → <code>${tt}</code>.${j.to_column}</p>`; });
@@ -2179,7 +2232,7 @@ function assembleBlueprint() {
     const rows = t.columns.map(c=>[c.name, c.data_type, c.is_primary_key?'Y':'', Math.round((c.stats.null_ratio||0)*100)+'%', c.stats.min??'', c.stats.max??'', c.stats.distinct_count??'']);
     h += expanderHTML(`<strong>${t.name}</strong> — ${t.row_count} rows`, tableHTML(['Column','Type','PK','Null%','Min','Max','Distinct'], rows));
   });
-  h += `<div style="margin-top:16px"><button class="btn btn-secondary" onclick="downloadJSON()">Download Blueprint JSON</button></div>`;
+  h += `<div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary" onclick="downloadJSON()">Download Blueprint JSON</button><button class="btn btn-secondary" onclick="downloadEnvironment()">Export Environment Model</button></div>`;
   h += `<div class="alert alert-success">Blueprint assembled — proceed to Step 3</div>`;
   document.getElementById('blueprintResults').innerHTML = h;
   document.getElementById('generateNotReady').classList.add('hidden');
@@ -2200,6 +2253,32 @@ function downloadJSON() {
   const blob = new Blob([JSON.stringify(STATE.blueprint,null,2)], {type:'application/json'});
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = `blueprint_${STATE.blueprint.blueprint_id.substring(0,8)}.json`; a.click();
+}
+
+function downloadEnvironment() {
+  if (!STATE.parsed || !STATE.blueprint) return;
+  const env = {
+    source: {name: STATE.parsed.source_name, type: STATE.parsed.source_type, format: STATE.parsed.input_format},
+    blueprint_id: STATE.blueprint.blueprint_id,
+    tables: STATE.blueprint.tables.map(t => ({name:t.name, schema:t.schema, columns:t.columns.length, row_count:t.row_count, has_pk:t.columns.some(c=>c.is_primary_key), fk_count:t.foreign_keys.length})),
+    relationships: STATE.blueprint.relationships,
+    tier_structure: (function() {
+      try { const td = buildTierData(STATE.blueprint, STATE.parsed); return {type:td.diagramType, tiers:Object.keys(td.tierLabels).length, nodes:td.nodes.length, connections:td.connections.length}; } catch(e) { return null; }
+    })()
+  };
+  if (STATE.parsed._nifi) {
+    const nf = STATE.parsed._nifi;
+    env.nifi_environment = {
+      processors: nf.processors.map(p => ({name:p.name, type:p.type, group:p.group, role:classifyNiFiProcessor(p.type), state:p.state})),
+      connections: nf.connections.map(c => ({source:c.sourceName, dest:c.destinationName, relationships:c.relationships})),
+      process_groups: nf.processGroups,
+      controller_services: nf.controllerServices.map(s => ({name:s.name, type:s.type, state:s.state})),
+      sql_table_refs: nf.sqlTables
+    };
+  }
+  const blob = new Blob([JSON.stringify(env,null,2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `environment_${STATE.blueprint.blueprint_id.substring(0,8)}.json`; a.click();
 }
 
 function generateData() {
