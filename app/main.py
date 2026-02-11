@@ -1,11 +1,12 @@
-"""DAIS SEG — Databricks App entry point.
+"""DAIS SEG — Databricks App entry point (Streamlit).
 
-Gradio-based interface for the Synthetic Environment Generation framework.
+Streamlit-based interface for the Synthetic Environment Generation framework.
 Provides natural language interaction (Genie-powered), dashboard views for
 workspace status, and controls for the full Profile → Generate → Conform →
 Validate pipeline.
 
 Deploy as a Databricks App via: databricks bundle deploy
+Run locally: streamlit run app/main.py
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import logging
 import os
 from typing import Optional
 
-import gradio as gr
+import streamlit as st
 from databricks.sdk import WorkspaceClient
 
 from dais_seg.config import SEGConfig, set_config
@@ -27,20 +28,24 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 logger = logging.getLogger("dais_seg.app")
 
 # --------------------------------------------------------------------------- #
-#  Global state (initialized on startup)
+#  Page config
 # --------------------------------------------------------------------------- #
 
-config: Optional[SEGConfig] = None
-client: Optional[WorkspaceClient] = None
-genie: Optional[GenieInterface] = None
-provisioner: Optional[WorkspaceProvisioner] = None
-lifecycle: Optional[LifecycleManager] = None
+st.set_page_config(
+    page_title="SEG — Synthetic Environment Generator",
+    page_icon="🔬",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# --------------------------------------------------------------------------- #
+#  Initialize framework (cached across reruns)
+# --------------------------------------------------------------------------- #
 
 
+@st.cache_resource
 def initialize():
     """Initialize the SEG framework on app startup."""
-    global config, client, genie, provisioner, lifecycle
-
     config = SEGConfig.from_env()
     set_config(config)
 
@@ -53,23 +58,15 @@ def initialize():
         f"SEG App initialized — catalog={config.catalog}, "
         f"model={config.model_serving_endpoint}"
     )
+    return config, client, genie, provisioner, lifecycle
+
+
+config, client, genie, provisioner, lifecycle = initialize()
 
 
 # --------------------------------------------------------------------------- #
-#  Chat handler (Genie interface)
+#  Intent dispatch
 # --------------------------------------------------------------------------- #
-
-def chat_handler(message: str, history: list[list[str]]) -> str:
-    """Handle a chat message via the Genie interface."""
-    if not genie:
-        return "SEG framework not initialized. Check app configuration."
-
-    request = genie.parse_query(message)
-    logger.info(f"Intent: {request.intent.value} (confidence={request.confidence:.0%})")
-
-    response = dispatch_intent(request)
-    return genie.format_response(response)
-
 
 def dispatch_intent(request) -> GenieResponse:
     """Route a parsed Genie request to the appropriate handler."""
@@ -84,7 +81,6 @@ def dispatch_intent(request) -> GenieResponse:
         IntentType.TEARDOWN_WORKSPACE: handle_teardown,
         IntentType.HELP: handle_help,
     }
-
     handler = handlers.get(request.intent, handle_unknown)
     return handler(request)
 
@@ -116,24 +112,12 @@ def handle_generate(request) -> GenieResponse:
 
     if not blueprint_id and not workspace_name:
         return GenieResponse(
-            message="I can generate a synthetic environment. What would you like?\n\n"
-                    "- Specify a **blueprint ID** from a previous profile\n"
-                    "- Or tell me the **source name** and I'll find the latest blueprint",
+            message="I can generate a synthetic environment. What would you like?\n\n- Specify a **blueprint ID** from a previous profile\n- Or tell me the **source name** and I'll find the latest blueprint",
             follow_up="Example: 'Generate synthetic environment from blueprint abc123 at 10% scale'",
         )
-
     return GenieResponse(
-        message=f"Generating synthetic environment:\n"
-                f"- Blueprint: **{blueprint_id or 'latest'}**\n"
-                f"- Scale: **{scale}x**\n"
-                f"- Parallel workspaces: **{parallel}**\n\n"
-                f"Creating isolated schemas with synthetic Delta Tables...",
-        data={
-            "blueprint_id": blueprint_id,
-            "scale_factor": scale,
-            "parallel_count": parallel,
-            "status": "submitted",
-        },
+        message=f"Generating synthetic environment:\n- Blueprint: **{blueprint_id or 'latest'}**\n- Scale: **{scale}x**\n- Parallel workspaces: **{parallel}**\n\nCreating isolated schemas with synthetic Delta Tables...",
+        data={"blueprint_id": blueprint_id, "scale_factor": scale, "parallel_count": parallel, "status": "submitted"},
         action_taken=True,
         follow_up="I'll notify you when generation is complete. Then we can run the medallion pipeline.",
     )
@@ -142,8 +126,7 @@ def handle_generate(request) -> GenieResponse:
 def handle_pipeline(request) -> GenieResponse:
     workspace_id = request.parameters.get("workspace_id", "")
     return GenieResponse(
-        message=f"Running medallion conformance pipeline (Bronze → Silver → Gold) "
-                f"for workspace **{workspace_id or 'all active'}**.",
+        message=f"Running medallion conformance pipeline (Bronze → Silver → Gold) for workspace **{workspace_id or 'all active'}**.",
         data={"workspace_id": workspace_id, "status": "submitted"},
         action_taken=True,
         follow_up="After the pipeline completes, run validation to get confidence scores.",
@@ -153,8 +136,7 @@ def handle_pipeline(request) -> GenieResponse:
 def handle_validate(request) -> GenieResponse:
     workspace_id = request.parameters.get("workspace_id", "")
     return GenieResponse(
-        message=f"Running like-for-like validation on workspace **{workspace_id or 'all active'}**.\n\n"
-                f"Checking: schema parity, data fidelity, quality compliance, pipeline integrity.",
+        message=f"Running like-for-like validation on workspace **{workspace_id or 'all active'}**.\n\nChecking: schema parity, data fidelity, quality compliance, pipeline integrity.",
         data={"workspace_id": workspace_id, "status": "submitted"},
         action_taken=True,
         follow_up="Results will include green/amber/red confidence scores per table.",
@@ -162,13 +144,8 @@ def handle_validate(request) -> GenieResponse:
 
 
 def handle_status(request) -> GenieResponse:
-    if lifecycle:
-        summary = lifecycle.get_summary()
-        return GenieResponse(
-            message="Current workspace status:",
-            data=summary,
-        )
-    return GenieResponse(message="No workspaces tracked yet.")
+    summary = lifecycle.get_summary()
+    return GenieResponse(message="Current workspace status:", data=summary)
 
 
 def handle_list_blueprints(request) -> GenieResponse:
@@ -180,23 +157,21 @@ def handle_list_blueprints(request) -> GenieResponse:
 
 
 def handle_list_workspaces(request) -> GenieResponse:
-    if lifecycle:
-        active = lifecycle.list_active()
-        data = [
-            {
-                "id": ws.workspace_id,
-                "workstream": ws.workstream,
-                "status": ws.status.value,
-                "tables": ws.tables_generated,
-                "score": ws.validation_score,
-            }
-            for ws in active
-        ]
-        return GenieResponse(
-            message=f"**{len(active)} active workspaces:**",
-            data={"workspaces": data},
-        )
-    return GenieResponse(message="No active workspaces.")
+    active = lifecycle.list_active()
+    data = [
+        {
+            "id": ws.workspace_id,
+            "workstream": ws.workstream,
+            "status": ws.status.value,
+            "tables": ws.tables_generated,
+            "score": ws.validation_score,
+        }
+        for ws in active
+    ]
+    return GenieResponse(
+        message=f"**{len(active)} active workspaces:**",
+        data={"workspaces": data},
+    )
 
 
 def handle_teardown(request) -> GenieResponse:
@@ -207,8 +182,7 @@ def handle_teardown(request) -> GenieResponse:
             follow_up="Use 'list workspaces' to see active workspaces.",
         )
     return GenieResponse(
-        message=f"Tearing down workspace **{workspace_id}**. "
-                f"All synthetic Delta Tables and schemas will be removed.",
+        message=f"Tearing down workspace **{workspace_id}**. All synthetic Delta Tables and schemas will be removed.",
         data={"workspace_id": workspace_id, "status": "submitted"},
         action_taken=True,
     )
@@ -216,139 +190,210 @@ def handle_teardown(request) -> GenieResponse:
 
 def handle_help(request) -> GenieResponse:
     return GenieResponse(
-        message="**SEG — Synthetic Environment Generator**\n\n"
-                "I can help you with:\n\n"
-                "- **Profile** a source system: *'Profile the oracle_erp database'*\n"
-                "- **Generate** synthetic environments: *'Create a synthetic copy at 10% scale'*\n"
-                "- **Run the pipeline**: *'Conform data through Bronze/Silver/Gold'*\n"
-                "- **Validate**: *'Check confidence scores for workspace team_a'*\n"
-                "- **Manage workspaces**: *'List active workspaces'* or *'Tear down workspace X'*\n"
-                "- **Parallel runs**: *'Spin up 5 parallel workspaces for the CRM migration'*\n\n"
-                "Built natively on Databricks: Unity Catalog, Delta Tables, Foundation Models, DLT, and Genie.",
+        message=(
+            "**SEG — Synthetic Environment Generator**\n\n"
+            "I can help you with:\n\n"
+            "- **Profile** a source system: *'Profile the oracle_erp database'*\n"
+            "- **Generate** synthetic environments: *'Create a synthetic copy at 10% scale'*\n"
+            "- **Run the pipeline**: *'Conform data through Bronze/Silver/Gold'*\n"
+            "- **Validate**: *'Check confidence scores for workspace team_a'*\n"
+            "- **Manage workspaces**: *'List active workspaces'* or *'Tear down workspace X'*\n"
+            "- **Parallel runs**: *'Spin up 5 parallel workspaces for the CRM migration'*\n\n"
+            "Built natively on Databricks: Unity Catalog, Delta Tables, Foundation Models, DLT, and Genie."
+        ),
     )
 
 
 def handle_unknown(request) -> GenieResponse:
     return GenieResponse(
-        message=f"I'm not sure what you're asking. Could you rephrase?\n\n"
-                f"Try things like:\n"
-                f"- *'Profile the orders database'*\n"
-                f"- *'Generate a synthetic environment'*\n"
-                f"- *'Show me workspace confidence scores'*",
+        message=(
+            "I'm not sure what you're asking. Could you rephrase?\n\n"
+            "Try things like:\n"
+            "- *'Profile the orders database'*\n"
+            "- *'Generate a synthetic environment'*\n"
+            "- *'Show me workspace confidence scores'*"
+        ),
     )
 
 
 # --------------------------------------------------------------------------- #
-#  Dashboard tab
+#  Sidebar
 # --------------------------------------------------------------------------- #
 
-def get_dashboard_data() -> str:
-    """Fetch current dashboard state."""
-    if not lifecycle:
-        return json.dumps({"message": "Not initialized"}, indent=2)
-    return json.dumps(lifecycle.get_summary(), indent=2, default=str)
+with st.sidebar:
+    st.image("https://databricks.com/wp-content/uploads/2023/07/databricks-logo.png", width=180)
+    st.markdown("---")
+    st.markdown("### Configuration")
+    st.text_input("Catalog", value=config.catalog, key="sidebar_catalog", disabled=True)
+    st.text_input("Model Endpoint", value=config.model_serving_endpoint, key="sidebar_model", disabled=True)
+    st.markdown("---")
+    st.markdown(
+        "**SEG** — Synthetic Environment Generator  \n"
+        "Data + AI Summit 2026 | Blueprint"
+    )
 
 
 # --------------------------------------------------------------------------- #
-#  Gradio UI
+#  Tabs
 # --------------------------------------------------------------------------- #
 
-def build_app() -> gr.Blocks:
-    """Build the Gradio interface for the SEG Databricks App."""
-    with gr.Blocks(
-        title="SEG — Synthetic Environment Generator",
-        theme=gr.themes.Soft(
-            primary_hue="blue",
-            neutral_hue="slate",
-        ),
-    ) as app:
-        gr.Markdown(
-            "# Synthetic Environment Generator\n"
-            "### AI-Driven Parallel Migration on Databricks\n"
-            "Ask me to profile sources, generate synthetic environments, "
-            "run medallion pipelines, and validate — all in natural language."
+tab_genie, tab_dashboard, tab_pipeline, tab_validation = st.tabs(
+    ["Genie Interface", "Dashboard", "Pipeline", "Validation"]
+)
+
+# ---- Tab 1: Genie Interface (Chat) ---- #
+with tab_genie:
+    st.header("Genie Interface")
+    st.caption("Natural language interface for synthetic environment operations")
+
+    # Initialize chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # Display chat history
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # Chat input
+    if prompt := st.chat_input("Ask me to profile, generate, validate, or manage environments..."):
+        # Show user message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Parse and dispatch
+        request = genie.parse_query(prompt)
+        response = dispatch_intent(request)
+
+        # Build assistant response
+        reply_parts = [response.message]
+        if response.data:
+            reply_parts.append(f"\n```json\n{json.dumps(response.data, indent=2, default=str)}\n```")
+        if response.follow_up:
+            reply_parts.append(f"\n> **Next step:** {response.follow_up}")
+        reply = "\n".join(reply_parts)
+
+        st.session_state.messages.append({"role": "assistant", "content": reply})
+        with st.chat_message("assistant"):
+            st.markdown(reply)
+
+    # Example prompts
+    with st.expander("Example prompts"):
+        examples = [
+            "Profile the oracle_erp source system",
+            "Generate a synthetic environment at 10% scale",
+            "Run medallion pipeline for all workspaces",
+            "Show confidence scores for workspace team_alpha",
+            "List all active workspaces",
+            "Spin up 3 parallel workspaces for the CRM migration",
+            "Help",
+        ]
+        for ex in examples:
+            st.code(ex, language=None)
+
+
+# ---- Tab 2: Dashboard ---- #
+with tab_dashboard:
+    st.header("Workspace Dashboard")
+
+    col1, col2, col3 = st.columns(3)
+    summary = lifecycle.get_summary()
+    by_status = summary.get("by_status", {})
+
+    col1.metric("Total Workspaces", summary.get("total", 0))
+    col2.metric("Active", by_status.get("ready", 0) + by_status.get("generating", 0) + by_status.get("validating", 0))
+    col3.metric("Complete", by_status.get("complete", 0))
+
+    st.markdown("---")
+
+    if st.button("Refresh", key="refresh_dashboard"):
+        st.rerun()
+
+    active = lifecycle.list_active()
+    if active:
+        ws_data = [
+            {
+                "Workspace ID": ws.workspace_id,
+                "Workstream": ws.workstream,
+                "Status": ws.status.value,
+                "Tables": ws.tables_generated,
+                "Confidence": f"{ws.validation_score:.1%}" if ws.validation_score else "—",
+            }
+            for ws in active
+        ]
+        st.dataframe(ws_data, use_container_width=True)
+    else:
+        st.info("No active workspaces. Use the Genie Interface or Pipeline tab to create one.")
+
+
+# ---- Tab 3: Pipeline ---- #
+with tab_pipeline:
+    st.header("Full Pipeline Configuration")
+    st.markdown("Configure and launch the end-to-end SEG pipeline: **Profile → Generate → Conform → Validate**")
+
+    with st.form("pipeline_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            source_catalog = st.text_input("Source Catalog", placeholder="e.g., oracle_erp_fed")
+            blueprint_id = st.text_input("Blueprint ID", placeholder="Leave blank to auto-profile")
+        with col2:
+            scale_factor = st.slider("Scale Factor", 0.01, 1.0, 0.1, 0.01, help="Multiply source row counts by this factor")
+            parallel_count = st.slider("Parallel Workspaces", 1, 10, 1, 1, help="Number of isolated workspaces to spin up")
+
+        workstream_names = st.text_input(
+            "Workstream Names (comma-separated)",
+            value="team_alpha",
+            help="Each workstream gets its own isolated synthetic workspace",
         )
 
-        with gr.Tabs():
-            # ---- Chat Tab (Genie Interface) ----
-            with gr.Tab("Genie Interface"):
-                chatbot = gr.ChatInterface(
-                    fn=chat_handler,
-                    title="",
-                    description="Natural language interface for synthetic environment operations",
-                    examples=[
-                        "Profile the oracle_erp source system",
-                        "Generate a synthetic environment at 10% scale",
-                        "Run medallion pipeline for all workspaces",
-                        "Show confidence scores for workspace team_alpha",
-                        "List all active workspaces",
-                        "Spin up 3 parallel workspaces for the CRM migration",
-                        "Help",
-                    ],
-                    retry_btn=None,
-                    undo_btn=None,
+        submitted = st.form_submit_button("Run Full Pipeline", type="primary")
+
+        if submitted:
+            if not source_catalog and not blueprint_id:
+                st.error("Provide either a Source Catalog or Blueprint ID.")
+            else:
+                st.success(
+                    f"Pipeline submitted:\n\n"
+                    f"- **Source**: {source_catalog or 'from blueprint'}\n"
+                    f"- **Blueprint**: {blueprint_id or 'auto-profile'}\n"
+                    f"- **Scale**: {scale_factor}x\n"
+                    f"- **Workspaces**: {parallel_count}\n"
+                    f"- **Workstreams**: {workstream_names}\n\n"
+                    f"Monitor progress in the **Dashboard** tab."
                 )
 
-            # ---- Dashboard Tab ----
-            with gr.Tab("Dashboard"):
-                gr.Markdown("### Workspace Overview")
-                dashboard_output = gr.JSON(label="Current State")
-                refresh_btn = gr.Button("Refresh Dashboard")
-                refresh_btn.click(fn=get_dashboard_data, outputs=dashboard_output)
 
-            # ---- Pipeline Tab ----
-            with gr.Tab("Pipeline"):
-                gr.Markdown("### Full Pipeline Configuration")
-                with gr.Row():
-                    source_input = gr.Textbox(label="Source Catalog", placeholder="e.g., oracle_erp_fed")
-                    scale_input = gr.Slider(0.01, 1.0, value=0.1, step=0.01, label="Scale Factor")
-                    parallel_input = gr.Slider(1, 10, value=1, step=1, label="Parallel Workspaces")
-                run_pipeline_btn = gr.Button("Run Full Pipeline", variant="primary")
-                pipeline_output = gr.Textbox(label="Pipeline Output", lines=10)
+# ---- Tab 4: Validation ---- #
+with tab_validation:
+    st.header("Validation & Confidence Scores")
+    st.markdown("Run like-for-like validation and review green/amber/red confidence scores.")
 
-                def run_full_pipeline(source, scale, parallel):
-                    return (
-                        f"Pipeline submitted:\n"
-                        f"  Source: {source}\n"
-                        f"  Scale: {scale}x\n"
-                        f"  Parallel workspaces: {int(parallel)}\n\n"
-                        f"Monitor progress in the Dashboard tab."
-                    )
+    with st.form("validation_form"):
+        val_workspace = st.text_input("Workspace ID", placeholder="e.g., dais_seg.seg_team_alpha")
+        val_blueprint = st.text_input("Blueprint ID", placeholder="Required for validation")
+        val_submitted = st.form_submit_button("Run Validation", type="primary")
 
-                run_pipeline_btn.click(
-                    fn=run_full_pipeline,
-                    inputs=[source_input, scale_input, parallel_input],
-                    outputs=pipeline_output,
-                )
+        if val_submitted:
+            if not val_blueprint:
+                st.error("Blueprint ID is required for validation.")
+            else:
+                st.info(f"Validation submitted for workspace **{val_workspace or 'all active'}** against blueprint **{val_blueprint}**")
 
-            # ---- Validation Tab ----
-            with gr.Tab("Validation"):
-                gr.Markdown("### Validation Results & Confidence Scores")
-                workspace_input = gr.Textbox(label="Workspace ID", placeholder="e.g., dais_seg.seg_team_alpha")
-                validate_btn = gr.Button("Run Validation", variant="primary")
-                validation_output = gr.JSON(label="Validation Report")
+    st.markdown("---")
+    st.subheader("Scoring Dimensions")
 
-                def run_validation(workspace_id):
-                    return {"workspace_id": workspace_id, "status": "submitted"}
+    score_cols = st.columns(4)
+    score_cols[0].markdown("**Schema Parity**\n\nColumns, types, constraints\n\n*Weight: 25%*")
+    score_cols[1].markdown("**Data Fidelity**\n\nDistributions, nulls, cardinality\n\n*Weight: 35%*")
+    score_cols[2].markdown("**Quality Compliance**\n\nDLT expectations pass rate\n\n*Weight: 20%*")
+    score_cols[3].markdown("**Pipeline Integrity**\n\nMedallion conformance\n\n*Weight: 20%*")
 
-                validate_btn.click(
-                    fn=run_validation,
-                    inputs=workspace_input,
-                    outputs=validation_output,
-                )
-
-    return app
-
-
-# --------------------------------------------------------------------------- #
-#  Entry point
-# --------------------------------------------------------------------------- #
-
-if __name__ == "__main__":
-    initialize()
-    app = build_app()
-    app.launch(
-        server_name="0.0.0.0",
-        server_port=int(os.getenv("PORT", "8080")),
-        share=False,
+    st.markdown("---")
+    st.markdown(
+        "| Level | Threshold | Meaning |\n"
+        "|-------|-----------|--------|\n"
+        "| 🟢 Green | ≥ 90% | Ready for production cutover |\n"
+        "| 🟡 Amber | ≥ 70% | Needs attention before cutover |\n"
+        "| 🔴 Red | < 70% | Not ready — review recommendations |"
     )

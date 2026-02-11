@@ -67,7 +67,7 @@ pytest
 ## Project Structure
 
 ```
-├── app/                          # Databricks App (Gradio UI)
+├── app/                          # Databricks App (Streamlit UI)
 │   └── main.py                   # Entry point — Genie chat + dashboard
 ├── notebooks/                    # Databricks Notebooks (one per pillar)
 │   ├── 01_profile_source.py
