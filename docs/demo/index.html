@@ -171,6 +171,7 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
       <div class="source-badge" style="border-top-color:#FF6D70"><div class="src-name">Talend</div><div class="src-type">Data Integration</div></div>
       <div class="source-badge" style="border-top-color:#728E9B"><div class="src-name">Apache NiFi</div><div class="src-type">Flow Definition</div></div>
       <div class="source-badge" style="border-top-color:#3ECF8E"><div class="src-name">Avro / Protobuf</div><div class="src-type">Schema Files</div></div>
+      <div class="source-badge" style="border-top-color:#8B5CF6"><div class="src-name">Dependency Graph</div><div class="src-type">Session Lineage</div></div>
     </div>
     <div class="row">
       <div class="col">
@@ -373,7 +374,7 @@ function rankFormats(content, filename) {
   // dbt
   if (/\{\{\s*(ref|source|config)\s*\(/.test(s)) candidates.push({format:'dbt',confidence:0.88});
   // Avro
-  if (s.startsWith('{')) { try { const d=JSON.parse(s); if(d.type==='record'&&d.fields) candidates.push({format:'avro',confidence:0.92}); } catch(e){} }
+  if (s.startsWith('{')) { try { const d=JSON.parse(s); if(d.type==='record'&&d.fields) candidates.push({format:'avro',confidence:0.92}); if(d.sessions&&(d.dependency_edges||d.table_index)) candidates.push({format:'dependency_json',confidence:0.95}); } catch(e){} }
   // DDL
   if (/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMPORARY\s+|GLOBAL\s+TEMPORARY\s+|VOLATILE\s+|TRANSIENT\s+|EXTERNAL\s+|MULTISET\s+|SET\s+|COLUMN\s+|ROW\s+|UNLOGGED\s+|TEMP\s+)*TABLE\b/i.test(s)) candidates.push({format:'ddl',confidence:0.82});
   // JSON
@@ -407,6 +408,7 @@ function routeParser(format, content, filename) {
   if (format==='informatica_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); return parseInformaticaXML(doc, sn); }
   if (format==='talend_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); return parseTalendXML(doc, sn); }
   if (format==='nifi_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); return parseNiFiXML(doc, sn); }
+  if (format==='dependency_json') return parseJSON(content, sn);
   if (format==='json') return parseJSON(content, sn);
   if (format==='xml') return parseXML(content, sn);
   if (format==='csv') return parseCSV(content, sn);
@@ -719,16 +721,115 @@ function extractParensList(el) {
 function parseJSON(content, sourceName) {
   let data;
   try { data = JSON.parse(content.trim()); } catch(e) { return {source_name:sourceName||'JSON',source_type:'json',tables:[],input_format:'json',parse_warnings:['Invalid JSON: '+e.message]}; }
+  // Detect dependency graph format (sessions + dependency_edges + table_index)
+  if (data.sessions && (data.dependency_edges || data.table_index)) return parseDependencyGraph(data, sourceName);
   const src = data.tables || data.models || (Array.isArray(data) ? data : []);
   const tables = (Array.isArray(src) ? src : Object.values(src)).map(t => {
+    if (!t || typeof t !== 'object') return null;
     const cols = (t.columns||[]).map(c => {
       if (typeof c === 'string') { const p = c.split(':'); return {name:p[0].trim(), data_type:p[1]?p[1].trim():'varchar', raw_type:p[1]||'varchar', nullable:true, is_primary_key:false, is_unique:false, check_constraints:[], max_length:null, precision:null, scale:null, default_value:null}; }
       return {name:c.name||c.column_name||'', data_type:c.type||c.data_type||'varchar', raw_type:c.type||c.data_type||'varchar', nullable:c.nullable!==false, is_primary_key:!!c.pk||!!c.primary_key||!!c.is_primary_key, is_unique:false, check_constraints:c.values||c.allowed_values||[], max_length:c.length||c.max_length||null, precision:null, scale:null, default_value:null};
     });
     const fks = (t.foreign_keys||t.fks||[]).map(fk=>({fk_column:fk.column||'', referenced_table:fk.references||fk.referenced_table||'', referenced_column:fk.references_column||fk.referenced_column||'id'}));
     return {name:t.name||'', schema:t.schema||'dbo', columns:cols, foreign_keys:fks, row_count:1000};
-  });
+  }).filter(Boolean);
   return {source_name:data.name||sourceName||'JSON Import', source_type:data.type||'json', tables, input_format:'json', parse_warnings:[]};
+}
+
+// ================================================================
+// PARSERS — Dependency Graph JSON (session lineage + table dependencies)
+// ================================================================
+function parseDependencyGraph(data, sourceName) {
+  const tables = [], warnings = [];
+  const sessions = data.sessions || {};
+  const edges = data.dependency_edges || [];
+  const order = data.recommended_order || [];
+  const conflicts = data.conflicts || [];
+  const sessionNames = Object.keys(sessions);
+
+  // Collect all unique tables across all sessions
+  const allTables = {};
+  for (const [sName, sess] of Object.entries(sessions)) {
+    (sess.source_tables||[]).forEach(t => {
+      const key = t.name;
+      if (!allTables[key]) allTables[key] = {name:t.name, schema:t.schema||'', roles:new Set(), sessions:new Set()};
+      allTables[key].roles.add('source');
+      allTables[key].sessions.add(sName);
+    });
+    (sess.target_tables||[]).forEach(t => {
+      const key = t.name;
+      if (!allTables[key]) allTables[key] = {name:t.name, schema:t.schema||t.load_type||'', roles:new Set(), sessions:new Set()};
+      allTables[key].roles.add('target');
+      allTables[key].sessions.add(sName);
+    });
+    (sess.lookup_tables||[]).forEach(t => {
+      const key = t.name;
+      if (!allTables[key]) allTables[key] = {name:t.name, schema:t.schema||'', roles:new Set(), sessions:new Set()};
+      allTables[key].roles.add('lookup');
+      allTables[key].sessions.add(sName);
+    });
+  }
+
+  // Build sessions inventory table
+  const sessionStates = sessionNames.map(s => {
+    const sess = sessions[s];
+    return {name:s, sources:(sess.source_tables||[]).length, targets:(sess.target_tables||[]).length, lookups:(sess.lookup_tables||[]).length};
+  });
+  const allSessionNames = sessionNames.slice(0,50);
+  tables.push({name:'etl_sessions', schema:'dependency_graph', row_count:sessionNames.length, columns:[
+    {name:'session_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:allSessionNames,max_length:200,precision:null,scale:null,default_value:null},
+    {name:'source_table_count',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+    {name:'target_table_count',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+    {name:'lookup_table_count',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+    {name:'execution_order',data_type:'int',raw_type:'int',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}
+  ], foreign_keys:[]});
+
+  // Build tables inventory
+  const tableNames = Object.keys(allTables);
+  const roleValues = ['source','target','lookup'];
+  tables.push({name:'etl_tables', schema:'dependency_graph', row_count:tableNames.length, columns:[
+    {name:'table_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+    {name:'schema_name',data_type:'varchar',raw_type:'string',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:100,precision:null,scale:null,default_value:null},
+    {name:'role',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:roleValues,max_length:20,precision:null,scale:null,default_value:null},
+    {name:'session_count',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}
+  ], foreign_keys:[]});
+
+  // Build dependency edges table
+  if (edges.length) {
+    tables.push({name:'dependency_edges', schema:'dependency_graph', row_count:edges.length, columns:[
+      {name:'edge_id',data_type:'int',raw_type:'int',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+      {name:'upstream_session',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'downstream_session',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'via_table',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null}
+    ], foreign_keys:[
+      {fk_column:'upstream_session',referenced_table:'etl_sessions',referenced_column:'session_name'},
+      {fk_column:'downstream_session',referenced_table:'etl_sessions',referenced_column:'session_name'}
+    ]});
+  }
+
+  // Build conflicts table
+  if (conflicts.length) {
+    const conflictTypes = [...new Set(conflicts.map(c=>c.conflict_type))];
+    tables.push({name:'etl_conflicts', schema:'dependency_graph', row_count:conflicts.length, columns:[
+      {name:'conflict_id',data_type:'int',raw_type:'int',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+      {name:'table_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'conflict_type',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:conflictTypes,max_length:50,precision:null,scale:null,default_value:null},
+      {name:'writer_count',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+      {name:'reader_count',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}
+    ], foreign_keys:[]});
+  }
+
+  if (conflicts.length) warnings.push(`${conflicts.length} conflicts detected: ${conflicts.map(c=>c.table_name+' ('+c.conflict_type+')').join(', ')}`);
+
+  const result = {
+    source_name: sourceName || 'Dependency Graph',
+    source_type: 'dependency_graph',
+    tables, input_format: 'dependency_json',
+    parse_warnings: warnings
+  };
+  // Store dependency metadata for tier diagram
+  result._dependency = {sessions: sessionStates, edges, order, conflicts, allTables, rawSessions: sessions};
+  return result;
 }
 
 function parseXML(content, sourceName) {
@@ -1349,6 +1450,7 @@ function parseNiFiXML(doc, sourceName) {
 // SOURCE SYSTEM DETECTION
 // ================================================================
 function detectSourceSystem(content, fmt) {
+  if (fmt==='dependency_json') return {name:'Dependency Graph',type:'ETL Session Lineage',color:'#8B5CF6'};
   if (fmt==='informatica_xml') return {name:'Informatica',type:'ETL & Integration',color:'#FF4A00'};
   if (fmt==='talend_xml') return {name:'Talend',type:'Data Integration',color:'#FF6D70'};
   if (fmt==='nifi_xml') return {name:'Apache NiFi',type:'Flow Definition',color:'#728E9B'};
@@ -1471,6 +1573,7 @@ function classifyNiFiProcessor(type) {
 function buildTierData(blueprint, parsed) {
   const fmt = parsed ? parsed.input_format : '';
   if (fmt === 'nifi_xml' && parsed._nifi) return buildNiFiTierData(parsed._nifi, blueprint);
+  if (fmt === 'dependency_json' && parsed._dependency) return buildDependencyTierData(parsed._dependency, blueprint);
   if (blueprint.relationships && blueprint.relationships.length > 0) return buildSQLTierData(blueprint);
   return buildFlatTierData(blueprint);
 }
@@ -1605,6 +1708,93 @@ function buildFlatTierData(blueprint) {
   return {nodes, connections, tierLabels, diagramType: 'flat'};
 }
 
+function buildDependencyTierData(dep, blueprint) {
+  const nodes = [], connections = [];
+  const tierLabels = {};
+  const sessions = dep.sessions || [];
+  const edges = dep.edges || [];
+  const order = dep.order || [];
+  const conflicts = dep.conflicts || [];
+
+  // Build adjacency for topological depth
+  const depthMap = {};
+  const upstream = {}; // downstream -> [upstream sessions]
+  edges.forEach(e => {
+    const up = e.upstream || e.upstream_session || e.from;
+    const down = e.downstream || e.downstream_session || e.to;
+    if (!upstream[down]) upstream[down] = [];
+    upstream[down].push(up);
+  });
+  const sessionNames = sessions.map(s => s.name);
+  function getDepth(sn, visited) {
+    if (depthMap[sn] !== undefined) return depthMap[sn];
+    if (visited.has(sn)) return 0;
+    visited.add(sn);
+    const ups = upstream[sn] || [];
+    if (!ups.length) { depthMap[sn] = 0; return 0; }
+    const maxD = Math.max(...ups.map(u => getDepth(u, new Set(visited))));
+    depthMap[sn] = maxD + 1;
+    return depthMap[sn];
+  }
+  sessionNames.forEach(sn => getDepth(sn, new Set()));
+  // If recommended_order exists and depths are all 0, use order index as depth
+  if (order.length && Math.max(0, ...Object.values(depthMap)) === 0) {
+    order.forEach((sn, i) => { depthMap[sn] = i; });
+  }
+  const maxDepth = Math.max(0, ...Object.values(depthMap));
+  // Compress depths into reasonable tiers (max 6 tiers)
+  const tierCount = Math.min(maxDepth + 1, 6);
+  const tierColors = ['#3B82F6','#EAB308','#A855F7','#21C354','#F97316','#EC4899'];
+  const tierBgs = ['rgba(59,130,246,0.06)','rgba(234,179,8,0.06)','rgba(168,85,247,0.06)','rgba(33,195,84,0.06)','rgba(249,115,22,0.06)','rgba(236,72,153,0.06)'];
+  for (let d = 0; d < tierCount; d++) {
+    const ti = d + 1;
+    if (d === 0) tierLabels[ti] = {label:'ROOT SESSIONS — No Upstream Dependencies', color:tierColors[d], bg:tierBgs[d]};
+    else if (d === maxDepth && maxDepth > 0) tierLabels[ti] = {label:'TERMINAL SESSIONS — Final Output', color:tierColors[d % tierColors.length], bg:tierBgs[d % tierBgs.length]};
+    else tierLabels[ti] = {label:`DEPENDENCY WAVE ${d}`, color:tierColors[d % tierColors.length], bg:tierBgs[d % tierBgs.length]};
+  }
+  // Conflict lookup
+  const conflictSet = new Set(conflicts.map(c => c.table_name));
+  const sessionConflicts = {};
+  conflicts.forEach(c => {
+    (c.writers || []).forEach(w => { if (!sessionConflicts[w]) sessionConflicts[w] = []; sessionConflicts[w].push(c); });
+  });
+  // Build nodes from sessions
+  sessions.forEach(s => {
+    const depth = depthMap[s.name] || 0;
+    const tier = Math.min(depth + 1, tierCount);
+    const hasConflict = !!(sessionConflicts[s.name] && sessionConflicts[s.name].length);
+    nodes.push({
+      id: s.name,
+      name: s.name,
+      tier: tier,
+      type: 'session',
+      subtype: depth === 0 ? 'root' : (upstream[s.name] ? 'dependent' : 'independent'),
+      meta: `${s.sources} src · ${s.targets} tgt · ${s.lookups} lkp`,
+      sources: s.sources,
+      targets: s.targets,
+      lookups: s.lookups,
+      hasConflict: hasConflict,
+      conflictDetails: sessionConflicts[s.name] || [],
+      detail: s
+    });
+  });
+  // Build connections from dependency edges
+  edges.forEach((e, i) => {
+    const up = e.upstream || e.upstream_session || e.from;
+    const down = e.downstream || e.downstream_session || e.to;
+    const via = e.shared_tables ? e.shared_tables.join(', ') : (e.via_table || '');
+    const hasConflict = e.shared_tables ? e.shared_tables.some(t => conflictSet.has(t)) : conflictSet.has(via);
+    connections.push({
+      from: up, to: down,
+      label: via ? 'via ' + via : '',
+      type: hasConflict ? 'conflict' : 'dependency',
+      color: hasConflict ? '#EF4444' : '#6366F1',
+      width: hasConflict ? 2.5 : 1.5
+    });
+  });
+  return {nodes, connections, tierLabels, diagramType: 'dependency_graph'};
+}
+
 // ================================================================
 // ENVIRONMENT SUMMARY — Source-specific dashboard
 // ================================================================
@@ -1638,6 +1828,22 @@ function buildEnvironmentSummary(parsed, bp) {
     // Data lineage
     if (nf.sqlTables && nf.sqlTables.length) {
       h += `<div class="alert alert-warn">SQL Lineage: ${nf.sqlTables.length} table references found across processors — ${nf.sqlTables.slice(0,5).join(', ')}${nf.sqlTables.length>5?'...':''}</div>`;
+    }
+  } else if (fmt === 'dependency_json' && parsed._dependency) {
+    const dep = parsed._dependency;
+    const allTableCount = Object.keys(dep.allTables || {}).length;
+    const conflictCount = dep.conflicts.length;
+    h += '<div class="alert alert-info"><strong>ETL Dependency Graph</strong> — session lineage with table-level dependencies</div>';
+    h += '<div class="row">';
+    h += '<div class="col-3">';
+    h += metricsHTML([['Sessions', dep.sessions.length], ['Dep. Edges', dep.edges.length]]);
+    h += '</div><div class="col-3">';
+    h += metricsHTML([['Tables Referenced', allTableCount], ['Exec. Order Steps', dep.order.length]]);
+    h += '</div><div class="col-3">';
+    h += metricsHTML([['Conflicts', conflictCount], ['Types', [...new Set(dep.conflicts.map(c=>c.conflict_type))].length || 0]]);
+    h += '</div></div>';
+    if (conflictCount) {
+      h += `<div class="alert alert-warn">${conflictCount} table conflict(s): ${dep.conflicts.slice(0,3).map(c=>c.table_name+' ('+c.conflict_type+')').join(', ')}${conflictCount>3?'...':''}</div>`;
     }
   } else {
     // Generic environment summary
@@ -1707,6 +1913,9 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
       else if (node.subtype === 'sink') el.style.borderTopColor = '#21C354';
       else if (node.subtype === 'route') el.style.borderTopColor = '#EAB308';
       else if (node.subtype === 'transform') el.style.borderTopColor = '#A855F7';
+      else if (node.type === 'session' && node.hasConflict) { el.style.borderTopColor = '#EF4444'; el.style.borderColor = '#EF4444'; }
+      else if (node.type === 'session' && node.subtype === 'root') el.style.borderTopColor = '#3B82F6';
+      else if (node.type === 'session') el.style.borderTopColor = '#6366F1';
       else if (node.type === 'table') el.style.borderTopColor = '#3B82F6';
       el.style.borderTopWidth = '3px';
 
@@ -1896,6 +2105,14 @@ function showNodeDetail(node, detailEl, diagramType) {
       propKeys.slice(0,20).forEach(k => { h += `${k}: ${(p.properties[k]||'').substring(0,100)}\n`; });
       if (propKeys.length > 20) h += `... +${propKeys.length-20} more\n`;
       h += '</pre>';
+    }
+  } else if (diagramType === 'dependency_graph' && node.detail) {
+    const s = node.detail;
+    h += `<p><strong>Sources:</strong> ${s.sources} · <strong>Targets:</strong> ${s.targets} · <strong>Lookups:</strong> ${s.lookups}</p>`;
+    if (node.hasConflict && node.conflictDetails.length) {
+      h += '<div class="alert alert-warn" style="margin:8px 0;padding:8px 12px;font-size:0.8rem"><strong>Conflicts:</strong><br>';
+      node.conflictDetails.forEach(c => { h += `${c.table_name} — ${c.conflict_type}<br>`; });
+      h += '</div>';
     }
   } else if (node.detail && node.detail.columns) {
     const t = node.detail;
@@ -2197,6 +2414,37 @@ function parseInput() {
     if (nf.sqlTables && nf.sqlTables.length) {
       const stRows = nf.sqlTables.map(t => [t, t.startsWith('$')?'variable':'table']);
       h += expanderHTML(`<strong>SQL Table References</strong> (${nf.sqlTables.length})`, tableHTML(['Table Reference','Type'], stRows));
+    }
+  }
+  // Dependency graph-specific details
+  if (parsed._dependency) {
+    const dep = parsed._dependency;
+    const allTableCount = Object.keys(dep.allTables || {}).length;
+    h += metricsHTML([['Sessions',dep.sessions.length],['Dependencies',dep.edges.length],['Unique Tables',allTableCount],['Conflicts',dep.conflicts.length]]);
+    // Sessions summary
+    if (dep.sessions.length) {
+      const sRows = dep.sessions.map(s => [s.name, s.sources, s.targets, s.lookups]);
+      h += expanderHTML(`<strong>ETL Sessions</strong> (${dep.sessions.length})`, tableHTML(['Session','Sources','Targets','Lookups'], sRows));
+    }
+    // Dependency edges
+    if (dep.edges.length) {
+      const eRows = dep.edges.map(e => {
+        const up = e.upstream || e.upstream_session || e.from || '';
+        const down = e.downstream || e.downstream_session || e.to || '';
+        const via = e.shared_tables ? e.shared_tables.join(', ') : (e.via_table || '');
+        return [up, down, via];
+      });
+      h += expanderHTML(`<strong>Dependency Edges</strong> (${dep.edges.length})`, tableHTML(['Upstream','Downstream','Shared Tables'], eRows));
+    }
+    // Recommended execution order
+    if (dep.order.length) {
+      const oRows = dep.order.map((s, i) => [i + 1, s]);
+      h += expanderHTML(`<strong>Recommended Order</strong> (${dep.order.length})`, tableHTML(['Step','Session'], oRows));
+    }
+    // Conflicts
+    if (dep.conflicts.length) {
+      const cRows = dep.conflicts.map(c => [c.table_name, c.conflict_type, (c.writers||[]).join(', '), (c.readers||c.lookup_readers||[]).join(', ')]);
+      h += expanderHTML(`<strong>Conflicts</strong> (${dep.conflicts.length})`, '<div class="alert alert-warn" style="margin:0 0 8px">These tables have multiple writers or timing issues</div>' + tableHTML(['Table','Conflict Type','Writers','Readers'], cRows));
     }
   }
   if (parsed.parse_warnings && parsed.parse_warnings.length) {
