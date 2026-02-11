@@ -1,0 +1,182 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Source Environment Blueprint",
+  "description": "Schema for a profiled source environment — the foundation for synthetic generation.",
+  "type": "object",
+  "required": ["blueprint_id", "source_system", "profiled_at", "tables"],
+  "properties": {
+    "blueprint_id": {
+      "type": "string",
+      "description": "Unique identifier for this blueprint"
+    },
+    "source_system": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["oracle", "sql_server", "teradata", "snowflake", "postgres", "mysql", "db2"]
+        },
+        "version": { "type": "string" },
+        "connection_ref": {
+          "type": "string",
+          "description": "Lakehouse Federation connection name in Unity Catalog"
+        }
+      }
+    },
+    "profiled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "profiled_by": {
+      "type": "string",
+      "description": "Model endpoint used for profiling"
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "schema", "row_count", "columns"],
+        "properties": {
+          "name": { "type": "string" },
+          "schema": { "type": "string" },
+          "row_count": { "type": "integer" },
+          "size_bytes": { "type": "integer" },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "data_type"],
+              "properties": {
+                "name": { "type": "string" },
+                "data_type": { "type": "string" },
+                "nullable": { "type": "boolean", "default": true },
+                "is_primary_key": { "type": "boolean", "default": false },
+                "stats": {
+                  "type": "object",
+                  "properties": {
+                    "distinct_count": { "type": "integer" },
+                    "null_ratio": { "type": "number" },
+                    "min": {},
+                    "max": {},
+                    "mean": { "type": "number" },
+                    "stddev": { "type": "number" },
+                    "percentiles": {
+                      "type": "object",
+                      "properties": {
+                        "p25": { "type": "number" },
+                        "p50": { "type": "number" },
+                        "p75": { "type": "number" },
+                        "p95": { "type": "number" },
+                        "p99": { "type": "number" }
+                      }
+                    },
+                    "top_values": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "value": {},
+                          "frequency": { "type": "number" }
+                        }
+                      }
+                    },
+                    "pattern": {
+                      "type": "string",
+                      "description": "Regex pattern for string columns"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "foreign_keys": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["column", "references_table", "references_column"],
+              "properties": {
+                "column": { "type": "string" },
+                "references_table": { "type": "string" },
+                "references_column": { "type": "string" },
+                "orphan_ratio": {
+                  "type": "number",
+                  "description": "Fraction of FK values with no matching parent"
+                }
+              }
+            }
+          },
+          "indexes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "columns": { "type": "array", "items": { "type": "string" } },
+                "unique": { "type": "boolean" }
+              }
+            }
+          },
+          "business_rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "description": { "type": "string" },
+                "sql_expression": { "type": "string" },
+                "confidence": { "type": "number" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "description": "Cross-table dependency graph",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from_table": { "type": "string" },
+          "to_table": { "type": "string" },
+          "relationship_type": {
+            "type": "string",
+            "enum": ["one_to_one", "one_to_many", "many_to_many"]
+          },
+          "join_columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from_column": { "type": "string" },
+                "to_column": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "security_model": {
+      "type": "object",
+      "properties": {
+        "rbac_roles": { "type": "array", "items": { "type": "string" } },
+        "row_level_security": { "type": "boolean" },
+        "column_masking": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "table": { "type": "string" },
+              "column": { "type": "string" },
+              "mask_type": {
+                "type": "string",
+                "enum": ["hash", "redact", "partial", "null"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,117 @@
+bundle:
+  name: dais_seg
+
+variables:
+  catalog:
+    description: Unity Catalog name for synthetic environments
+    default: dais_seg
+  schema:
+    description: Default schema for blueprints and metadata
+    default: blueprints
+  warehouse_id:
+    description: SQL Warehouse ID for validation queries
+  workspace_prefix:
+    description: Prefix for synthetic workspace naming
+    default: seg
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: ${var.databricks_host}
+    variables:
+      catalog: dais_seg_dev
+
+  staging:
+    workspace:
+      host: ${var.databricks_host}
+    variables:
+      catalog: dais_seg_staging
+
+  prod:
+    mode: production
+    workspace:
+      host: ${var.databricks_host}
+    variables:
+      catalog: dais_seg
+
+resources:
+  jobs:
+    profile_source:
+      name: "[${bundle.target}] SEG - Profile Source System"
+      tasks:
+        - task_key: profile
+          notebook_task:
+            notebook_path: notebooks/01_profile_source.py
+          existing_cluster_id: ${var.cluster_id}
+
+    generate_synthetic:
+      name: "[${bundle.target}] SEG - Generate Synthetic Environment"
+      tasks:
+        - task_key: generate
+          notebook_task:
+            notebook_path: notebooks/02_generate_synthetic.py
+          depends_on:
+            - task_key: profile
+          existing_cluster_id: ${var.cluster_id}
+
+    conform_medallion:
+      name: "[${bundle.target}] SEG - Conform to Medallion"
+      tasks:
+        - task_key: conform
+          notebook_task:
+            notebook_path: notebooks/03_conform_medallion.py
+          existing_cluster_id: ${var.cluster_id}
+
+    validate_workspace:
+      name: "[${bundle.target}] SEG - Validate Workspace"
+      tasks:
+        - task_key: validate
+          notebook_task:
+            notebook_path: notebooks/04_validate_workspace.py
+          existing_cluster_id: ${var.cluster_id}
+
+    full_pipeline:
+      name: "[${bundle.target}] SEG - Full Pipeline"
+      tasks:
+        - task_key: profile
+          notebook_task:
+            notebook_path: notebooks/01_profile_source.py
+          existing_cluster_id: ${var.cluster_id}
+        - task_key: generate
+          notebook_task:
+            notebook_path: notebooks/02_generate_synthetic.py
+          depends_on:
+            - task_key: profile
+          existing_cluster_id: ${var.cluster_id}
+        - task_key: conform
+          notebook_task:
+            notebook_path: notebooks/03_conform_medallion.py
+          depends_on:
+            - task_key: generate
+          existing_cluster_id: ${var.cluster_id}
+        - task_key: validate
+          notebook_task:
+            notebook_path: notebooks/04_validate_workspace.py
+          depends_on:
+            - task_key: conform
+          existing_cluster_id: ${var.cluster_id}
+
+  pipelines:
+    medallion_dlt:
+      name: "[${bundle.target}] SEG - Medallion DLT"
+      target: ${var.catalog}.${var.schema}
+      libraries:
+        - notebook:
+            path: resources/dlt/medallion_pipeline.sql
+
+  experiments:
+    seg_experiment:
+      name: "/Users/${workspace.current_user.userName}/dais_seg"
+
+artifacts:
+  dais_seg_wheel:
+    type: whl
+    path: .
+    build: python setup.py bdist_wheel

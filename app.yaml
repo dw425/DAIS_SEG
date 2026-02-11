@@ -1,0 +1,17 @@
+command:
+  - python
+  - app/main.py
+
+env:
+  - name: DATABRICKS_HOST
+    description: Databricks workspace URL
+  - name: DATABRICKS_TOKEN
+    description: Databricks personal access token (or service principal)
+  - name: SEG_CATALOG
+    description: Unity Catalog for synthetic environments
+    default: dais_seg
+  - name: SEG_SCHEMA
+    description: Default schema for blueprints
+    default: blueprints
+  - name: SEG_WAREHOUSE_ID
+    description: SQL Warehouse ID for validation queries

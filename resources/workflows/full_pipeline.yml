@@ -1,0 +1,41 @@
+# Databricks Workflow: Full SEG Pipeline
+# This is a reference template — actual deployment uses databricks.yml
+#
+# Profile → Generate → Conform → Validate
+
+name: "SEG Full Pipeline"
+tasks:
+  - task_key: profile
+    notebook_task:
+      notebook_path: notebooks/01_profile_source
+    base_parameters:
+      source_catalog: "{{source_catalog}}"
+      catalog: "{{catalog}}"
+
+  - task_key: generate
+    depends_on:
+      - task_key: profile
+    notebook_task:
+      notebook_path: notebooks/02_generate_synthetic
+    base_parameters:
+      blueprint_id: "{{blueprint_id}}"
+      catalog: "{{catalog}}"
+      scale_factor: "{{scale_factor}}"
+
+  - task_key: conform
+    depends_on:
+      - task_key: generate
+    notebook_task:
+      notebook_path: notebooks/03_conform_medallion
+    base_parameters:
+      blueprint_id: "{{blueprint_id}}"
+      catalog: "{{catalog}}"
+
+  - task_key: validate
+    depends_on:
+      - task_key: conform
+    notebook_task:
+      notebook_path: notebooks/04_validate_workspace
+    base_parameters:
+      blueprint_id: "{{blueprint_id}}"
+      catalog: "{{catalog}}"
