@@ -55,6 +55,10 @@ class SEGConfig:
     # Workspace manager
     max_parallel_workspaces: int = 5
 
+    # Job execution (for Streamlit app → notebook submission)
+    cluster_id: str = ""
+    notebook_base_path: str = "/Workspace/Repos/DAIS_SEG/notebooks"
+
     @classmethod
     def from_env(cls) -> SEGConfig:
         """Load configuration from environment variables."""
@@ -68,6 +72,10 @@ class SEGConfig:
                 "SEG_MODEL_ENDPOINT", "databricks-meta-llama-3-1-70b-instruct"
             ),
             max_parallel_workspaces=int(os.getenv("SEG_MAX_PARALLEL_WORKSPACES", "5")),
+            cluster_id=os.getenv("SEG_CLUSTER_ID", ""),
+            notebook_base_path=os.getenv(
+                "SEG_NOTEBOOK_PATH", "/Workspace/Repos/DAIS_SEG/notebooks"
+            ),
         )
 
     @classmethod

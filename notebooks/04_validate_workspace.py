@@ -118,3 +118,13 @@ elif report.confidence.level.value == "amber":
     print("   This workspace needs attention before production cutover.")
 else:
     print("   This workspace is NOT ready. Review recommendations above.")
+
+# COMMAND ----------
+
+import json
+dbutils.notebook.exit(json.dumps({
+    "score": report.confidence.overall_score,
+    "level": report.confidence.level.value,
+    "tables_validated": report.validated_tables,
+    "summary": report.confidence.summary,
+}))

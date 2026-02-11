@@ -20,3 +20,8 @@ env:
     default: blueprints
   - name: SEG_WAREHOUSE_ID
     description: SQL Warehouse ID for validation queries
+  - name: SEG_CLUSTER_ID
+    description: Cluster ID for running notebook jobs
+  - name: SEG_NOTEBOOK_PATH
+    description: Path to deployed notebooks in workspace
+    default: /Workspace/Repos/DAIS_SEG/notebooks

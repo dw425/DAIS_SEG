@@ -128,3 +128,13 @@ display(spark.createDataFrame(summary_data))
 
 print(f"\n✅ Profiling complete. Blueprint ID: {blueprint_id}")
 print(f"Next step: Run notebook 02_generate_synthetic with blueprint_id={blueprint_id}")
+
+# COMMAND ----------
+
+# Return output for PipelineRunner to read via Jobs API
+import json
+dbutils.notebook.exit(json.dumps({
+    "blueprint_id": blueprint_id,
+    "tables": len(blueprint["tables"]),
+    "relationships": len(blueprint["relationships"]),
+}))

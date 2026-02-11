@@ -103,3 +103,12 @@ for table_name, fqn in generated_tables.items():
 
 print(f"\n✅ Synthetic generation complete: {len(generated_tables)} tables in {catalog}.{target_schema}")
 print(f"Next step: Run notebook 03_conform_medallion")
+
+# COMMAND ----------
+
+import json
+dbutils.notebook.exit(json.dumps({
+    "tables_generated": len(generated_tables),
+    "target_schema": target_schema,
+    "tables": list(generated_tables.keys()),
+}))
