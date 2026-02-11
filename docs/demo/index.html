@@ -203,17 +203,7 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
     <h2>Step 2: Blueprint Assembly</h2>
     <div id="blueprintNotReady" class="alert alert-info">Complete Step 1 first — parse a file or paste text.</div>
     <div id="blueprintReady" class="hidden">
-      <div class="row">
-        <div class="col">
-          <label>Rows per table</label>
-          <input type="number" id="rowCount" value="1000" min="10" max="10000" step="100">
-        </div>
-        <div class="col">
-          <label>Random seed</label>
-          <input type="number" id="seed" value="42" min="0">
-        </div>
-      </div>
-      <div style="margin-top:16px">
+      <div style="margin-top:8px">
         <button class="btn btn-primary" onclick="assembleBlueprint()">Assemble Blueprint</button>
       </div>
       <div id="blueprintResults"></div>
@@ -231,7 +221,20 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
     <h2>Step 3: Generate Synthetic Data</h2>
     <div id="generateNotReady" class="alert alert-info">Complete Step 2 first.</div>
     <div id="generateReady" class="hidden">
-      <button class="btn btn-primary" onclick="generateData()">Generate Synthetic Data</button>
+      <p style="color:var(--text2);font-size:0.9rem;margin-bottom:12px">Configure synthetic data generation — row counts default to actuals from the source when available.</p>
+      <div class="row">
+        <div class="col">
+          <label>Override rows per table <span style="color:var(--text2);font-weight:400">(0 = use source actuals)</span></label>
+          <input type="number" id="rowCount" value="0" min="0" max="100000" step="100">
+        </div>
+        <div class="col">
+          <label>Random seed <span style="color:var(--text2);font-weight:400">(for reproducibility)</span></label>
+          <input type="number" id="seed" value="42" min="0">
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn btn-primary" onclick="generateData()">Generate Synthetic Data</button>
+      </div>
       <div id="generateResults"></div>
     </div>
   </div>
@@ -1403,12 +1406,13 @@ function genStats(col, rowCount) {
 // ================================================================
 // BLUEPRINT ASSEMBLER
 // ================================================================
-function assembleBlueprint_fn(parsed, rowCount) {
+function assembleBlueprint_fn(parsed) {
   const bid = crypto.randomUUID ? crypto.randomUUID() : 'bp-'+Math.random().toString(36).substring(2,10);
   const tables = parsed.tables.map(pt => {
-    const cols = pt.columns.map(c => ({name:c.name, data_type:c.data_type, nullable:c.nullable, is_primary_key:c.is_primary_key, stats:genStats(c, rowCount)}));
+    const rc = pt.row_count || 1000; // Use actual row count from source parser
+    const cols = pt.columns.map(c => ({name:c.name, data_type:c.data_type, nullable:c.nullable, is_primary_key:c.is_primary_key, stats:genStats(c, rc)}));
     const fks = pt.foreign_keys.map(fk => ({column:fk.fk_column, references_table:fk.referenced_table, references_column:fk.referenced_column}));
-    return {name:pt.name, schema:pt.schema, row_count:rowCount, columns:cols, foreign_keys:fks};
+    return {name:pt.name, schema:pt.schema, row_count:rc, columns:cols, foreign_keys:fks};
   });
   const rels = [];
   parsed.tables.forEach(pt => pt.foreign_keys.forEach(fk => rels.push({from_table:`${pt.schema}.${pt.name}`,to_table:`${pt.schema}.${fk.referenced_table}`,relationship_type:'one_to_many',join_columns:[{from_column:fk.fk_column,to_column:fk.referenced_column}]})));
@@ -2215,8 +2219,7 @@ function parseInput() {
 function assembleBlueprint() {
   if (!STATE.parsed) return;
   setTabStatus('blueprint', 'processing');
-  const rc = parseInt(document.getElementById('rowCount').value)||1000;
-  STATE.blueprint = assembleBlueprint_fn(STATE.parsed, rc);
+  STATE.blueprint = assembleBlueprint_fn(STATE.parsed);
   STATE.tables = STATE.medallion = STATE.validation = null;
   const bp = STATE.blueprint;
   let h = '<hr class="divider">';
@@ -2285,6 +2288,11 @@ function generateData() {
   if (!STATE.blueprint) return;
   setTabStatus('generate', 'processing');
   const seed = parseInt(document.getElementById('seed').value)||42;
+  const rowOverride = parseInt(document.getElementById('rowCount').value)||0;
+  // Apply row override if specified
+  if (rowOverride > 0) {
+    STATE.blueprint.tables.forEach(t => { t.row_count = rowOverride; });
+  }
   STATE.tables = generateTables(STATE.blueprint, seed);
   STATE.medallion = STATE.validation = null;
   const tables = STATE.tables;
