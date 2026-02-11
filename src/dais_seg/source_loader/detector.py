@@ -39,6 +39,7 @@ class FormatDetector:
             "json": InputFormat.SCHEMA_JSON,
             "yaml": InputFormat.SCHEMA_YAML,
             "yml": InputFormat.SCHEMA_YAML,
+            "xml": InputFormat.SCHEMA_XML,
             "env": InputFormat.ENV_FILE,
         }
         return mapping.get(ext, InputFormat.UNKNOWN)
@@ -48,6 +49,12 @@ class FormatDetector:
         stripped = content.strip()
         if not stripped:
             return InputFormat.UNKNOWN
+
+        # XML: starts with < and contains <table or <tables
+        if stripped.startswith("<") and re.search(
+            r"<(tables|schema|database|table)\b", stripped, re.IGNORECASE
+        ):
+            return InputFormat.SCHEMA_XML
 
         # DDL: contains CREATE TABLE
         if re.search(r"\bCREATE\s+TABLE\b", stripped, re.IGNORECASE):

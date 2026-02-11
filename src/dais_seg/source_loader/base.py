@@ -19,6 +19,7 @@ class InputFormat(str, Enum):
     ETL_MAPPING = "etl_mapping"
     SCHEMA_JSON = "schema_json"
     SCHEMA_YAML = "schema_yaml"
+    SCHEMA_XML = "schema_xml"
     ENV_FILE = "env_file"
     RAW_TEXT = "raw_text"
     UNKNOWN = "unknown"

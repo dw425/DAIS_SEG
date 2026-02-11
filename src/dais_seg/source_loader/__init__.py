@@ -13,4 +13,6 @@ from dais_seg.source_loader.ddl_parser import DDLParser
 from dais_seg.source_loader.default_stats import generate_default_stats
 from dais_seg.source_loader.detector import FormatDetector
 from dais_seg.source_loader.etl_mapping_parser import ETLMappingParser
+from dais_seg.source_loader.local_generator import LocalGenerator
 from dais_seg.source_loader.schema_definition_parser import SchemaDefinitionParser
+from dais_seg.source_loader.xml_parser import XMLParser
