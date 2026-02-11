@@ -1,1107 +1,1436 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SEG Demo — Synthetic Environment Generator</title>
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/@anthropic-ai/stlite-mountable@0.73.0/build/stlite.css"
-    onerror="this.href='https://cdn.jsdelivr.net/npm/@stlite/mountable@0.68.1/build/stlite.css'"
-  />
-  <style>
-    body { margin: 0; padding: 0; }
-    #loading {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0e1117;
-      color: #fafafa;
-    }
-    #loading h2 { margin-bottom: 8px; }
-    #loading p { color: #808495; font-size: 14px; }
-    .spinner {
-      width: 40px; height: 40px;
-      border: 4px solid #262730;
-      border-top: 4px solid #ff4b4b;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-      margin-bottom: 20px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SEG — Synthetic Environment Generator Demo</title>
+<style>
+:root {
+  --bg: #0e1117; --surface: #1a1d27; --surface2: #262730;
+  --border: #363842; --text: #fafafa; --text2: #808495;
+  --primary: #ff4b4b; --primary-hover: #ff6b6b;
+  --green: #21c354; --amber: #faca15; --red: #ff4b4b;
+  --blue: #1d4ed8; --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'SF Mono', 'Fira Code', monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.6; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+h1 { font-size: 2rem; margin-bottom: 4px; }
+h2 { font-size: 1.4rem; margin: 24px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+h3 { font-size: 1.1rem; margin: 16px 0 8px; }
+.caption { color: var(--text2); font-size: 0.9rem; margin-bottom: 20px; }
+.tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 24px; overflow-x: auto; }
+.tab { padding: 10px 20px; cursor: pointer; color: var(--text2); border-bottom: 2px solid transparent;
+  margin-bottom: -2px; white-space: nowrap; font-size: 0.95rem; transition: all 0.2s; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.panel { display: none; } .panel.active { display: block; }
+.row { display: flex; gap: 20px; flex-wrap: wrap; }
+.col { flex: 1; min-width: 280px; }
+.col-3 { flex: 1; min-width: 200px; }
+.metrics { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
+.metric { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; min-width: 140px; flex: 1; }
+.metric .label { font-size: 0.8rem; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+.metric .value { font-size: 1.8rem; font-weight: 700; margin-top: 4px; }
+.metric .delta { font-size: 0.85rem; color: var(--red); }
+textarea, input[type=text], input[type=number], select {
+  width: 100%; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 0.9rem; resize: vertical; }
+textarea:focus, input:focus { outline: none; border-color: var(--primary); }
+textarea { min-height: 200px; }
+label { display: block; font-size: 0.85rem; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+.btn { padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.95rem;
+  font-weight: 600; transition: all 0.2s; display: inline-flex; align-items: center; gap: 8px; }
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { background: var(--border); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.alert { padding: 12px 16px; border-radius: 6px; margin: 12px 0; font-size: 0.9rem; }
+.alert-info { background: #1e3a5f; border: 1px solid #2563eb; color: #93c5fd; }
+.alert-success { background: #14532d; border: 1px solid var(--green); color: #86efac; }
+.alert-warn { background: #713f12; border: 1px solid var(--amber); color: #fde68a; }
+.alert-error { background: #450a0a; border: 1px solid var(--red); color: #fca5a5; }
+table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.85rem; }
+th { text-align: left; padding: 8px 12px; background: var(--surface2); color: var(--text2);
+  font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.5px;
+  border-bottom: 2px solid var(--border); }
+td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+tr:hover td { background: var(--surface); }
+.expander { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; overflow: hidden; }
+.expander-header { padding: 12px 16px; cursor: pointer; display: flex; justify-content: space-between;
+  align-items: center; background: var(--surface); font-weight: 500; }
+.expander-header:hover { background: var(--surface2); }
+.expander-body { padding: 16px; display: none; border-top: 1px solid var(--border); }
+.expander.open .expander-body { display: block; }
+.expander-arrow { transition: transform 0.2s; }
+.expander.open .expander-arrow { transform: rotate(90deg); }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+.badge-green { background: #14532d; color: #86efac; }
+.badge-amber { background: #713f12; color: #fde68a; }
+.badge-red { background: #450a0a; color: #fca5a5; }
+.progress-bar { height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; margin: 6px 0; }
+.progress-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+.progress-fill.green { background: var(--green); }
+.progress-fill.amber { background: var(--amber); }
+.progress-fill.red { background: var(--red); }
+code { background: var(--surface2); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.85rem; }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px;
+  overflow-x: auto; font-family: var(--mono); font-size: 0.85rem; margin: 12px 0; }
+.score-big { font-size: 3rem; font-weight: 800; text-align: center; padding: 20px; }
+.table-scroll { overflow-x: auto; }
+.file-upload { border: 2px dashed var(--border); border-radius: 8px; padding: 40px 20px; text-align: center;
+  cursor: pointer; transition: border-color 0.2s; }
+.file-upload:hover { border-color: var(--primary); }
+.file-upload input { display: none; }
+.divider { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+.hidden { display: none; }
+@media (max-width: 768px) { .row { flex-direction: column; } .col, .col-3 { min-width: 100%; } }
+/* Tab status indicators */
+.tab { position: relative; }
+.tab .check { display: none; margin-left: 6px; color: var(--green); font-size: 0.85rem; }
+.tab.done .check { display: inline-block; animation: pop 0.4s ease; }
+.tab.locked { opacity: 0.4; pointer-events: none; }
+.tab .spinner-sm { display: none; width: 12px; height: 12px; border: 2px solid var(--border);
+  border-top: 2px solid var(--primary); border-radius: 50%; animation: spin 0.6s linear infinite;
+  margin-left: 6px; vertical-align: middle; }
+.tab.processing .spinner-sm { display: inline-block; }
+@keyframes pop { 0%{transform:scale(0)} 60%{transform:scale(1.3)} 100%{transform:scale(1)} }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* Source system grid */
+.sources-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin: 16px 0; }
+.source-badge { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 12px; text-align: center; border-top: 3px solid var(--border); transition: border-color 0.2s; }
+.source-badge:hover { border-color: var(--primary); }
+.source-badge .src-name { font-weight: 600; font-size: 0.85rem; }
+.source-badge .src-type { color: var(--text2); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.3px; }
+.detected-source { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px;
+  background: var(--surface); border: 1px solid var(--green); border-radius: 6px; margin: 8px 0; font-size: 0.9rem; }
+.detected-source .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+</style>
 </head>
 <body>
-  <div id="loading">
-    <div class="spinner"></div>
-    <h2>Loading SEG Demo</h2>
-    <p>Installing Python runtime + NumPy + Pandas in your browser...</p>
-    <p style="font-size:12px; margin-top:20px;">This may take 30-60 seconds on first load</p>
+<div class="container">
+  <h1>SEG — Synthetic Environment Generator</h1>
+  <p class="caption">Upload from 20+ source systems — Oracle, Snowflake, Redshift, Informatica, NiFi, dbt, PySpark, and more — generate a full synthetic environment instantly in your browser</p>
+
+  <div class="tabs" id="tabs">
+    <div class="tab active" data-tab="parse">1. Load &amp; Parse<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="blueprint">2. Blueprint<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="generate">3. Generate<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="conform">4. Conform<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="validate">5. Validate<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
   </div>
-  <div id="root"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.68.1/build/stlite.js"></script>
-  <script>
-    document.getElementById("loading").style.display = "flex";
+  <!-- STEP 1: PARSE -->
+  <div class="panel active" id="panel-parse">
+    <h2>Step 1: Load &amp; Parse Input</h2>
+    <h3>Supported Sources</h3>
+    <div class="sources-grid">
+      <div class="source-badge" style="border-top-color:#4285F4"><div class="src-name">Google BigQuery</div><div class="src-type">Cloud Platform</div></div>
+      <div class="source-badge" style="border-top-color:#FF9900"><div class="src-name">AWS Redshift</div><div class="src-type">Data Warehouse</div></div>
+      <div class="source-badge" style="border-top-color:#FF4A00"><div class="src-name">Informatica</div><div class="src-type">ETL &amp; Integration</div></div>
+      <div class="source-badge" style="border-top-color:#29B5E8"><div class="src-name">Snowflake</div><div class="src-type">Data Cloud</div></div>
+      <div class="source-badge" style="border-top-color:#F37440"><div class="src-name">Teradata</div><div class="src-type">Enterprise DW</div></div>
+      <div class="source-badge" style="border-top-color:#FF3621"><div class="src-name">Databricks</div><div class="src-type">Unity Catalog</div></div>
+      <div class="source-badge" style="border-top-color:#0FAAFF"><div class="src-name">SAP HANA</div><div class="src-type">ERP / BW</div></div>
+      <div class="source-badge" style="border-top-color:#0078D4"><div class="src-name">Azure Synapse</div><div class="src-type">Analytics</div></div>
+      <div class="source-badge" style="border-top-color:#CC2927"><div class="src-name">SQL Server</div><div class="src-type">Microsoft SQL</div></div>
+      <div class="source-badge" style="border-top-color:#F80000"><div class="src-name">Oracle</div><div class="src-type">Database</div></div>
+      <div class="source-badge" style="border-top-color:#4169E1"><div class="src-name">PostgreSQL</div><div class="src-type">Database</div></div>
+      <div class="source-badge" style="border-top-color:#4479A1"><div class="src-name">MySQL</div><div class="src-type">Database</div></div>
+      <div class="source-badge" style="border-top-color:#FF694B"><div class="src-name">dbt</div><div class="src-type">Transformation</div></div>
+      <div class="source-badge" style="border-top-color:#E25A1C"><div class="src-name">PySpark</div><div class="src-type">Spark Schema</div></div>
+      <div class="source-badge" style="border-top-color:#DC382D"><div class="src-name">Scala / Spark</div><div class="src-type">Case Classes</div></div>
+      <div class="source-badge" style="border-top-color:#FF6D70"><div class="src-name">Talend</div><div class="src-type">Data Integration</div></div>
+      <div class="source-badge" style="border-top-color:#728E9B"><div class="src-name">Apache NiFi</div><div class="src-type">Flow Definition</div></div>
+      <div class="source-badge" style="border-top-color:#3ECF8E"><div class="src-name">Avro / Protobuf</div><div class="src-type">Schema Files</div></div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <h3>Upload File</h3>
+        <div class="file-upload" id="fileDropZone">
+          <p>Drop a file here or click to browse</p>
+          <p style="color:var(--text2);font-size:0.85rem">SQL, DDL, CSV, JSON, YAML, XML, Avro, Protobuf, PySpark, Scala, NiFi, dbt</p>
+          <input type="file" id="fileInput" accept=".sql,.ddl,.hql,.bteq,.psql,.csv,.tsv,.json,.avsc,.yaml,.yml,.xml,.py,.scala,.proto">
+        </div>
+        <div id="fileName" class="alert alert-info hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="col">
+        <h3>Paste Text</h3>
+        <textarea id="pasteInput" placeholder="CREATE TABLE customers (
+  id INT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  email VARCHAR(200),
+  status VARCHAR(20) CHECK (status IN ('active','inactive'))
+);"></textarea>
+      </div>
+    </div>
+    <div style="margin-top:16px">
+      <button class="btn btn-primary" onclick="parseInput()">Parse Input</button>
+    </div>
+    <div id="parseResults"></div>
+  </div>
 
-    stlite.mount({
-      requirements: ["numpy", "pandas", "scipy"],
-      entrypoint: "app.py",
-      files: {
-        "app.py": `
-import streamlit as st
-import json
-import io
-import re
-import csv
-import zipfile
-import random
-import string
-import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Optional
-from datetime import date, datetime, timedelta, timezone
-from uuid import uuid4
+  <!-- STEP 2: BLUEPRINT -->
+  <div class="panel" id="panel-blueprint">
+    <h2>Step 2: Blueprint Assembly</h2>
+    <div id="blueprintNotReady" class="alert alert-info">Complete Step 1 first — parse a file or paste text.</div>
+    <div id="blueprintReady" class="hidden">
+      <div class="row">
+        <div class="col">
+          <label>Rows per table</label>
+          <input type="number" id="rowCount" value="1000" min="10" max="10000" step="100">
+        </div>
+        <div class="col">
+          <label>Random seed</label>
+          <input type="number" id="seed" value="42" min="0">
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <button class="btn btn-primary" onclick="assembleBlueprint()">Assemble Blueprint</button>
+      </div>
+      <div id="blueprintResults"></div>
+    </div>
+  </div>
 
-import numpy as np
-import pandas as pd
-from scipy import stats as scipy_stats
+  <!-- STEP 3: GENERATE -->
+  <div class="panel" id="panel-generate">
+    <h2>Step 3: Generate Synthetic Data</h2>
+    <div id="generateNotReady" class="alert alert-info">Complete Step 2 first.</div>
+    <div id="generateReady" class="hidden">
+      <button class="btn btn-primary" onclick="generateData()">Generate Synthetic Data</button>
+      <div id="generateResults"></div>
+    </div>
+  </div>
 
+  <!-- STEP 4: CONFORM -->
+  <div class="panel" id="panel-conform">
+    <h2>Step 4: Conform — Medallion Architecture</h2>
+    <div id="conformNotReady" class="alert alert-info">Complete Step 3 first.</div>
+    <div id="conformReady" class="hidden">
+      <button class="btn btn-primary" onclick="runConform()">Run Medallion Pipeline</button>
+      <div id="conformResults"></div>
+    </div>
+  </div>
 
-# ================================================================
-# BASE TYPES
-# ================================================================
+  <!-- STEP 5: VALIDATE -->
+  <div class="panel" id="panel-validate">
+    <h2>Step 5: Validate &amp; Confidence Score</h2>
+    <div id="validateNotReady" class="alert alert-info">Complete Steps 3-4 first.</div>
+    <div id="validateReady" class="hidden">
+      <button class="btn btn-primary" onclick="runValidation()">Run Validation</button>
+      <div id="validateResults"></div>
+    </div>
+  </div>
+</div>
 
-class InputFormat(str, Enum):
-    DDL = "ddl"
-    ETL_MAPPING = "etl_mapping"
-    SCHEMA_JSON = "schema_json"
-    SCHEMA_YAML = "schema_yaml"
-    SCHEMA_XML = "schema_xml"
-    RAW_TEXT = "raw_text"
-    UNKNOWN = "unknown"
+<script>
+// ================================================================
+// STATE
+// ================================================================
+let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null };
 
-@dataclass
-class ParsedColumn:
-    name: str
-    data_type: str
-    raw_type: str = ""
-    nullable: bool = True
-    is_primary_key: bool = False
-    is_unique: bool = False
-    default_value: Optional[str] = None
-    check_constraints: list = field(default_factory=list)
-    precision: Optional[int] = None
-    scale: Optional[int] = None
-    max_length: Optional[int] = None
+// ================================================================
+// TAB NAVIGATION
+// ================================================================
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    if (tab.classList.contains('locked')) return;
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+  });
+});
 
-@dataclass
-class ParsedForeignKey:
-    fk_column: str
-    referenced_table: str
-    referenced_column: str
-
-@dataclass
-class ParsedTable:
-    name: str
-    schema: str = "dbo"
-    columns: list = field(default_factory=list)
-    foreign_keys: list = field(default_factory=list)
-    row_count: int = 1000
-
-@dataclass
-class ParsedSchema:
-    source_name: str
-    source_type: str = "parsed"
-    tables: list = field(default_factory=list)
-    input_format: InputFormat = InputFormat.UNKNOWN
-    raw_input: str = ""
-    parse_warnings: list = field(default_factory=list)
-
-
-# ================================================================
-# FORMAT DETECTOR
-# ================================================================
-
-class FormatDetector:
-    @classmethod
-    def detect(cls, content, filename=None):
-        if filename:
-            ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-            mapping = {
-                "sql": InputFormat.DDL, "ddl": InputFormat.DDL,
-                "csv": InputFormat.ETL_MAPPING, "tsv": InputFormat.ETL_MAPPING,
-                "json": InputFormat.SCHEMA_JSON,
-                "yaml": InputFormat.SCHEMA_YAML, "yml": InputFormat.SCHEMA_YAML,
-                "xml": InputFormat.SCHEMA_XML,
-            }
-            fmt = mapping.get(ext, InputFormat.UNKNOWN)
-            if fmt != InputFormat.UNKNOWN:
-                return fmt
-        stripped = content.strip()
-        if not stripped:
-            return InputFormat.UNKNOWN
-        if stripped.startswith("<") and re.search(r"<(tables|schema|database|table)\\b", stripped, re.IGNORECASE):
-            return InputFormat.SCHEMA_XML
-        if re.search(r"\\bCREATE\\s+TABLE\\b", stripped, re.IGNORECASE):
-            return InputFormat.DDL
-        if stripped.startswith("{") and '"tables"' in stripped:
-            return InputFormat.SCHEMA_JSON
-        first_line = stripped.split("\\n")[0].lower()
-        etl_h = ["source_table","target_table","src_table","tgt_table","source_column","target_column"]
-        if any(h in first_line for h in etl_h):
-            return InputFormat.ETL_MAPPING
-        if re.search(r"\\b(INT|VARCHAR|DECIMAL|TIMESTAMP|BOOLEAN|BIGINT|SMALLINT|FLOAT|DOUBLE)\\b", stripped, re.IGNORECASE):
-            return InputFormat.RAW_TEXT
-        return InputFormat.UNKNOWN
-
-
-# ================================================================
-# DDL PARSER
-# ================================================================
-
-TYPE_NORMALIZATION = {
-    "number": "decimal", "varchar2": "varchar", "nvarchar2": "varchar",
-    "clob": "text", "nclob": "text", "blob": "binary", "raw": "binary",
-    "nvarchar": "varchar", "nchar": "char", "bit": "boolean",
-    "money": "decimal", "smallmoney": "decimal", "datetime2": "timestamp",
-    "datetimeoffset": "timestamp", "uniqueidentifier": "varchar",
-    "image": "binary", "ntext": "text",
-    "serial": "int", "bigserial": "bigint", "smallserial": "smallint",
-    "real": "float", "double precision": "double",
-    "character varying": "varchar", "character": "char",
-    "bytea": "binary", "json": "text", "jsonb": "text",
-    "uuid": "varchar", "interval": "varchar",
-    "mediumint": "int", "mediumtext": "text", "longtext": "text",
-    "tinytext": "text", "enum": "varchar", "set": "varchar", "year": "int",
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => { t.classList.toggle('active', t.dataset.tab === name); });
+  document.querySelectorAll('.panel').forEach(p => { p.classList.toggle('active', p.id === 'panel-' + name); });
 }
 
-MULTI_WORD_TYPES = {
-    "double precision", "character varying", "long raw",
-    "timestamp with time zone", "timestamp without time zone",
+function setTabStatus(name, status) {
+  const tab = document.querySelector(`.tab[data-tab="${name}"]`);
+  if (!tab) return;
+  tab.classList.remove('locked','processing','done');
+  if (status === 'locked') tab.classList.add('locked');
+  else if (status === 'processing') tab.classList.add('processing');
+  else if (status === 'done') tab.classList.add('done');
+  // 'ready' = no extra class, just clickable
+  if (status !== 'locked') {
+    tab.style.pointerEvents = '';
+    tab.style.opacity = '';
+  }
 }
 
-class DDLParser:
-    def can_parse(self, content):
-        return bool(re.search(r"\\bCREATE\\s+TABLE\\b", content, re.IGNORECASE))
+function unlockTab(name) { setTabStatus(name, 'ready'); }
 
-    def parse(self, content, **kwargs):
-        source_name = kwargs.get("source_name", "DDL Import")
-        tables, warnings = [], []
-        for raw_name, body in self._extract_create_tables(content):
-            tname, sname = self._parse_table_name(raw_name)
-            cols, fks, tw = self._parse_table_body(body)
-            tables.append(ParsedTable(name=tname, schema=sname, columns=cols, foreign_keys=fks))
-            warnings.extend(tw)
-        for tn, fk in self._parse_alter_table_fks(content):
-            for t in tables:
-                if t.name.lower() == tn.lower():
-                    t.foreign_keys.append(fk)
-        return ParsedSchema(source_name=source_name, source_type="sql", tables=tables,
-                           input_format=InputFormat.DDL, raw_input=content, parse_warnings=warnings)
+// FILE UPLOAD
+const fileInput = document.getElementById('fileInput');
+const dropZone = document.getElementById('fileDropZone');
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor = 'var(--primary)'; });
+dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = 'var(--border)'; });
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.style.borderColor = 'var(--border)';
+  if (e.dataTransfer.files.length) { fileInput.files = e.dataTransfer.files; handleFile(); }
+});
+fileInput.addEventListener('change', handleFile);
 
-    def _extract_create_tables(self, content):
-        results = []
-        hp = re.compile(r"CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?([^\\s(]+)\\s*\\(", re.IGNORECASE)
-        for h in hp.finditer(content):
-            tn = h.group(1)
-            start, depth, i = h.end(), 1, h.end()
-            while i < len(content) and depth > 0:
-                if content[i] == "(": depth += 1
-                elif content[i] == ")": depth -= 1
-                i += 1
-            if depth == 0:
-                results.append((tn, content[start:i-1]))
-        return results
+let uploadedContent = '', uploadedName = '';
+function handleFile() {
+  const f = fileInput.files[0]; if (!f) return;
+  uploadedName = f.name;
+  document.getElementById('fileName').textContent = 'Loaded: ' + f.name;
+  document.getElementById('fileName').classList.remove('hidden');
+  const reader = new FileReader();
+  reader.onload = e => { uploadedContent = e.target.result; };
+  reader.readAsText(f);
+}
 
-    def _parse_table_name(self, raw):
-        clean = re.sub(r'[\\[\\]\\'\\"]', "", raw)
-        parts = clean.split(".")
-        return (parts[-1], parts[-2]) if len(parts) >= 2 else (parts[0], "dbo")
+// ================================================================
+// PARSERS
+// ================================================================
+const TYPE_NORM = {
+  // Oracle
+  number:'decimal',varchar2:'varchar',nvarchar2:'varchar',clob:'text',nclob:'text',blob:'binary',
+  raw:'binary','long raw':'binary',long:'text',binary_float:'float',binary_double:'double',
+  xmltype:'text',rowid:'varchar',urowid:'varchar',
+  // SQL Server / Azure Synapse
+  nvarchar:'varchar',nchar:'char',bit:'boolean',money:'decimal',smallmoney:'decimal',
+  datetime2:'timestamp',datetimeoffset:'timestamp',smalldatetime:'timestamp',
+  image:'binary',ntext:'text',uniqueidentifier:'varchar',sql_variant:'varchar',
+  hierarchyid:'varchar',varbinary:'binary',xml:'text',
+  // PostgreSQL
+  serial:'int',bigserial:'bigint',smallserial:'smallint',real:'float',
+  'double precision':'double','character varying':'varchar',character:'char',
+  bytea:'binary',inet:'varchar',cidr:'varchar',macaddr:'varchar',uuid:'varchar',
+  jsonb:'text',json:'text',tsquery:'text',tsvector:'text',interval:'varchar',
+  int2:'smallint',int4:'int',int8:'bigint',float4:'float',float8:'double',
+  bool:'boolean',timestamptz:'timestamp',
+  // MySQL
+  mediumint:'int',mediumtext:'text',longtext:'text',tinytext:'text',
+  enum:'varchar',set:'varchar',year:'int',mediumblob:'binary',longblob:'binary',
+  tinyblob:'binary',tinyint:'int',
+  // Snowflake
+  variant:'text',object:'text',array:'text',string:'varchar',
+  timestamp_ltz:'timestamp',timestamp_ntz:'timestamp',timestamp_tz:'timestamp',
+  // Redshift
+  super:'text',hllsketch:'varchar',bpchar:'char',
+  // Teradata
+  byteint:'int',st_geometry:'varchar',
+  // SAP HANA
+  cs_string:'varchar',cs_int:'int',cs_double:'double',cs_decimal:'decimal',
+  alphanum:'varchar',shorttext:'varchar',seconddate:'timestamp',daydate:'date',
+  // BigQuery
+  int64:'bigint',float64:'double',bignumeric:'decimal',record:'text',struct:'text',
+  geography:'varchar',geometry:'varchar',
+  // Databricks / Spark
+  short:'smallint',byte:'tinyint',binary:'binary',map:'text',void:'varchar',
+  // Informatica / Talend
+  nstring:'varchar',
+};
+const MW_TYPES = ['double precision','character varying','timestamp with time zone',
+  'timestamp without time zone','timestamp with local time zone','long raw',
+  'long varchar','binary varying','national character varying','national character'];
 
-    def _parse_table_body(self, body):
-        cols, fks, warnings = [], [], []
-        for el in self._split_defs(body):
-            el = el.strip()
-            if not el: continue
-            upper = el.upper().strip()
-            if upper.startswith("PRIMARY KEY"):
-                pk_cols = self._extract_parens_list(el)
-                for c in cols:
-                    if c.name.lower() in [p.lower() for p in pk_cols]:
-                        c.is_primary_key = True
-                continue
-            if upper.startswith("FOREIGN KEY"):
-                fk = self._parse_table_fk(el)
-                if fk: fks.append(fk)
-                continue
-            if upper.startswith(("UNIQUE","CHECK","CONSTRAINT","INDEX")): continue
-            col, ifk = self._parse_col_def(el, warnings)
-            if col:
-                cols.append(col)
-                if ifk: fks.append(ifk)
-        return cols, fks, warnings
-
-    def _parse_col_def(self, el, warnings):
-        stripped = el.strip()
-        nm = re.match(r'^([\\'\\"\\'\\[\\]]?\\w+[\\'\\"\\'\\]\\]]?)\\s+', stripped)
-        if not nm: return None, None
-        raw_name = re.sub(r'[\\[\\]\\'\\"]', "", nm.group(1))
-        rest = stripped[nm.end():]
-        raw_type, type_args = "", None
-        rl = rest.lower()
-        for mwt in sorted(MULTI_WORD_TYPES, key=len, reverse=True):
-            if rl.startswith(mwt):
-                raw_type = mwt
-                rest = rest[len(mwt):].strip()
-                break
-        if not raw_type:
-            tm = re.match(r'([A-Za-z_]\\w*)', rest)
-            if not tm: return None, None
-            raw_type = tm.group(1).lower()
-            rest = rest[tm.end():].strip()
-        if rest.startswith("("):
-            pe = rest.find(")")
-            if pe > 0:
-                type_args = rest[1:pe]
-                rest = rest[pe+1:].strip()
-        mods_orig = rest
-        mods = rest.upper()
-        ctype = TYPE_NORMALIZATION.get(raw_type, raw_type)
-        prec, scl, maxl = None, None, None
-        if type_args:
-            parts = [p.strip() for p in type_args.split(",")]
-            if ctype in ("decimal","numeric"):
-                prec = int(parts[0]) if parts[0].isdigit() else None
-                scl = int(parts[1]) if len(parts)>1 and parts[1].isdigit() else None
-            elif ctype in ("varchar","char","text"):
-                if parts[0].isdigit(): maxl = int(parts[0])
-        nullable = "NOT NULL" not in mods
-        is_pk = "PRIMARY KEY" in mods
-        is_unique = "UNIQUE" in mods
-        check_vals = []
-        cm = re.search(r"CHECK\\s*\\(.*?IN\\s*\\(([^)]+)\\)", mods_orig, re.IGNORECASE)
-        if cm:
-            check_vals = [v.strip().strip("'\\"") for v in cm.group(1).split(",")]
-        default_val = None
-        dm = re.search(r"DEFAULT\\s+(\\S+)", mods_orig, re.IGNORECASE)
-        if dm: default_val = dm.group(1).strip("'\\"")
-        inline_fk = None
-        rm = re.search(r"REFERENCES\\s+([\\w\\'\\"\\'\\[\\]]+)(?:\\s*\\(\\s*(\\w+)\\s*\\))?", mods_orig, re.IGNORECASE)
-        if rm:
-            rt = re.sub(r'[\\[\\]\\'\\"]', "", rm.group(1))
-            rc = rm.group(2) or "id"
-            inline_fk = ParsedForeignKey(fk_column=raw_name, referenced_table=rt, referenced_column=rc)
-        if any(kw in mods for kw in ("IDENTITY","AUTO_INCREMENT")): is_pk = True
-        if raw_type in ("serial","bigserial","smallserial"): is_pk = True
-        col = ParsedColumn(name=raw_name, data_type=ctype,
-            raw_type=f"{raw_type}({type_args})" if type_args else raw_type,
-            nullable=nullable, is_primary_key=is_pk, is_unique=is_unique,
-            default_value=default_val, check_constraints=check_vals,
-            precision=prec, scale=scl, max_length=maxl)
-        return col, inline_fk
-
-    def _split_defs(self, body):
-        elems, cur, depth = [], [], 0
-        for c in body:
-            if c == "(": depth += 1; cur.append(c)
-            elif c == ")": depth -= 1; cur.append(c)
-            elif c == "," and depth == 0: elems.append("".join(cur)); cur = []
-            else: cur.append(c)
-        if cur: elems.append("".join(cur))
-        return elems
-
-    def _extract_parens_list(self, el):
-        m = re.search(r"\\(([^)]+)\\)", el)
-        return [re.sub(r'[\\[\\]\\'\\"]', "", n.strip()) for n in m.group(1).split(",")] if m else []
-
-    def _parse_table_fk(self, el):
-        m = re.search(r"FOREIGN\\s+KEY\\s*\\(\\s*(\\w+)\\s*\\)\\s*REFERENCES\\s+(\\S+)\\s*\\(\\s*(\\w+)\\s*\\)", el, re.IGNORECASE)
-        if m:
-            return ParsedForeignKey(fk_column=m.group(1),
-                referenced_table=re.sub(r'[\\[\\]\\'\\"]', "", m.group(2)).split(".")[-1],
-                referenced_column=m.group(3))
-        return None
-
-    def _parse_alter_table_fks(self, content):
-        results = []
-        p = re.compile(r"ALTER\\s+TABLE\\s+(\\S+)\\s+ADD\\s+(?:CONSTRAINT\\s+\\S+\\s+)?FOREIGN\\s+KEY\\s*\\(\\s*[\\w\\'\\"\\'\\[\\]]*(\\w+)[\\w\\'\\"\\'\\]\\]]*\\s*\\)\\s*REFERENCES\\s+(\\S+)\\s*\\(\\s*[\\w\\'\\"\\'\\[\\]]*(\\w+)[\\w\\'\\"\\'\\]\\]]*\\s*\\)", re.IGNORECASE)
-        for m in p.finditer(content):
-            tn = re.sub(r'[\\[\\]\\'\\"]', "", m.group(1)).split(".")[-1]
-            fk = ParsedForeignKey(fk_column=m.group(2),
-                referenced_table=re.sub(r'[\\[\\]\\'\\"]', "", m.group(3)).split(".")[-1],
-                referenced_column=m.group(4))
-            results.append((tn, fk))
-        return results
-
-
-# ================================================================
-# JSON SCHEMA PARSER
-# ================================================================
-
-class SchemaDefinitionParser:
-    def can_parse(self, content):
-        s = content.strip()
-        if s.startswith("{"):
-            try: return "tables" in json.loads(s)
-            except: return False
-        return False
-
-    def parse(self, content, **kwargs):
-        source_name = kwargs.get("source_name", "Schema Definition")
-        data = json.loads(content.strip())
-        tables = []
-        for t in data.get("tables", []):
-            cols = []
-            for c in t.get("columns", []):
-                if isinstance(c, str):
-                    parts = c.split(":")
-                    cols.append(ParsedColumn(name=parts[0].strip(), data_type=parts[1].strip() if len(parts)>1 else "varchar"))
-                elif isinstance(c, dict):
-                    cols.append(ParsedColumn(
-                        name=c.get("name", c.get("column_name", "")),
-                        data_type=c.get("type", c.get("data_type", "varchar")),
-                        nullable=c.get("nullable", True),
-                        is_primary_key=c.get("pk", c.get("primary_key", c.get("is_primary_key", False))),
-                        max_length=c.get("length", c.get("max_length")),
-                        check_constraints=c.get("values", c.get("allowed_values", [])),
-                    ))
-            fks = [ParsedForeignKey(fk_column=fk.get("column",""), referenced_table=fk.get("references",""),
-                    referenced_column=fk.get("references_column","id"))
-                   for fk in t.get("foreign_keys", t.get("fks", []))]
-            tables.append(ParsedTable(name=t.get("name",""), schema=t.get("schema","dbo"), columns=cols, foreign_keys=fks))
-        return ParsedSchema(source_name=data.get("name", source_name), source_type=data.get("type","parsed"),
-            tables=tables, input_format=InputFormat.SCHEMA_JSON, raw_input=content[:5000])
-
-
-# ================================================================
-# XML PARSER
-# ================================================================
-
-class XMLParser:
-    def can_parse(self, content):
-        s = content.strip()
-        if not s.startswith("<"): return False
-        try:
-            root = ET.fromstring(s)
-            return root.tag.lower() in ("tables","schema","database") or any(c.tag.lower()=="table" for c in root)
-        except: return False
-
-    def parse(self, content, **kwargs):
-        source_name = kwargs.get("source_name", "XML Import")
-        root = ET.fromstring(content.strip())
-        tables, warnings = [], []
-        if root.tag.lower() in ("tables","schema","database"):
-            tel = [c for c in root if c.tag.lower() == "table"]
-        elif root.tag.lower() == "table":
-            tel = [root]
-        else:
-            tel = list(root.iter("table")) + list(root.iter("Table"))
-        for te in tel:
-            t = self._parse_table(te, warnings)
-            if t: tables.append(t)
-        return ParsedSchema(source_name=source_name, source_type="xml", tables=tables,
-            input_format=InputFormat.SCHEMA_XML, raw_input=content[:5000], parse_warnings=warnings)
-
-    def _parse_table(self, el, w):
-        name = el.get("name", el.get("Name", ""))
-        if not name: return None
-        cols, fks = [], []
-        for ch in el:
-            tag = ch.tag.lower()
-            if tag == "column":
-                c, ifk = self._parse_col(ch)
-                if c: cols.append(c)
-                if ifk: fks.append(ifk)
-            elif tag in ("foreignkey","foreign_key","fk"):
-                fk = self._parse_fk(ch)
-                if fk: fks.append(fk)
-        return ParsedTable(name=name, schema=el.get("schema","dbo"), columns=cols, foreign_keys=fks)
-
-    def _parse_col(self, el):
-        name = el.get("name", el.get("Name", ""))
-        if not name: return None, None
-        rt = el.get("type", el.get("Type", el.get("dataType", "varchar")))
-        dt = rt.lower().split("(")[0]
-        nullable = el.get("nullable","true").lower() not in ("false","no","0")
-        is_pk = el.get("primaryKey", el.get("pk","false")).lower() in ("true","yes","1")
-        maxl = int(el.get("length","0")) if el.get("length","").isdigit() else None
-        check_str = el.get("check", el.get("values", ""))
-        checks = [v.strip() for v in check_str.split(",") if v.strip()] if check_str else []
-        ifk = None
-        ref = el.get("references")
-        if ref: ifk = self._parse_ref(name, ref)
-        return ParsedColumn(name=name, data_type=dt, raw_type=rt, nullable=nullable,
-            is_primary_key=is_pk, check_constraints=checks, max_length=maxl), ifk
-
-    def _parse_fk(self, el):
-        col = el.get("column","")
-        ref = el.get("references","")
-        if col and ref: return self._parse_ref(col, ref)
-        return None
-
-    def _parse_ref(self, fk_col, ref_str):
-        m = re.match(r"(\\w+)\\((\\w+)\\)", ref_str)
-        if m: return ParsedForeignKey(fk_column=fk_col, referenced_table=m.group(1), referenced_column=m.group(2))
-        if "." in ref_str:
-            p = ref_str.split(".")
-            return ParsedForeignKey(fk_column=fk_col, referenced_table=p[0], referenced_column=p[1])
-        return ParsedForeignKey(fk_column=fk_col, referenced_table=ref_str.strip(), referenced_column="id")
-
-
-# ================================================================
-# ETL MAPPING PARSER (CSV)
-# ================================================================
-
-class ETLMappingParser:
-    SYNONYMS = {
-        "source_table": ["src_table","from_table","source_tbl"],
-        "source_column": ["src_column","src_col","from_column"],
-        "source_type": ["src_type","src_data_type","from_type"],
-        "target_table": ["tgt_table","to_table","target_tbl","dest_table"],
-        "target_column": ["tgt_column","tgt_col","to_column","dest_column"],
-        "target_type": ["tgt_type","tgt_data_type","to_type","dest_type"],
-        "nullable": ["is_nullable","null","allow_null"],
-        "primary_key": ["pk","is_pk","is_primary_key"],
-        "foreign_key_table": ["fk_table","ref_table","references_table"],
-        "foreign_key_column": ["fk_column","ref_column","references_column"],
+function detectFormat(content, filename) {
+  if (filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const map = {sql:'ddl',ddl:'ddl',hql:'ddl',bteq:'ddl',psql:'ddl',csv:'csv',tsv:'csv',json:'json',avsc:'avro',yaml:'yaml',yml:'yaml',xml:'xml',py:'pyspark',scala:'scala',proto:'protobuf'};
+    if (map[ext]) {
+      // For XML files, do deeper detection
+      if (map[ext]==='xml') return detectXMLFormat(content);
+      // For JSON, check if it's Avro
+      if (map[ext]==='json') { try { const d=JSON.parse(content.trim()); if(d.type==='record'&&d.fields)return 'avro'; } catch(e){} return 'json'; }
+      return map[ext];
     }
+  }
+  const s = content.trim();
+  // Protobuf
+  if (/\bmessage\s+\w+\s*\{[\s\S]*?(?:string|int32|int64|bool|double)\s+\w+\s*=\s*\d+/i.test(s)) return 'protobuf';
+  // PySpark
+  if (/StructType\s*\(|StructField\s*\(/i.test(s)) return 'pyspark';
+  // Scala case class
+  if (/case\s+class\s+\w+\s*\(/i.test(s)) return 'scala';
+  // Spark printSchema
+  if (/root\s*\n\s*\|--/.test(s)) return 'spark_schema';
+  // dbt
+  if (/\{\{\s*(ref|source|config)\s*\(/.test(s)) return 'dbt';
+  // XML
+  if (s.startsWith('<')) return detectXMLFormat(s);
+  // DDL (enhanced regex)
+  if (/\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMPORARY\s+|GLOBAL\s+TEMPORARY\s+|VOLATILE\s+|TRANSIENT\s+|EXTERNAL\s+|MULTISET\s+|SET\s+|COLUMN\s+|ROW\s+|UNLOGGED\s+)*TABLE\b/i.test(s)) return 'ddl';
+  // JSON / Avro
+  if (s.startsWith('{') || s.startsWith('[')) { try { const d=JSON.parse(s); if(d.type==='record'&&d.fields)return 'avro'; if(d.tables||d.models)return 'json'; return 'json'; } catch(e){} }
+  // YAML
+  if (/^(tables|models|sources)\s*:/m.test(s)) return 'yaml';
+  // CSV
+  const fl = s.split('\n')[0].toLowerCase();
+  if (['source_table','target_table','src_table','tgt_table','table_name','column_name'].some(h => fl.includes(h))) return 'csv';
+  // Fallback DDL
+  if (/\b(INT|VARCHAR|DECIMAL|TIMESTAMP|BOOLEAN|BIGINT|FLOAT|DOUBLE|NUMBER)\b/i.test(s)) return 'ddl';
+  return 'unknown';
+}
 
-    def can_parse(self, content):
-        fl = content.strip().split("\\n")[0].lower()
-        return any(h in fl for h in ["source_table","target_table","src_table","tgt_table"])
+function detectXMLFormat(content) {
+  if (/<(REPOSITORY|FOLDER|POWERMART|INFORMATICA)/i.test(content)) return 'informatica_xml';
+  if (/<(SOURCE\s|TARGET\s).*?(DATABASETYPE|SOURCEFIELD|TARGETFIELD)/i.test(content)) return 'informatica_xml';
+  if (/<(TalendProperties|talendfile|ProcessType|talend)/i.test(content)) return 'talend_xml';
+  if (/<(flowController|processor|connection|rootGroup|snippet)/i.test(content)) return 'nifi_xml';
+  if (/<(template|processGroupFlow|processGroup)\b/i.test(content)) return 'nifi_xml';
+  return 'xml';
+}
 
-    def parse(self, content, **kwargs):
-        source_name = kwargs.get("source_name", "ETL Mapping")
-        use_target = kwargs.get("use_target_side", True)
-        reader = csv.DictReader(io.StringIO(content))
-        hmap = self._map_headers(reader.fieldnames or [])
-        tables_dict = {}
-        for row in reader:
-            tbl = row.get(hmap.get("target_table",""),"") if use_target else row.get(hmap.get("source_table",""),"")
-            col = row.get(hmap.get("target_column",""),"") if use_target else row.get(hmap.get("source_column",""),"")
-            dtype = row.get(hmap.get("target_type",""),"") or row.get(hmap.get("source_type",""),"") or "varchar"
-            if not tbl or not col: continue
-            if tbl not in tables_dict: tables_dict[tbl] = {"columns":[], "fks":[]}
-            nullable_v = row.get(hmap.get("nullable",""),"true")
-            nullable = nullable_v.lower() not in ("false","no","0","n") if nullable_v else True
-            pk_v = row.get(hmap.get("primary_key",""),"")
-            is_pk = pk_v.lower() in ("true","yes","1","y","pk") if pk_v else False
-            tables_dict[tbl]["columns"].append(ParsedColumn(name=col, data_type=dtype.lower().split("(")[0],
-                raw_type=dtype, nullable=nullable, is_primary_key=is_pk))
-            fk_tbl = row.get(hmap.get("foreign_key_table",""),"")
-            fk_col = row.get(hmap.get("foreign_key_column",""),"") or "id"
-            if fk_tbl:
-                tables_dict[tbl]["fks"].append(ParsedForeignKey(fk_column=col, referenced_table=fk_tbl, referenced_column=fk_col))
-        tables = [ParsedTable(name=n, columns=d["columns"], foreign_keys=d["fks"]) for n,d in tables_dict.items()]
-        return ParsedSchema(source_name=source_name, source_type="etl_mapping", tables=tables,
-            input_format=InputFormat.ETL_MAPPING, raw_input=content[:5000])
+function parseDDL(content, sourceName) {
+  const tables = [], warnings = [];
+  const hp = /CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMPORARY\s+|GLOBAL\s+TEMPORARY\s+|VOLATILE\s+|TRANSIENT\s+|EXTERNAL\s+|MULTISET\s+|SET\s+|COLUMN\s+|ROW\s+|UNLOGGED\s+)*TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)\s*\(/gi;
+  let hm;
+  while ((hm = hp.exec(content)) !== null) {
+    const rawName = hm[1]; let start = hm.index + hm[0].length, depth = 1, i = start;
+    while (i < content.length && depth > 0) { if (content[i]==='(') depth++; else if (content[i]===')') depth--; i++; }
+    if (depth === 0) {
+      const body = content.substring(start, i-1);
+      const clean = rawName.replace(/[\[\]`"]/g,''); const parts = clean.split('.');
+      const tName = parts[parts.length-1], schema = parts.length>=2 ? parts[parts.length-2] : 'dbo';
+      const {cols, fks} = parseTableBody(body);
+      tables.push({name:tName, schema, columns:cols, foreign_keys:fks, row_count:1000});
+    }
+  }
+  // ALTER TABLE FKs
+  const ap = /ALTER\s+TABLE\s+(\S+)\s+ADD\s+(?:CONSTRAINT\s+\S+\s+)?FOREIGN\s+KEY\s*\(\s*[\[`"]?(\w+)[\]`"]?\s*\)\s*REFERENCES\s+(\S+)\s*\(\s*[\[`"]?(\w+)[\]`"]?\s*\)/gi;
+  let am;
+  while ((am = ap.exec(content)) !== null) {
+    const tn = am[1].replace(/[\[\]`"]/g,'').split('.').pop();
+    const fk = {fk_column:am[2], referenced_table:am[3].replace(/[\[\]`"]/g,'').split('.').pop(), referenced_column:am[4]};
+    const t = tables.find(t => t.name.toLowerCase() === tn.toLowerCase());
+    if (t) t.foreign_keys.push(fk);
+  }
+  return {source_name:sourceName||'DDL Import', source_type:'sql', tables, input_format:'ddl', parse_warnings:warnings};
+}
 
-    def _map_headers(self, headers):
-        hmap = {}
-        for h in headers:
-            hl = h.strip().lower()
-            for canonical, syns in self.SYNONYMS.items():
-                if hl == canonical or hl in syns:
-                    hmap[canonical] = h
-                    break
-        return hmap
+function parseTableBody(body) {
+  const cols = [], fks = [];
+  const elems = splitDefs(body);
+  for (let el of elems) {
+    el = el.trim(); if (!el) continue;
+    const upper = el.toUpperCase().trim();
+    if (upper.startsWith('PRIMARY KEY')) {
+      const pks = extractParensList(el);
+      cols.forEach(c => { if (pks.some(p => p.toLowerCase()===c.name.toLowerCase())) c.is_primary_key = true; });
+      continue;
+    }
+    if (upper.startsWith('FOREIGN KEY')) {
+      const m = el.match(/FOREIGN\s+KEY\s*\(\s*(\w+)\s*\)\s*REFERENCES\s+(\S+)\s*\(\s*(\w+)\s*\)/i);
+      if (m) fks.push({fk_column:m[1], referenced_table:m[2].replace(/[\[\]`"]/g,'').split('.').pop(), referenced_column:m[3]});
+      continue;
+    }
+    if (/^(UNIQUE|CHECK|CONSTRAINT|INDEX)/i.test(upper)) continue;
+    const r = parseColDef(el);
+    if (r.col) { cols.push(r.col); if (r.fk) fks.push(r.fk); }
+  }
+  return {cols, fks};
+}
 
+function parseColDef(el) {
+  const s = el.trim();
+  const nm = s.match(/^([`"\[\]]?\w+[`"\]\]]?)\s+/);
+  if (!nm) return {};
+  const rawName = nm[1].replace(/[\[\]`"]/g,'');
+  let rest = s.substring(nm[0].length);
+  let rawType = '', typeArgs = null;
+  const rl = rest.toLowerCase();
+  for (const mwt of MW_TYPES.sort((a,b)=>b.length-a.length)) {
+    if (rl.startsWith(mwt)) { rawType = mwt; rest = rest.substring(mwt.length).trim(); break; }
+  }
+  if (!rawType) {
+    const tm = rest.match(/^([A-Za-z_]\w*)/);
+    if (!tm) return {};
+    rawType = tm[1].toLowerCase(); rest = rest.substring(tm[0].length).trim();
+  }
+  if (rest.startsWith('(')) {
+    const pe = rest.indexOf(')');
+    if (pe > 0) { typeArgs = rest.substring(1, pe); rest = rest.substring(pe+1).trim(); }
+  }
+  const modsOrig = rest, mods = rest.toUpperCase();
+  const ctype = TYPE_NORM[rawType] || rawType;
+  let prec=null, scl=null, maxl=null;
+  if (typeArgs) {
+    const pts = typeArgs.split(',').map(p=>p.trim());
+    if (['decimal','numeric'].includes(ctype)) { prec = parseInt(pts[0])||null; scl = pts[1]?parseInt(pts[1]):null; }
+    else if (['varchar','char','text'].includes(ctype)) { if (/^\d+$/.test(pts[0])) maxl = parseInt(pts[0]); }
+  }
+  const nullable = !mods.includes('NOT NULL'), isPK = mods.includes('PRIMARY KEY'), isUnique = mods.includes('UNIQUE');
+  let checkVals = [];
+  const cm = modsOrig.match(/CHECK\s*\(.*?IN\s*\(([^)]+)\)/i);
+  if (cm) checkVals = cm[1].split(',').map(v=>v.trim().replace(/^['"]|['"]$/g,''));
+  let defaultVal = null;
+  const dm = modsOrig.match(/DEFAULT\s+(\S+)/i);
+  if (dm) defaultVal = dm[1].replace(/^['"]|['"]$/g,'');
+  let fk = null;
+  const rm = modsOrig.match(/REFERENCES\s+([\w`"\[\]]+)(?:\s*\(\s*(\w+)\s*\))?/i);
+  if (rm) fk = {fk_column:rawName, referenced_table:rm[1].replace(/[\[\]`"]/g,''), referenced_column:rm[2]||'id'};
+  let pk = isPK;
+  if (mods.includes('IDENTITY') || mods.includes('AUTO_INCREMENT')) pk = true;
+  if (['serial','bigserial','smallserial'].includes(rawType)) pk = true;
+  return { col: {name:rawName, data_type:ctype, raw_type:typeArgs?`${rawType}(${typeArgs})`:rawType,
+    nullable, is_primary_key:pk, is_unique:isUnique, default_value:defaultVal,
+    check_constraints:checkVals, precision:prec, scale:scl, max_length:maxl}, fk };
+}
 
-# ================================================================
-# DEFAULT STATS GENERATOR
-# ================================================================
+function splitDefs(body) {
+  const elems = []; let cur = '', depth = 0;
+  for (const c of body) {
+    if (c==='(') { depth++; cur+=c; } else if (c===')') { depth--; cur+=c; }
+    else if (c===',' && depth===0) { elems.push(cur); cur=''; } else cur+=c;
+  }
+  if (cur) elems.push(cur);
+  return elems;
+}
 
-def generate_default_stats(col, row_count=1000):
-    dt = col.data_type.lower()
-    stats = {"null_ratio": 0.0 if not col.nullable else 0.05}
-    if col.check_constraints:
-        n = len(col.check_constraints)
-        stats["top_values"] = [{"value":v, "frequency": round(1.0/n, 4)} for v in col.check_constraints]
-        stats["distinct_count"] = n
-        return stats
-    if dt in ("int","integer","smallint","tinyint"):
-        if col.is_primary_key:
-            stats.update({"min":1,"max":row_count,"mean":row_count/2,"stddev":row_count/6,"distinct_count":row_count})
-        else:
-            stats.update({"min":1,"max":1000,"mean":500,"stddev":300,"distinct_count":min(500,row_count)})
-    elif dt in ("bigint","long"):
-        stats.update({"min":1,"max":100000,"mean":50000,"stddev":30000,"distinct_count":min(10000,row_count)})
-    elif dt in ("float","double"):
-        stats.update({"min":0.0,"max":10000.0,"mean":100.0,"stddev":50.0,"distinct_count":min(row_count,row_count)})
-    elif dt in ("decimal","numeric"):
-        p = col.precision or 10
-        s = col.scale or 2
-        mx = 10**(p-s) - 1
-        stats.update({"min":0,"max":mx,"mean":mx/10,"stddev":mx/20,"distinct_count":min(row_count,row_count)})
-    elif dt in ("varchar","char","text","string"):
-        ml = col.max_length or 50
-        stats.update({"min_length":3,"max_length":min(ml,100),"distinct_count":min(row_count,row_count)})
-    elif dt == "date":
-        stats.update({"min":"2020-01-01","max":"2025-12-31","distinct_count":min(row_count,2000)})
-    elif dt in ("timestamp","datetime"):
-        stats.update({"min":"2020-01-01","max":"2025-12-31","distinct_count":min(row_count,row_count)})
-    elif dt in ("boolean","bool"):
-        dv = col.default_value
-        if dv and dv.lower() in ("true","1"):
-            stats["top_values"] = [{"value":True,"frequency":0.7},{"value":False,"frequency":0.3}]
-        elif dv and dv.lower() in ("false","0"):
-            stats["top_values"] = [{"value":True,"frequency":0.3},{"value":False,"frequency":0.7}]
-        else:
-            stats["top_values"] = [{"value":True,"frequency":0.5},{"value":False,"frequency":0.5}]
-        stats["distinct_count"] = 2
-    else:
-        stats.update({"min_length":5,"max_length":20,"distinct_count":min(row_count,row_count)})
-    return stats
+function extractParensList(el) {
+  const m = el.match(/\(([^)]+)\)/);
+  return m ? m[1].split(',').map(n=>n.trim().replace(/[\[\]`"]/g,'')) : [];
+}
 
+function parseJSON(content, sourceName) {
+  const data = JSON.parse(content.trim());
+  const tables = (data.tables||[]).map(t => {
+    const cols = (t.columns||[]).map(c => {
+      if (typeof c === 'string') { const p = c.split(':'); return {name:p[0].trim(), data_type:p[1]?p[1].trim():'varchar', raw_type:p[1]||'varchar', nullable:true, is_primary_key:false, is_unique:false, check_constraints:[], max_length:null, precision:null, scale:null, default_value:null}; }
+      return {name:c.name||c.column_name||'', data_type:c.type||c.data_type||'varchar', raw_type:c.type||c.data_type||'varchar', nullable:c.nullable!==false, is_primary_key:!!c.pk||!!c.primary_key||!!c.is_primary_key, is_unique:false, check_constraints:c.values||c.allowed_values||[], max_length:c.length||c.max_length||null, precision:null, scale:null, default_value:null};
+    });
+    const fks = (t.foreign_keys||t.fks||[]).map(fk=>({fk_column:fk.column||'', referenced_table:fk.references||fk.referenced_table||'', referenced_column:fk.references_column||fk.referenced_column||'id'}));
+    return {name:t.name||'', schema:t.schema||'dbo', columns:cols, foreign_keys:fks, row_count:1000};
+  });
+  return {source_name:data.name||sourceName||'JSON Import', source_type:data.type||'json', tables, input_format:'json', parse_warnings:[]};
+}
 
-# ================================================================
-# BLUEPRINT ASSEMBLER
-# ================================================================
+function parseXML(content, sourceName) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(content, 'text/xml');
+  const tables = [];
+  const tableEls = doc.querySelectorAll('table, Table');
+  tableEls.forEach(te => {
+    const name = te.getAttribute('name') || te.getAttribute('Name') || '';
+    if (!name) return;
+    const cols = [], fks = [];
+    te.querySelectorAll('column, Column').forEach(ce => {
+      const cn = ce.getAttribute('name')||ce.getAttribute('Name')||'';
+      if (!cn) return;
+      const rt = ce.getAttribute('type')||ce.getAttribute('Type')||ce.getAttribute('dataType')||'varchar';
+      const dt = rt.toLowerCase().split('(')[0];
+      const nullable = (ce.getAttribute('nullable')||'true').toLowerCase() !== 'false';
+      const pk = (ce.getAttribute('primaryKey')||ce.getAttribute('pk')||'false').toLowerCase()==='true';
+      const ml = ce.getAttribute('length'); const checkStr = ce.getAttribute('check')||ce.getAttribute('values')||'';
+      const checks = checkStr ? checkStr.split(',').map(v=>v.trim()).filter(Boolean) : [];
+      cols.push({name:cn, data_type:dt, raw_type:rt, nullable, is_primary_key:pk, is_unique:false, check_constraints:checks, max_length:ml?parseInt(ml):null, precision:null, scale:null, default_value:null});
+      const ref = ce.getAttribute('references');
+      if (ref) { const r = parseRefStr(cn, ref); if (r) fks.push(r); }
+    });
+    te.querySelectorAll('foreignKey, foreign_key, fk').forEach(fe => {
+      const col = fe.getAttribute('column')||'', ref = fe.getAttribute('references')||'';
+      if (col && ref) { const r = parseRefStr(col, ref); if (r) fks.push(r); }
+    });
+    tables.push({name, schema:te.getAttribute('schema')||'dbo', columns:cols, foreign_keys:fks, row_count:1000});
+  });
+  return {source_name:sourceName||'XML Import', source_type:'xml', tables, input_format:'xml', parse_warnings:[]};
+}
 
-class BlueprintAssembler:
-    def assemble(self, parsed, row_count=1000):
-        bid = str(uuid4())
-        tables = []
-        for pt in parsed.tables:
-            er = pt.row_count if pt.row_count != 1000 else row_count
-            cols = [{"name":c.name,"data_type":c.data_type,"nullable":c.nullable,
-                     "is_primary_key":c.is_primary_key,"stats":generate_default_stats(c, er)} for c in pt.columns]
-            fks = [{"column":fk.fk_column,"references_table":fk.referenced_table,
-                    "references_column":fk.referenced_column} for fk in pt.foreign_keys]
-            tables.append({"name":pt.name,"schema":pt.schema,"row_count":er,"columns":cols,"foreign_keys":fks})
-        rels = []
-        for pt in parsed.tables:
-            for fk in pt.foreign_keys:
-                rels.append({"from_table":f"{pt.schema}.{pt.name}","to_table":f"{pt.schema}.{fk.referenced_table}",
-                    "relationship_type":"one_to_many","join_columns":[{"from_column":fk.fk_column,"to_column":fk.referenced_column}]})
-        return {"blueprint_id":bid,"source_system":{"name":parsed.source_name,"type":parsed.source_type},
-            "profiled_at":datetime.now(timezone.utc).isoformat(),"profiled_by":"source_loader",
-            "tables":tables,"relationships":rels}
+function parseRefStr(fkCol, refStr) {
+  const m = refStr.match(/^(\w+)\((\w+)\)$/);
+  if (m) return {fk_column:fkCol, referenced_table:m[1], referenced_column:m[2]};
+  if (refStr.includes('.')) { const p = refStr.split('.'); return {fk_column:fkCol, referenced_table:p[0], referenced_column:p[1]}; }
+  return {fk_column:fkCol, referenced_table:refStr.trim(), referenced_column:'id'};
+}
 
+function parseCSV(content, sourceName) {
+  const lines = content.trim().split('\n');
+  if (lines.length < 2) return {source_name:sourceName, source_type:'csv', tables:[], input_format:'csv', parse_warnings:['No data rows']};
+  const headers = lines[0].split(',').map(h=>h.trim().toLowerCase());
+  const findH = (syns) => { for (const s of syns) { const i = headers.indexOf(s); if (i>=0) return i; } return -1; };
+  const iTT = findH(['target_table','tgt_table','to_table','dest_table','source_table','src_table']);
+  const iTC = findH(['target_column','tgt_column','to_column','dest_column','source_column','src_column']);
+  const iType = findH(['target_type','tgt_type','source_type','src_type','data_type','type']);
+  const iPK = findH(['primary_key','pk','is_pk']);
+  const iNull = findH(['nullable','is_nullable','null']);
+  const iFKT = findH(['foreign_key_table','fk_table','ref_table','references_table']);
+  const iFKC = findH(['foreign_key_column','fk_column','ref_column','references_column']);
+  const tablesMap = {};
+  for (let r = 1; r < lines.length; r++) {
+    const vals = lines[r].split(',').map(v=>v.trim());
+    const tbl = iTT>=0?vals[iTT]:''; const col = iTC>=0?vals[iTC]:'';
+    if (!tbl||!col) continue;
+    if (!tablesMap[tbl]) tablesMap[tbl] = {columns:[], foreign_keys:[]};
+    const dtype = (iType>=0?vals[iType]:'varchar').toLowerCase().split('(')[0];
+    const nullable = iNull>=0 ? !['false','no','0'].includes(vals[iNull].toLowerCase()) : true;
+    const pk = iPK>=0 ? ['true','yes','1','pk'].includes(vals[iPK].toLowerCase()) : false;
+    tablesMap[tbl].columns.push({name:col, data_type:dtype, raw_type:iType>=0?vals[iType]:'varchar', nullable, is_primary_key:pk, is_unique:false, check_constraints:[], max_length:null, precision:null, scale:null, default_value:null});
+    const fkTbl = iFKT>=0?vals[iFKT]:''; const fkCol = iFKC>=0?vals[iFKC]:'id';
+    if (fkTbl) tablesMap[tbl].foreign_keys.push({fk_column:col, referenced_table:fkTbl, referenced_column:fkCol});
+  }
+  const tables = Object.entries(tablesMap).map(([n,d])=>({name:n, schema:'dbo', columns:d.columns, foreign_keys:d.foreign_keys, row_count:1000}));
+  return {source_name:sourceName||'CSV Import', source_type:'csv', tables, input_format:'csv', parse_warnings:[]};
+}
 
-# ================================================================
-# DISTRIBUTION SAMPLER
-# ================================================================
+// ================================================================
+// PARSERS — YAML (table definitions + dbt schema.yml)
+// ================================================================
+function parseSimpleYAML(text) {
+  const lines = text.split('\n').map((l,i)=>({raw:l,ind:l.search(/\S/)<0?999:l.search(/\S/),tr:l.trim(),i})).filter(l=>l.tr&&!l.tr.startsWith('#'));
+  let pos = 0;
+  function scalar(s) { s=s.trim(); if(s==='true')return true; if(s==='false')return false; if(s==='null'||s==='~'||!s)return null; if(/^-?\d+$/.test(s))return parseInt(s); if(/^-?\d+\.\d+$/.test(s))return parseFloat(s); return s.replace(/^['"]|['"]$/g,''); }
+  function parseAt(base) {
+    if(pos>=lines.length)return null;
+    return lines[pos].tr.startsWith('-')?parseList(base):parseMap(base);
+  }
+  function parseMap(base) {
+    const r={}; while(pos<lines.length&&lines[pos].ind>=base) {
+      if(lines[pos].ind>base||lines[pos].tr.startsWith('-'))break;
+      const ci=lines[pos].tr.indexOf(':'); if(ci<0){pos++;continue;}
+      const k=lines[pos].tr.substring(0,ci).trim(), v=lines[pos].tr.substring(ci+1).trim(); pos++;
+      if(v) r[k]=scalar(v); else if(pos<lines.length&&lines[pos].ind>base) r[k]=parseAt(lines[pos].ind); else r[k]=null;
+    } return r;
+  }
+  function parseList(base) {
+    const r=[]; while(pos<lines.length&&lines[pos].ind>=base) {
+      if(lines[pos].ind>base&&!lines[pos].tr.startsWith('-'))break;
+      if(!lines[pos].tr.startsWith('-'))break;
+      const item=lines[pos].tr.substring(lines[pos].tr.indexOf('-')+1).trim();
+      const itemInd=lines[pos].ind; pos++;
+      if(item.includes(':')) {
+        const obj={}; const ci=item.indexOf(':'); const k=item.substring(0,ci).trim(); const v=item.substring(ci+1).trim();
+        if(v) obj[k]=scalar(v); else if(pos<lines.length&&lines[pos].ind>itemInd) obj[k]=parseAt(lines[pos].ind); else obj[k]=null;
+        while(pos<lines.length&&lines[pos].ind>itemInd&&!lines[pos].tr.startsWith('-')) {
+          const ci2=lines[pos].tr.indexOf(':'); if(ci2<0)break;
+          const k2=lines[pos].tr.substring(0,ci2).trim(), v2=lines[pos].tr.substring(ci2+1).trim();
+          const curInd=lines[pos].ind; pos++;
+          if(v2) obj[k2]=scalar(v2); else if(pos<lines.length&&lines[pos].ind>curInd) obj[k2]=parseAt(lines[pos].ind); else obj[k2]=null;
+        } r.push(obj);
+      } else { r.push(item?scalar(item):null); }
+    } return r;
+  }
+  if(!lines.length)return {}; return parseAt(lines[0].ind);
+}
 
-class DistributionSampler:
-    def __init__(self, seed=42):
-        self.rng = np.random.default_rng(seed)
-        self.py_rng = random.Random(seed)
+function parseYAML(content, sourceName) {
+  const data = parseSimpleYAML(content);
+  const tables = [];
+  const src = data.tables || data.models || data.sources || [];
+  if (!Array.isArray(src)) return {source_name:sourceName||'YAML',source_type:'yaml',tables:[],input_format:'yaml',parse_warnings:['No tables/models found']};
+  src.forEach(t => {
+    if (!t || !t.name) return;
+    const cols = (t.columns||[]).map(c => {
+      if (typeof c === 'string') { const p=c.split(':'); return {name:p[0].trim(),data_type:p[1]?p[1].trim():'varchar',raw_type:p[1]||'varchar',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}; }
+      const dt = (c.type||c.data_type||'varchar').toLowerCase().split('(')[0];
+      const pk = !!c.primary_key||!!c.pk||(Array.isArray(c.tests)&&(c.tests.includes('unique')||c.tests.includes('not_null')));
+      return {name:c.name||'',data_type:TYPE_NORM[dt]||dt,raw_type:c.type||c.data_type||'varchar',nullable:c.nullable!==false,is_primary_key:pk,is_unique:false,check_constraints:c.accepted_values||[],max_length:c.length||null,precision:null,scale:null,default_value:null};
+    });
+    const fks = (t.foreign_keys||[]).map(fk=>({fk_column:fk.column||'',referenced_table:fk.references||fk.ref||'',referenced_column:fk.references_column||fk.ref_column||'id'}));
+    tables.push({name:t.name,schema:t.schema||'dbo',columns:cols,foreign_keys:fks,row_count:1000});
+  });
+  return {source_name:sourceName||'YAML Import',source_type:'yaml',tables,input_format:'yaml',parse_warnings:[]};
+}
 
-    def sample_column(self, col_spec, row_count):
-        stats = col_spec.get("stats", {})
-        dt = col_spec.get("data_type", "string").lower().split("(")[0]
-        nr = stats.get("null_ratio", 0.0)
-        nn = int(row_count * (1 - nr))
-        nc = row_count - nn
-        if dt in ("int","bigint","smallint","tinyint","integer","long"): vals = self._int(stats, nn)
-        elif dt in ("float","double","decimal","numeric"): vals = self._float(stats, nn)
-        elif dt in ("string","varchar","char","text"): vals = self._str(stats, nn)
-        elif dt == "date": vals = self._date(stats, nn)
-        elif dt in ("timestamp","datetime"): vals = self._ts(stats, nn)
-        elif dt in ("boolean","bool"): vals = self._bool(stats, nn)
-        else: vals = self._str(stats, nn)
-        result = list(vals) + [None]*nc
-        self.py_rng.shuffle(result)
-        return result
+// ================================================================
+// PARSERS — PySpark (StructType / StructField)
+// ================================================================
+function parsePySpark(content, sourceName) {
+  const tables = [], warnings = [];
+  const sparkTypeMap = {string:'varchar',integer:'int',long:'bigint',short:'smallint',byte:'tinyint',float:'float',double:'double',decimal:'decimal',boolean:'boolean',date:'date',timestamp:'timestamp',binary:'binary',array:'text',map:'text',struct:'text'};
+  const stPat = /(?:(\w+)\s*=\s*)?StructType\s*\(\s*\[([\s\S]*?)\]\s*\)/g;
+  let m;
+  while ((m=stPat.exec(content))!==null) {
+    const varName = m[1]||'table'; const body = m[2]; const cols = [];
+    const fPat = /StructField\s*\(\s*["'](\w+)["']\s*,\s*(\w+?)(?:Type)?\s*\(\s*(?:(\d+)(?:\s*,\s*(\d+))?)?\s*\)\s*(?:,\s*(True|False))?\s*\)/g;
+    let fm;
+    while ((fm=fPat.exec(body))!==null) {
+      const dt = sparkTypeMap[fm[2].toLowerCase()]||'varchar';
+      cols.push({name:fm[1],data_type:dt,raw_type:fm[2]+'Type',nullable:fm[5]!=='False',is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:fm[3]?parseInt(fm[3]):null,scale:fm[4]?parseInt(fm[4]):null,default_value:null});
+    }
+    if (cols.length) { const tn=varName.replace(/_?schema$/i,'')||'table'; tables.push({name:tn,schema:'default',columns:cols,foreign_keys:[],row_count:1000}); }
+  }
+  // Also try spark.sql("CREATE TABLE ...")
+  const sqlM = content.match(/spark\.sql\s*\(\s*["']{1,3}([\s\S]*?)["']{1,3}\s*\)/);
+  if (sqlM && /CREATE\s+TABLE/i.test(sqlM[1])) { const ddl = parseDDL(sqlM[1],'PySpark SQL'); tables.push(...ddl.tables); }
+  return {source_name:sourceName||'PySpark Schema',source_type:'pyspark',tables,input_format:'pyspark',parse_warnings:warnings};
+}
 
-    def _int(self, s, n):
-        tv = s.get("top_values")
-        if tv and s.get("distinct_count",0) <= 100: return self._freq(tv, n)
-        mn, mx, mean, std = s.get("min",0), s.get("max",1000), s.get("mean"), s.get("stddev")
-        if mean is not None and std is not None and std > 0:
-            v = np.clip(self.rng.normal(mean, std, n), mn, mx)
-            return [int(round(x)) for x in v]
-        return [int(x) for x in self.rng.integers(int(mn), int(mx)+1, n)]
+// ================================================================
+// PARSERS — Scala (case class)
+// ================================================================
+function parseScala(content, sourceName) {
+  const tables = [];
+  const scalaTypeMap = {String:'varchar',Int:'int',Long:'bigint',Short:'smallint',Double:'double',Float:'float',BigDecimal:'decimal',Boolean:'boolean','java.sql.Date':'date','java.sql.Timestamp':'timestamp',Byte:'tinyint'};
+  const ccPat = /case\s+class\s+(\w+)\s*\(([\s\S]*?)\)/g;
+  let m;
+  while ((m=ccPat.exec(content))!==null) {
+    const className = m[1]; const body = m[2]; const cols = [];
+    const fPat = /(\w+)\s*:\s*(Option\s*\[\s*)?([\w.\[\],\s]+)\]?\s*/g;
+    let fm;
+    while ((fm=fPat.exec(body))!==null) {
+      const nullable = !!fm[2]; let st = fm[3].trim().replace(/\s/g,'');
+      cols.push({name:fm[1],data_type:scalaTypeMap[st]||'varchar',raw_type:st,nullable,is_primary_key:fm[1].toLowerCase()==='id',is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null});
+    }
+    if (cols.length) { const tn=className.replace(/([A-Z])/g,'_$1').toLowerCase().replace(/^_/,''); tables.push({name:tn,schema:'default',columns:cols,foreign_keys:[],row_count:1000}); }
+  }
+  return {source_name:sourceName||'Scala Case Classes',source_type:'scala',tables,input_format:'scala',parse_warnings:[]};
+}
 
-    def _float(self, s, n):
-        mean, std = s.get("mean",0.0), s.get("stddev",1.0)
-        mn, mx = s.get("min",float("-inf")), s.get("max",float("inf"))
-        if mean is not None and std is not None and std > 0:
-            return [round(float(x),4) for x in np.clip(self.rng.normal(mean,std,n),mn,mx)]
-        return [round(float(x),4) for x in self.rng.uniform(mn,mx,n)]
+// ================================================================
+// PARSERS — dbt (model SQL with Jinja)
+// ================================================================
+function parseDBT(content, sourceName) {
+  const tables = [], warnings = [];
+  const refs = [];
+  const refPat = /\{\{\s*(?:ref|source)\s*\(\s*['"](\w+)['"](?:\s*,\s*['"](\w+)['"])?\s*\)\s*\}\}/g;
+  let rm; while ((rm=refPat.exec(content))!==null) refs.push(rm[2]||rm[1]);
+  const cleanSQL = content.replace(/\{\{[\s\S]*?\}\}/g,'__JINJA__').replace(/\{%[\s\S]*?%\}/g,'');
+  if (/CREATE\s+TABLE/i.test(cleanSQL)) return parseDDL(cleanSQL.replace(/__JINJA__/g,'dual'), sourceName||'dbt Model');
+  const selM = cleanSQL.match(/SELECT\s+([\s\S]*?)\s+FROM/i);
+  if (selM) {
+    const cols = []; const parts = selM[1].split(',').map(c=>c.trim()).filter(Boolean);
+    for (const p of parts) {
+      if (p==='*') continue;
+      const asM = p.match(/(?:AS\s+)?["']?(\w+)["']?\s*$/i); if (!asM) continue;
+      let dt = 'varchar'; const castM = p.match(/(?:CAST\s*\(.*?AS\s+(\w+)|::(\w+))/i);
+      if (castM) dt = (castM[1]||castM[2]).toLowerCase();
+      cols.push({name:asM[1],data_type:TYPE_NORM[dt]||dt,raw_type:dt,nullable:true,is_primary_key:cols.length===0&&asM[1].toLowerCase().endsWith('_id'),is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null});
+    }
+    if (cols.length) { const cfgM=content.match(/alias\s*=\s*['"](\w+)['"]/); tables.push({name:cfgM?cfgM[1]:'dbt_model',schema:'dbt',columns:cols,foreign_keys:[],row_count:1000}); }
+  }
+  return {source_name:sourceName||'dbt Model',source_type:'dbt',tables,input_format:'dbt',parse_warnings:refs.length?['References: '+refs.join(', ')]:warnings};
+}
 
-    def _str(self, s, n):
-        tv = s.get("top_values")
-        if tv: return self._freq(tv, n)
-        mnl, mxl = s.get("min_length",5), s.get("max_length",20)
-        if mnl is None: mnl = 5
-        if mxl is None: mxl = 20
-        return ["".join(self.py_rng.choices(string.ascii_letters+string.digits, k=self.py_rng.randint(mnl,mxl))) for _ in range(n)]
+// ================================================================
+// PARSERS — Avro (.avsc)
+// ================================================================
+function avroTypeMap(t) {
+  const m={null:'varchar',boolean:'boolean',int:'int',long:'bigint',float:'float',double:'double',bytes:'binary',string:'varchar',fixed:'binary',enum:'varchar',array:'text',map:'text',record:'text',decimal:'decimal',date:'date','time-millis':'int','timestamp-millis':'timestamp','timestamp-micros':'timestamp',uuid:'varchar'};
+  return m[t]||'varchar';
+}
+function parseAvro(content, sourceName) {
+  const data = JSON.parse(content.trim()); const tables = [];
+  function parseRecord(rec) {
+    if (!rec||rec.type!=='record'||!rec.fields) return null;
+    const cols = rec.fields.map(f => {
+      let dt='varchar',nullable=false,raw='';
+      if (typeof f.type==='string') { raw=f.type; dt=avroTypeMap(f.type); }
+      else if (Array.isArray(f.type)) { nullable=f.type.includes('null'); const nn=f.type.filter(t=>t!=='null')[0]; raw=typeof nn==='string'?nn:JSON.stringify(nn); dt=typeof nn==='string'?avroTypeMap(nn):avroTypeMap((nn&&nn.logicalType)||nn?.type||'string'); }
+      else if (typeof f.type==='object') { raw=f.type.logicalType||f.type.type||'string'; dt=avroTypeMap(f.type.logicalType||f.type.type); }
+      return {name:f.name,data_type:dt,raw_type:raw,nullable,is_primary_key:/^(id|key)$/i.test(f.name),is_unique:false,check_constraints:[],max_length:null,precision:f.type?.precision||null,scale:f.type?.scale||null,default_value:f.default??null};
+    });
+    const tn=rec.name.replace(/([A-Z])/g,'_$1').toLowerCase().replace(/^_/,'');
+    return {name:tn,schema:rec.namespace||'default',columns:cols,foreign_keys:[],row_count:1000};
+  }
+  if (data.type==='record') { const t=parseRecord(data); if(t)tables.push(t); }
+  else if (Array.isArray(data)) data.forEach(d=>{const t=parseRecord(d);if(t)tables.push(t);});
+  return {source_name:sourceName||'Avro Schema',source_type:'avro',tables,input_format:'avro',parse_warnings:[]};
+}
 
-    def _date(self, s, n):
-        mn = self._pd(s.get("min","2020-01-01"))
-        mx = self._pd(s.get("max","2025-12-31"))
-        dd = max((mx-mn).days, 1)
-        return [(mn+timedelta(days=int(self.rng.integers(0,dd+1)))).isoformat() for _ in range(n)]
+// ================================================================
+// PARSERS — Protobuf (.proto)
+// ================================================================
+function parseProtobuf(content, sourceName) {
+  const tables = [];
+  const protoTypeMap={double:'double',float:'float',int32:'int',int64:'bigint',uint32:'int',uint64:'bigint',sint32:'int',sint64:'bigint',fixed32:'int',fixed64:'bigint',sfixed32:'int',sfixed64:'bigint',bool:'boolean',string:'varchar',bytes:'binary'};
+  const msgPat = /message\s+(\w+)\s*\{([\s\S]*?)\}/g;
+  let m;
+  while ((m=msgPat.exec(content))!==null) {
+    const cols = []; const fPat = /(?:(optional|required|repeated)\s+)?(\w+)\s+(\w+)\s*=\s*\d+/g;
+    let fm; while ((fm=fPat.exec(m[2]))!==null) {
+      cols.push({name:fm[3],data_type:protoTypeMap[fm[2]]||'varchar',raw_type:fm[2],nullable:fm[1]!=='required',is_primary_key:fm[3].toLowerCase()==='id',is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null});
+    }
+    if (cols.length) { const tn=m[1].replace(/([A-Z])/g,'_$1').toLowerCase().replace(/^_/,''); tables.push({name:tn,schema:'default',columns:cols,foreign_keys:[],row_count:1000}); }
+  }
+  return {source_name:sourceName||'Protobuf Schema',source_type:'protobuf',tables,input_format:'protobuf',parse_warnings:[]};
+}
 
-    def _ts(self, s, n):
-        dates = self._date(s, n)
-        return [f"{d}T{self.py_rng.randint(0,23):02d}:{self.py_rng.randint(0,59):02d}:{self.py_rng.randint(0,59):02d}" for d in dates]
+// ================================================================
+// PARSERS — Spark printSchema output
+// ================================================================
+function parseSparkSchema(content, sourceName) {
+  const cols = [];
+  const fPat = /\|--\s+(\w+):\s+(\w+)(?:\(([^)]*)\))?\s*\(nullable\s*=\s*(true|false)\)/g;
+  let m;
+  while ((m=fPat.exec(content))!==null) {
+    const sparkMap={string:'varchar',integer:'int',long:'bigint',short:'smallint',byte:'tinyint',float:'float',double:'double',decimal:'decimal',boolean:'boolean',date:'date',timestamp:'timestamp',binary:'binary'};
+    cols.push({name:m[1],data_type:sparkMap[m[2]]||'varchar',raw_type:m[2]+(m[3]?`(${m[3]})`:''),nullable:m[4]==='true',is_primary_key:m[1]==='id',is_unique:false,check_constraints:[],max_length:null,precision:m[3]?parseInt(m[3].split(',')[0]):null,scale:m[3]&&m[3].includes(',')?parseInt(m[3].split(',')[1]):null,default_value:null});
+  }
+  if (!cols.length) return null;
+  return {source_name:sourceName||'Spark Schema',source_type:'spark',tables:[{name:'spark_table',schema:'default',columns:cols,foreign_keys:[],row_count:1000}],input_format:'spark_schema',parse_warnings:[]};
+}
 
-    def _bool(self, s, n):
-        tv = s.get("top_values",[])
-        tr = 0.5
-        for t in tv:
-            if str(t.get("value","")).lower() in ("true","1"): tr = t.get("frequency",0.5); break
-        return [bool(x) for x in self.rng.choice([True,False],n,p=[tr,1-tr])]
+// ================================================================
+// PARSERS — Informatica XML (PowerCenter / IICS)
+// ================================================================
+function parseInformaticaXML(doc, sourceName) {
+  const tables = [];
+  function parseFields(parent, tagName) {
+    const cols = [], fks = [];
+    parent.querySelectorAll(tagName).forEach(sf => {
+      const cn = sf.getAttribute('NAME')||sf.getAttribute('name')||''; if(!cn) return;
+      const rt = sf.getAttribute('DATATYPE')||sf.getAttribute('datatype')||'varchar';
+      const prec = parseInt(sf.getAttribute('PRECISION')||sf.getAttribute('precision')||'0');
+      const scale = parseInt(sf.getAttribute('SCALE')||sf.getAttribute('scale')||'0');
+      const nullable = (sf.getAttribute('NULLABLE')||sf.getAttribute('nullable')||'NULL')!=='NOTNULL';
+      const pk = (sf.getAttribute('KEYTYPE')||sf.getAttribute('keytype')||'')==='PRIMARY KEY';
+      const dt = TYPE_NORM[rt.toLowerCase()]||rt.toLowerCase().split('(')[0];
+      cols.push({name:cn,data_type:dt,raw_type:rt,nullable,is_primary_key:pk,is_unique:false,check_constraints:[],max_length:prec||null,precision:['decimal','numeric','number'].includes(dt)?prec:null,scale:scale||null,default_value:null});
+    });
+    return {cols, fks};
+  }
+  doc.querySelectorAll('SOURCE, source').forEach(src => {
+    const name = src.getAttribute('NAME')||src.getAttribute('name')||''; if(!name) return;
+    const {cols} = parseFields(src, 'SOURCEFIELD, sourcefield');
+    if (cols.length) tables.push({name,schema:'dbo',columns:cols,foreign_keys:[],row_count:1000});
+  });
+  doc.querySelectorAll('TARGET, target').forEach(tgt => {
+    const name = tgt.getAttribute('NAME')||tgt.getAttribute('name')||''; if(!name) return;
+    if (tables.find(t=>t.name===name)) return;
+    const {cols} = parseFields(tgt, 'TARGETFIELD, targetfield');
+    if (cols.length) tables.push({name,schema:'dbo',columns:cols,foreign_keys:[],row_count:1000});
+  });
+  return {source_name:sourceName||'Informatica Import',source_type:'informatica',tables,input_format:'informatica_xml',parse_warnings:[]};
+}
 
-    def _freq(self, tv, n):
-        vals = [t["value"] for t in tv]
-        freqs = np.array([t.get("frequency",1.0/len(tv)) for t in tv])
-        freqs = freqs/freqs.sum()
-        return [vals[i] for i in self.rng.choice(len(vals),n,p=freqs)]
+// ================================================================
+// PARSERS — Talend XML
+// ================================================================
+function parseTalendXML(doc, sourceName) {
+  const tables = [];
+  const talendTypeMap = {id_String:'varchar',id_Integer:'int',id_Long:'bigint',id_Short:'smallint',id_Byte:'tinyint',id_Float:'float',id_Double:'double',id_BigDecimal:'decimal',id_Boolean:'boolean',id_Date:'date',id_Character:'char',id_byte_array:'binary',id_Object:'text',id_List:'text',id_Document:'text',id_Dynamic:'text'};
+  doc.querySelectorAll('schema, Schema, metadata').forEach(schema => {
+    const name = schema.getAttribute('name')||schema.getAttribute('Name')||schema.getAttribute('label')||'talend_table';
+    const cols = [];
+    schema.querySelectorAll('column, Column').forEach(col => {
+      const cn = col.getAttribute('name')||col.getAttribute('label')||''; if(!cn) return;
+      const tt = col.getAttribute('type')||col.getAttribute('talendType')||'id_String';
+      const length = parseInt(col.getAttribute('length')||'0');
+      const nullable = (col.getAttribute('nullable')||'true')!=='false';
+      const pk = (col.getAttribute('key')||'false')==='true';
+      cols.push({name:cn,data_type:talendTypeMap[tt]||'varchar',raw_type:tt,nullable,is_primary_key:pk,is_unique:false,check_constraints:[],max_length:length||null,precision:null,scale:null,default_value:null});
+    });
+    if (cols.length) tables.push({name,schema:'dbo',columns:cols,foreign_keys:[],row_count:1000});
+  });
+  return {source_name:sourceName||'Talend Import',source_type:'talend',tables,input_format:'talend_xml',parse_warnings:[]};
+}
 
-    def _pd(self, v):
-        if isinstance(v, date): return v
-        try: return date.fromisoformat(str(v)[:10])
-        except: return date(2020,1,1)
+// ================================================================
+// PARSERS — Apache NiFi XML (flow definition)
+// ================================================================
+function parseNiFiXML(doc, sourceName) {
+  const tables = [], processors = [], connections = [], controllerServices = [];
+  // Extract processors
+  doc.querySelectorAll('processor, processors > processor').forEach(proc => {
+    const name = proc.querySelector('name')?.textContent||'';
+    const type = proc.querySelector('class, type')?.textContent||'';
+    const shortType = type.split('.').pop();
+    const props = {};
+    proc.querySelectorAll('property > name, config > property > name').forEach(pn => {
+      const val = pn.nextElementSibling; if(val) props[pn.textContent] = val.textContent;
+    });
+    // Also try config > properties > entry format
+    proc.querySelectorAll('config > properties > entry, properties > entry').forEach(entry => {
+      const key = entry.querySelector('key')?.textContent||entry.getAttribute('key')||'';
+      const val = entry.querySelector('value')?.textContent||entry.getAttribute('value')||'';
+      if(key) props[key] = val;
+    });
+    processors.push({name,type:shortType,fullType:type,properties:props});
+  });
+  // Extract connections
+  doc.querySelectorAll('connection, connections > connection').forEach(conn => {
+    const src = conn.querySelector('sourceId, source > id')?.textContent||'';
+    const dst = conn.querySelector('destinationId, destination > id')?.textContent||'';
+    const rels = []; conn.querySelectorAll('relationship, selectedRelationships').forEach(r => rels.push(r.textContent||r.getAttribute('name')||''));
+    connections.push({source:src,destination:dst,relationships:rels});
+  });
+  // Extract controller services
+  doc.querySelectorAll('controllerService, controllerServices > controllerService').forEach(cs => {
+    const name = cs.querySelector('name')?.textContent||'';
+    const type = cs.querySelector('class, type')?.textContent||'';
+    const props = {};
+    cs.querySelectorAll('property > name').forEach(pn => { const val=pn.nextElementSibling; if(val)props[pn.textContent]=val.textContent; });
+    cs.querySelectorAll('properties > entry, config > properties > entry').forEach(entry => {
+      const key=entry.querySelector('key')?.textContent||''; const val=entry.querySelector('value')?.textContent||'';
+      if(key)props[key]=val;
+    });
+    controllerServices.push({name,type:type.split('.').pop(),fullType:type,properties:props});
+  });
+  // Try to extract schema info from processors that have SQL or schema definitions
+  processors.forEach(p => {
+    const allProps = Object.entries(p.properties).map(([k,v])=>v).join(' ');
+    if (/CREATE\s+TABLE/i.test(allProps)) {
+      const ddlProp = Object.values(p.properties).find(v=>/CREATE\s+TABLE/i.test(v));
+      if (ddlProp) { const r = parseDDL(ddlProp, p.name); tables.push(...r.tables); }
+    }
+    // Extract table name from common NiFi properties
+    const tn = p.properties['Table Name']||p.properties['table-name']||p.properties['put-db-record-table-name']||'';
+    const cols = p.properties['Column Names']||p.properties['Columns']||'';
+    if (tn && cols) {
+      const colList = cols.split(',').map(c=>c.trim()).filter(Boolean).map(c=>({name:c,data_type:'varchar',raw_type:'varchar',nullable:true,is_primary_key:c.toLowerCase()==='id',is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}));
+      if (colList.length) tables.push({name:tn,schema:'nifi',columns:colList,foreign_keys:[],row_count:1000});
+    }
+  });
+  // Build a virtual "NiFi Flow" table showing processors as rows (for visualization)
+  if (!tables.length && processors.length) {
+    const flowCols = [{name:'processor_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'processor_type',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:processors.map(p=>p.type).filter((v,i,a)=>a.indexOf(v)===i),max_length:200,precision:null,scale:null,default_value:null},
+      {name:'config_json',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}];
+    tables.push({name:'nifi_processors',schema:'nifi_flow',columns:flowCols,foreign_keys:[],row_count:processors.length});
+    if (connections.length) {
+      const connCols = [{name:'connection_id',data_type:'int',raw_type:'int',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+        {name:'source_processor',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+        {name:'destination_processor',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+        {name:'relationship',data_type:'varchar',raw_type:'string',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:100,precision:null,scale:null,default_value:null}];
+      tables.push({name:'nifi_connections',schema:'nifi_flow',columns:connCols,foreign_keys:[{fk_column:'source_processor',referenced_table:'nifi_processors',referenced_column:'processor_name'}],row_count:connections.length});
+    }
+    if (controllerServices.length) {
+      const csCols = [{name:'service_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+        {name:'service_type',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:controllerServices.map(s=>s.type).filter((v,i,a)=>a.indexOf(v)===i),max_length:200,precision:null,scale:null,default_value:null},
+        {name:'config_json',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}];
+      tables.push({name:'nifi_controller_services',schema:'nifi_flow',columns:csCols,foreign_keys:[],row_count:controllerServices.length});
+    }
+  }
+  const result = {source_name:sourceName||'Apache NiFi Flow',source_type:'nifi',tables,input_format:'nifi_xml',parse_warnings:[]};
+  result._nifi = {processors, connections, controllerServices};
+  return result;
+}
 
+// ================================================================
+// SOURCE SYSTEM DETECTION
+// ================================================================
+function detectSourceSystem(content, fmt) {
+  if (fmt==='informatica_xml') return {name:'Informatica',type:'ETL & Integration',color:'#FF4A00'};
+  if (fmt==='talend_xml') return {name:'Talend',type:'Data Integration',color:'#FF6D70'};
+  if (fmt==='nifi_xml') return {name:'Apache NiFi',type:'Flow Definition',color:'#728E9B'};
+  if (fmt==='pyspark') return {name:'PySpark / Databricks',type:'Spark Schema',color:'#E25A1C'};
+  if (fmt==='scala') return {name:'Scala / Spark',type:'Case Classes',color:'#DC382D'};
+  if (fmt==='dbt') return {name:'dbt',type:'Data Transformation',color:'#FF694B'};
+  if (fmt==='avro') return {name:'Apache Avro',type:'Schema Registry',color:'#3ECF8E'};
+  if (fmt==='protobuf') return {name:'Protobuf',type:'Schema Definition',color:'#3ECF8E'};
+  if (fmt==='spark_schema') return {name:'Spark',type:'printSchema Output',color:'#E25A1C'};
+  if (fmt==='yaml') return {name:'YAML Schema',type:'Universal',color:'#CB171E'};
+  if (fmt==='json') return {name:'JSON Schema',type:'Universal',color:'#000000'};
+  if (fmt==='csv') return {name:'CSV Mapping',type:'Universal',color:'#217346'};
+  if (fmt==='xml') return {name:'XML Schema',type:'Universal',color:'#0060AC'};
+  const c = content || '';
+  if (/\bVARCHAR2\b|\bNUMBER\s*\(|\bCLOB\b|\bBINARY_FLOAT\b/i.test(c)) return {name:'Oracle',type:'Database',color:'#F80000'};
+  if (/\[\w+\]|\bIDENTITY\s*\(|\bDATETIME2\b|\bUNIQUEIDENTIFIER\b|\bNVARCHAR\b/i.test(c)) return {name:'SQL Server',type:'Microsoft SQL',color:'#CC2927'};
+  if (/\bDISTKEY\b|\bSORTKEY\b|\bENCODE\s+(lzo|zstd|raw|bytedict)\b/i.test(c)) return {name:'AWS Redshift',type:'Data Warehouse',color:'#FF9900'};
+  if (/\bVARIANT\b|\bCLUSTER\s+BY\b|\bTRANSIENT\s+TABLE\b/i.test(c)) return {name:'Snowflake',type:'Data Cloud',color:'#29B5E8'};
+  if (/\bMULTISET\b|\bBYTEINT\b|\bTITLE\s+'/i.test(c)) return {name:'Teradata',type:'Enterprise DW',color:'#F37440'};
+  if (/\bCOLUMN\s+TABLE\b|\bCS_STRING\b|\bALPHANUM\b/i.test(c)) return {name:'SAP HANA',type:'ERP / BW',color:'#0FAAFF'};
+  if (/\bINT64\b|\bFLOAT64\b|\bSTRUCT\s*</i.test(c)) return {name:'Google BigQuery',type:'Cloud Platform',color:'#4285F4'};
+  if (/\bUSING\s+DELTA\b|\bTBLPROPERTIES\b|\bLOCATION\s+'/i.test(c)) return {name:'Databricks',type:'Unity Catalog',color:'#FF3621'};
+  if (/\bDISTRIBUTION\s*=\s*(HASH|ROUND_ROBIN|REPLICATE)\b/i.test(c)) return {name:'Azure Synapse',type:'Analytics',color:'#0078D4'};
+  if (/\bSERIAL\b|\bBYTEA\b|\bJSONB\b|\bINET\b|\bTSVECTOR\b/i.test(c)) return {name:'PostgreSQL',type:'Database',color:'#4169E1'};
+  if (/\bAUTO_INCREMENT\b|\bENGINE\s*=\s*(InnoDB|MyISAM)/i.test(c)) return {name:'MySQL',type:'Database',color:'#4479A1'};
+  if (/\bSTORED\s+AS\s+(ORC|PARQUET|TEXTFILE)\b|\bROW\s+FORMAT\b/i.test(c)) return {name:'Apache Hive',type:'Data Warehouse',color:'#FDEE21'};
+  return {name:'SQL',type:'Standard DDL',color:'#808495'};
+}
 
-# ================================================================
-# RELATIONSHIP PRESERVER
-# ================================================================
+// ================================================================
+// DEFAULT STATS
+// ================================================================
+function genStats(col, rowCount) {
+  const dt = col.data_type.toLowerCase();
+  const s = {null_ratio: col.nullable ? 0.05 : 0.0};
+  if (col.check_constraints && col.check_constraints.length) {
+    const n = col.check_constraints.length;
+    s.top_values = col.check_constraints.map(v=>({value:v, frequency:Math.round(1/n*10000)/10000}));
+    s.distinct_count = n; return s;
+  }
+  if (['int','integer','smallint','tinyint'].includes(dt)) {
+    if (col.is_primary_key) Object.assign(s, {min:1,max:rowCount,mean:rowCount/2,stddev:rowCount/6,distinct_count:rowCount});
+    else Object.assign(s, {min:1,max:1000,mean:500,stddev:300,distinct_count:Math.min(500,rowCount)});
+  } else if (['bigint','long'].includes(dt)) Object.assign(s, {min:1,max:100000,mean:50000,stddev:30000,distinct_count:Math.min(10000,rowCount)});
+  else if (['float','double'].includes(dt)) Object.assign(s, {min:0,max:10000,mean:100,stddev:50,distinct_count:rowCount});
+  else if (['decimal','numeric'].includes(dt)) { const mx = Math.pow(10,(col.precision||10)-(col.scale||2))-1; Object.assign(s, {min:0,max:mx,mean:mx/10,stddev:mx/20,distinct_count:rowCount}); }
+  else if (['varchar','char','text','string'].includes(dt)) Object.assign(s, {min_length:3,max_length:Math.min(col.max_length||50,100),distinct_count:rowCount});
+  else if (dt==='date') Object.assign(s, {min:'2020-01-01',max:'2025-12-31',distinct_count:Math.min(rowCount,2000)});
+  else if (['timestamp','datetime'].includes(dt)) Object.assign(s, {min:'2020-01-01',max:'2025-12-31',distinct_count:rowCount});
+  else if (['boolean','bool'].includes(dt)) { s.top_values=[{value:true,frequency:0.5},{value:false,frequency:0.5}]; s.distinct_count=2; }
+  else Object.assign(s, {min_length:5,max_length:20,distinct_count:rowCount});
+  return s;
+}
 
-class RelationshipPreserver:
-    def __init__(self, blueprint):
-        self.bp = blueprint
-        self.tables = {t["name"]:t for t in blueprint.get("tables",[])}
-        self.rels = blueprint.get("relationships",[])
-        self.deps = {}
-        self._build()
+// ================================================================
+// BLUEPRINT ASSEMBLER
+// ================================================================
+function assembleBlueprint_fn(parsed, rowCount) {
+  const bid = crypto.randomUUID ? crypto.randomUUID() : 'bp-'+Math.random().toString(36).substring(2,10);
+  const tables = parsed.tables.map(pt => {
+    const cols = pt.columns.map(c => ({name:c.name, data_type:c.data_type, nullable:c.nullable, is_primary_key:c.is_primary_key, stats:genStats(c, rowCount)}));
+    const fks = pt.foreign_keys.map(fk => ({column:fk.fk_column, references_table:fk.referenced_table, references_column:fk.referenced_column}));
+    return {name:pt.name, schema:pt.schema, row_count:rowCount, columns:cols, foreign_keys:fks};
+  });
+  const rels = [];
+  parsed.tables.forEach(pt => pt.foreign_keys.forEach(fk => rels.push({from_table:`${pt.schema}.${pt.name}`,to_table:`${pt.schema}.${fk.referenced_table}`,relationship_type:'one_to_many',join_columns:[{from_column:fk.fk_column,to_column:fk.referenced_column}]})));
+  return {blueprint_id:bid, source_system:{name:parsed.source_name,type:parsed.source_type}, tables, relationships:rels};
+}
 
-    def get_generation_order(self):
-        visited, order = set(), []
-        def visit(tn):
-            if tn in visited: return
-            visited.add(tn)
-            for p in self.deps.get(tn,[]):
-                visit(p)
-            order.append(tn)
-        for tn in self.deps: visit(tn)
-        return order
+// ================================================================
+// DATA GENERATOR (Box-Muller + seeded RNG)
+// ================================================================
+class SeededRNG {
+  constructor(seed) { this.s = seed; }
+  next() { this.s = (this.s * 16807 + 0) % 2147483647; return (this.s - 1) / 2147483646; }
+  nextInt(min, max) { return Math.floor(this.next() * (max - min + 1)) + min; }
+  normal(mean, std) {
+    const u1 = this.next(), u2 = this.next();
+    const z = Math.sqrt(-2*Math.log(u1||0.0001)) * Math.cos(2*Math.PI*u2);
+    return mean + z * std;
+  }
+  choice(arr) { return arr[Math.floor(this.next()*arr.length)]; }
+  shuffle(arr) { for (let i=arr.length-1;i>0;i--) { const j=Math.floor(this.next()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
+  string(len) { const ch='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'; return Array.from({length:len},()=>ch[Math.floor(this.next()*ch.length)]).join(''); }
+}
 
-    def get_fk_constraints(self, tn):
-        ts = self.tables.get(tn,{})
-        return [{"child_column":fk.get("column",""),"parent_table":fk.get("references_table",""),
-                 "parent_column":fk.get("references_column","")} for fk in ts.get("foreign_keys",[])]
+function sampleColumn(rng, colSpec, rowCount) {
+  const stats = colSpec.stats || {};
+  const dt = (colSpec.data_type||'string').toLowerCase();
+  const nr = stats.null_ratio || 0;
+  const nn = Math.round(rowCount * (1-nr)), nc = rowCount - nn;
+  let vals;
+  if (['int','bigint','smallint','tinyint','integer','long'].includes(dt)) vals = sampleInt(rng, stats, nn);
+  else if (['float','double','decimal','numeric'].includes(dt)) vals = sampleFloat(rng, stats, nn);
+  else if (['string','varchar','char','text'].includes(dt)) vals = sampleStr(rng, stats, nn);
+  else if (dt==='date') vals = sampleDate(rng, stats, nn);
+  else if (['timestamp','datetime'].includes(dt)) vals = sampleTS(rng, stats, nn);
+  else if (['boolean','bool'].includes(dt)) vals = sampleBool(rng, stats, nn);
+  else vals = sampleStr(rng, stats, nn);
+  const result = [...vals, ...Array(nc).fill(null)];
+  return rng.shuffle(result);
+}
 
-    def build_pk_pool(self, tn, data):
-        ts = self.tables.get(tn,{})
-        pool = {}
-        for c in ts.get("columns",[]):
-            if c.get("is_primary_key") and c["name"] in data:
-                pool[c["name"]] = [v for v in data[c["name"]] if v is not None]
-        return pool
+function sampleInt(rng, s, n) {
+  if (s.top_values && s.distinct_count <= 100) return sampleFreq(rng, s.top_values, n);
+  const mn=s.min||0, mx=s.max||1000, mean=s.mean, std=s.stddev;
+  if (mean!=null && std!=null && std>0) return Array.from({length:n},()=>Math.max(mn,Math.min(mx,Math.round(rng.normal(mean,std)))));
+  return Array.from({length:n},()=>rng.nextInt(mn, mx));
+}
+function sampleFloat(rng, s, n) {
+  const mean=s.mean||0, std=s.stddev||1, mn=s.min||-1e9, mx=s.max||1e9;
+  return Array.from({length:n},()=>Math.round(Math.max(mn,Math.min(mx,rng.normal(mean,std)))*100)/100);
+}
+function sampleStr(rng, s, n) {
+  if (s.top_values) return sampleFreq(rng, s.top_values, n);
+  const mnl=s.min_length||5, mxl=s.max_length||20;
+  return Array.from({length:n},()=>rng.string(rng.nextInt(mnl,mxl)));
+}
+function sampleDate(rng, s, n) {
+  const mn=new Date(s.min||'2020-01-01').getTime(), mx=new Date(s.max||'2025-12-31').getTime();
+  const range = mx-mn || 86400000*365;
+  return Array.from({length:n},()=>new Date(mn+rng.next()*range).toISOString().split('T')[0]);
+}
+function sampleTS(rng, s, n) {
+  return sampleDate(rng,s,n).map(d=>`${d}T${String(rng.nextInt(0,23)).padStart(2,'0')}:${String(rng.nextInt(0,59)).padStart(2,'0')}:${String(rng.nextInt(0,59)).padStart(2,'0')}`);
+}
+function sampleBool(rng, s, n) {
+  let tr=0.5;
+  (s.top_values||[]).forEach(t=>{if(String(t.value).toLowerCase()==='true')tr=t.frequency;});
+  return Array.from({length:n},()=>rng.next()<tr);
+}
+function sampleFreq(rng, tv, n) {
+  const vals=tv.map(t=>t.value), freqs=tv.map(t=>t.frequency||1/tv.length);
+  const sum=freqs.reduce((a,b)=>a+b,0);
+  const cum=freqs.reduce((a,f)=>{a.push((a.length?a[a.length-1]:0)+f/sum);return a;},[]);
+  return Array.from({length:n},()=>{const r=rng.next();const i=cum.findIndex(c=>r<=c);return vals[Math.max(0,i)];});
+}
 
-    def apply_fk_values(self, tn, data, pk_pools):
-        for con in self.get_fk_constraints(tn):
-            pt, pc, cc = con["parent_table"], con["parent_column"], con["child_column"]
-            pool = pk_pools.get(pt,{}).get(pc,[])
-            if not pool or cc not in data: continue
-            data[cc] = [random.choice(pool) for _ in range(len(data[cc]))]
-        return data
+function generateTables(bp, seed) {
+  const rng = new SeededRNG(seed);
+  const tMap = {}; bp.tables.forEach(t=>tMap[t.name]=t);
+  // Topological sort
+  const order = [], visited = new Set();
+  function visit(tn) {
+    if (visited.has(tn)) return; visited.add(tn);
+    const ts = tMap[tn]; if (!ts) return;
+    ts.foreign_keys.forEach(fk => visit(fk.references_table));
+    order.push(tn);
+  }
+  Object.keys(tMap).forEach(visit);
+  const pkPools = {}, results = {};
+  for (const tn of order) {
+    const ts = tMap[tn]; if (!ts) continue;
+    const data = {}; const rc = ts.row_count;
+    ts.columns.forEach(c => { data[c.name] = sampleColumn(rng, c, rc); });
+    // Apply FK values
+    ts.foreign_keys.forEach(fk => {
+      const pool = (pkPools[fk.references_table]||{})[fk.references_column] || [];
+      if (pool.length && data[fk.column]) { data[fk.column] = data[fk.column].map(()=>rng.choice(pool)); }
+    });
+    // Build PK pool
+    pkPools[tn] = {};
+    ts.columns.filter(c=>c.is_primary_key).forEach(c => {
+      pkPools[tn][c.name] = data[c.name].filter(v=>v!=null);
+    });
+    results[tn] = data;
+  }
+  return results;
+}
 
-    def _build(self):
-        for tn in self.tables: self.deps[tn] = []
-        for r in self.rels:
-            ft = r.get("from_table","").split(".")[-1]
-            tt = r.get("to_table","").split(".")[-1]
-            if ft in self.deps: self.deps[ft].append(tt)
-        for tn, ts in self.tables.items():
-            for fk in ts.get("foreign_keys",[]):
-                p = fk.get("references_table","")
-                if p and p != tn and p not in self.deps.get(tn,[]): self.deps.setdefault(tn,[]).append(p)
-
-
-# ================================================================
-# LOCAL GENERATOR
-# ================================================================
-
-class LocalGenerator:
-    def generate(self, blueprint, seed=42, on_progress=None):
-        sampler = DistributionSampler(seed=seed)
-        preserver = RelationshipPreserver(blueprint)
-        order = preserver.get_generation_order()
-        pk_pools, results = {}, {}
-        total = len(order)
-        for idx, tn in enumerate(order):
-            ts = next((t for t in blueprint["tables"] if t["name"]==tn), None)
-            if not ts: continue
-            rc = ts.get("row_count",1000)
-            data = {c["name"]: sampler.sample_column(c, rc) for c in ts.get("columns",[])}
-            data = preserver.apply_fk_values(tn, data, pk_pools)
-            pk_pools[tn] = preserver.build_pk_pool(tn, data)
-            results[tn] = pd.DataFrame(data)
-            if on_progress: on_progress(tn, idx+1, total)
-        return results
-
-    def conform_medallion(self, tables, blueprint):
-        bronze, silver, gold = {}, {}, {}
-        rules, rule_results = [], []
-        total_dropped, total_nulls = 0, 0
-        for tn, df in tables.items():
-            ts = next((t for t in blueprint["tables"] if t["name"]==tn), None)
-            bronze[tn] = df.copy()
-            sdf = df.copy()
-            before = len(sdf)
-            sdf = sdf.dropna(how="all")
-            total_dropped += before - len(sdf)
-            if ts:
-                pks = [c["name"] for c in ts.get("columns",[]) if c.get("is_primary_key")]
-                existing_pks = [c for c in pks if c in sdf.columns]
-                if existing_pks:
-                    bd = len(sdf)
-                    sdf = sdf.drop_duplicates(subset=existing_pks, keep="first")
-                    total_dropped += bd - len(sdf)
-                for cs in ts.get("columns",[]):
-                    cn = cs["name"]
-                    if not cs.get("nullable",True) and cn in sdf.columns:
-                        nc = int(sdf[cn].isna().sum())
-                        if nc > 0:
-                            total_nulls += nc
-                            fills = {"int":0,"bigint":0,"float":0.0,"double":0.0,"decimal":0.0,
-                                     "varchar":"","char":"","text":"","boolean":False,"date":"2020-01-01"}
-                            sdf[cn] = sdf[cn].fillna(fills.get(cs.get("data_type",""),""))
-            silver[tn] = sdf
-            # Gold aggregation
-            agg = []
-            for col in sdf.columns:
-                row = {"column":col, "non_null":int(sdf[col].notna().sum()), "nulls":int(sdf[col].isna().sum())}
-                num = pd.to_numeric(sdf[col], errors="coerce")
-                if num.notna().sum() > len(sdf)*0.5:
-                    row.update({"min":round(float(num.min()),2),"max":round(float(num.max()),2),
-                                "mean":round(float(num.mean()),2),"std":round(float(num.std()),2)})
-                else:
-                    row["distinct"] = int(sdf[col].nunique())
-                    top = sdf[col].value_counts().head(3)
-                    row["top_values"] = ", ".join(f"{v}({c})" for v,c in top.items())
-                agg.append(row)
-            gold[tn] = pd.DataFrame(agg)
-            # Quality rules
-            if ts:
-                for cs in ts.get("columns",[]):
-                    cn = cs["name"]
-                    if cn not in sdf.columns: continue
-                    if not cs.get("nullable",True):
-                        rules.append({"name":f"{tn}_{cn}_not_null","table":tn,"expression":f"{cn} IS NOT NULL","action":"warn"})
-                        nc = int(sdf[cn].isna().sum())
-                        rule_results.append({"rule":f"{tn}_{cn}_not_null","table":tn,"column":cn,"passed":nc==0,"violations":nc,"total_rows":len(sdf)})
-                    if cs.get("is_primary_key"):
-                        rules.append({"name":f"{tn}_{cn}_unique","table":tn,"expression":f"{cn} is unique","action":"warn"})
-                        dc = int(sdf[cn].duplicated().sum())
-                        rule_results.append({"rule":f"{tn}_{cn}_unique","table":tn,"column":cn,"passed":dc==0,"violations":dc,"total_rows":len(sdf)})
-        return {"bronze":bronze,"silver":silver,"gold":gold,"rules":rules,"results":rule_results,
-                "stats":{"rows_dropped":total_dropped,"nulls_cleaned":total_nulls,"tables_processed":len(tables)}}
-
-    def validate_local(self, blueprint, generated, quality_results=None):
-        results = []
-        TYPE_EQ = {"int":{"integer","int","int64","int32"},"bigint":{"long","bigint","int64"},
-            "float":{"float","float64","float32"},"double":{"double","float64"},
-            "decimal":{"decimal","float64","float"},"varchar":{"string","varchar","text","object"},
-            "char":{"string","object"},"text":{"string","object"},"boolean":{"boolean","bool"},
-            "date":{"date","object"},"timestamp":{"timestamp","datetime64[ns]","object"}}
-        for ts in blueprint.get("tables",[]):
-            tn = ts["name"]
-            df = generated.get(tn)
-            if df is None:
-                results.append({"table":tn,"schema_score":0,"fidelity_score":0,"quality_score":0,
-                    "pipeline_score":0,"overall_score":0,"recs":[f"Table {tn} not generated"]})
-                continue
-            # Schema
-            expected = {c["name"]:c for c in ts.get("columns",[])}
-            missing = [c for c in expected if c not in df.columns]
-            matched = sum(1 for cn,cs in expected.items() if cn in df.columns and
-                (cs["data_type"]==str(df[cn].dtype) or str(df[cn].dtype) in TYPE_EQ.get(cs["data_type"],{cs["data_type"]})))
-            ss = matched/max(len(expected),1)
-            # Fidelity
-            rc_match = abs(len(df)-ts.get("row_count",0))/max(ts.get("row_count",1),1) <= 0.05
-            fs = (1.0 if rc_match else 0.5)*0.2 + 0.8*1.0
-            # Quality
-            qs = 1.0
-            if quality_results:
-                viol = [r for r in quality_results if r.get("table")==tn and not r.get("passed",True)]
-                if viol: qs = max(0.0, 1.0-len(viol)*0.1)
-            overall = ss*0.25 + fs*0.35 + qs*0.20 + 1.0*0.20
-            recs = []
-            if missing: recs.append(f"Missing columns: {', '.join(missing)}")
-            results.append({"table":tn,"schema_score":round(ss,4),"fidelity_score":round(fs,4),
-                "quality_score":round(qs,4),"pipeline_score":1.0,"overall_score":round(overall,4),"recs":recs,"missing":missing})
-        return results
-
-
-# ================================================================
-# STREAMLIT UI
-# ================================================================
-
-st.set_page_config(page_title="SEG Demo", page_icon="🔬", layout="wide", initial_sidebar_state="collapsed")
-st.title("SEG — Synthetic Environment Generator")
-st.caption("Upload DDL, Excel, JSON, YAML, or XML — generate a full synthetic environment in your browser")
-
-for k in ("parsed","blueprint","tables","medallion","validation"):
-    if k not in st.session_state: st.session_state[k] = None
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["1. Load & Parse","2. Blueprint","3. Generate","4. Conform","5. Validate"])
-
-# ---- STEP 1 ----
-with tab1:
-    st.header("Step 1: Load & Parse Input")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Upload File")
-        uploaded = st.file_uploader("Choose a file", type=["sql","ddl","csv","json","yaml","yml","xml"], key="up1")
-    with c2:
-        st.subheader("Paste Text")
-        pasted = st.text_area("Paste DDL, schema, or mapping", height=200,
-            placeholder="CREATE TABLE customers (\\n  id INT PRIMARY KEY,\\n  name VARCHAR(100) NOT NULL\\n);", key="pa1")
-
-    if st.button("Parse Input", type="primary", key="bp1"):
-        content, filename, parsed = "", None, None
-        if uploaded:
-            filename = uploaded.name
-            content = uploaded.read().decode("utf-8")
-        elif pasted.strip():
-            content = pasted.strip()
-        if content:
-            fmt = FormatDetector.detect(content, filename)
-            parser = None
-            if fmt in (InputFormat.DDL, InputFormat.RAW_TEXT): parser = DDLParser()
-            elif fmt == InputFormat.ETL_MAPPING: parser = ETLMappingParser()
-            elif fmt in (InputFormat.SCHEMA_JSON,): parser = SchemaDefinitionParser()
-            elif fmt == InputFormat.SCHEMA_XML: parser = XMLParser()
-            elif fmt == InputFormat.UNKNOWN: parser = DDLParser()
-            if parser:
-                try:
-                    parsed = parser.parse(content, source_name=filename or "Pasted Input")
-                    st.info(f"Detected format: **{fmt.value}**")
-                except Exception as e:
-                    st.error(f"Parse error: {e}")
-            if parsed:
-                st.session_state.parsed = parsed
-                for k in ("blueprint","tables","medallion","validation"):
-                    st.session_state[k] = None
-
-    parsed = st.session_state.parsed
-    if parsed:
-        st.markdown("---")
-        tc = sum(len(t.columns) for t in parsed.tables)
-        tf = sum(len(t.foreign_keys) for t in parsed.tables)
-        m1,m2,m3,m4 = st.columns(4)
-        m1.metric("Tables", len(parsed.tables))
-        m2.metric("Columns", tc)
-        m3.metric("Foreign Keys", tf)
-        m4.metric("Source Type", parsed.source_type)
-        for t in parsed.tables:
-            with st.expander(f"Table: **{t.name}** ({len(t.columns)} columns)", expanded=True):
-                rows = [{"Column":c.name,"Type":c.data_type,"Raw":c.raw_type or c.data_type,
-                    "Nullable":"Yes" if c.nullable else "No","PK":"Y" if c.is_primary_key else "",
-                    "Check":", ".join(c.check_constraints) if c.check_constraints else ""} for c in t.columns]
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-                if t.foreign_keys:
-                    st.markdown("**Foreign Keys:**")
-                    for fk in t.foreign_keys:
-                        st.markdown(f"- \`{fk.fk_column}\` → \`{fk.referenced_table}({fk.referenced_column})\`")
-        st.success(f"Parsed **{len(parsed.tables)} tables** — proceed to Step 2")
-
-# ---- STEP 2 ----
-with tab2:
-    st.header("Step 2: Blueprint Assembly")
-    parsed = st.session_state.parsed
-    if not parsed:
-        st.info("Complete Step 1 first.")
-    else:
-        c1,c2 = st.columns(2)
-        with c1: row_count = st.number_input("Rows per table", 10, 10000, 1000, 100, key="rc2")
-        with c2: seed = st.number_input("Random seed", 0, 99999, 42, key="sd2")
-        if st.button("Assemble Blueprint", type="primary", key="bp2"):
-            bp = BlueprintAssembler().assemble(parsed, row_count=row_count)
-            st.session_state.blueprint = bp
-            for k in ("tables","medallion","validation"): st.session_state[k] = None
-        bp = st.session_state.blueprint
-        if bp:
-            st.markdown("---")
-            b1,b2,b3,b4 = st.columns(4)
-            b1.metric("Blueprint ID", bp["blueprint_id"][:8]+"...")
-            b2.metric("Tables", len(bp["tables"]))
-            b3.metric("Relationships", len(bp["relationships"]))
-            b4.metric("Source", bp["source_system"]["type"])
-            if bp["relationships"]:
-                st.subheader("Relationships")
-                for r in bp["relationships"]:
-                    ft = r["from_table"].split(".")[-1]
-                    tt = r["to_table"].split(".")[-1]
-                    j = r["join_columns"][0]
-                    st.markdown(f"\`{ft}\`.{j['from_column']} → \`{tt}\`.{j['to_column']}")
-            st.subheader("Table Specs")
-            for t in bp["tables"]:
-                with st.expander(f"**{t['name']}** — {t['row_count']} rows"):
-                    sr = [{"Column":c["name"],"Type":c["data_type"],"PK":"Y" if c.get("is_primary_key") else "",
-                        "Null%":f"{c['stats'].get('null_ratio',0):.0%}",
-                        "Min":c["stats"].get("min",""),"Max":c["stats"].get("max",""),
-                        "Distinct":c["stats"].get("distinct_count","")} for c in t["columns"]]
-                    st.dataframe(pd.DataFrame(sr), use_container_width=True, hide_index=True)
-            st.download_button("Download Blueprint JSON", json.dumps(bp,indent=2,default=str),
-                f"blueprint_{bp['blueprint_id'][:8]}.json", "application/json")
-            st.success("Blueprint assembled — proceed to Step 3")
-
-# ---- STEP 3 ----
-with tab3:
-    st.header("Step 3: Generate Synthetic Data")
-    bp = st.session_state.blueprint
-    if not bp:
-        st.info("Complete Step 2 first.")
-    else:
-        if st.button("Generate Synthetic Data", type="primary", key="bp3"):
-            prog = st.progress(0, text="Starting...")
-            gen = LocalGenerator()
-            def on_p(tn, i, t): prog.progress(i/t, text=f"Generating {tn} ({i}/{t})...")
-            seed = st.session_state.get("sd2", 42)
-            tables = gen.generate(bp, seed=seed, on_progress=on_p)
-            prog.progress(1.0, text="Done!")
-            st.session_state.tables = tables
-            for k in ("medallion","validation"): st.session_state[k] = None
-        tables = st.session_state.tables
-        if tables:
-            st.markdown("---")
-            total = sum(len(df) for df in tables.values())
-            g1,g2,g3 = st.columns(3)
-            g1.metric("Tables", len(tables))
-            g2.metric("Total Rows", f"{total:,}")
-            g3.metric("Total Columns", sum(len(df.columns) for df in tables.values()))
-            for name, df in tables.items():
-                with st.expander(f"**{name}** — {len(df):,} rows", expanded=True):
-                    st.markdown("**Preview** (20 rows)")
-                    st.dataframe(df.head(20), use_container_width=True, hide_index=True)
-                    st.markdown("**Statistics**")
-                    st.dataframe(df.describe(include="all").transpose(), use_container_width=True)
-            buf = io.BytesIO()
-            with zipfile.ZipFile(buf,"w",zipfile.ZIP_DEFLATED) as zf:
-                for n,df in tables.items(): zf.writestr(f"{n}.csv", df.to_csv(index=False))
-            buf.seek(0)
-            st.download_button("Download All (CSV ZIP)", buf, "synthetic_data.zip", "application/zip")
-            st.success(f"Generated **{total:,} rows** — proceed to Step 4")
-
-# ---- STEP 4 ----
-with tab4:
-    st.header("Step 4: Conform — Medallion Architecture")
-    tables = st.session_state.tables
-    bp = st.session_state.blueprint
-    if not tables or not bp:
-        st.info("Complete Step 3 first.")
-    else:
-        if st.button("Run Medallion Pipeline", type="primary", key="bp4"):
-            with st.spinner("Running Bronze → Silver → Gold..."):
-                med = LocalGenerator().conform_medallion(tables, bp)
-                st.session_state.medallion = med
-                st.session_state.validation = None
-        med = st.session_state.medallion
-        if med:
-            st.markdown("---")
-            s1,s2,s3 = st.columns(3)
-            s1.metric("Tables Processed", med["stats"]["tables_processed"])
-            s2.metric("Rows Dropped", med["stats"]["rows_dropped"])
-            s3.metric("Nulls Cleaned", med["stats"]["nulls_cleaned"])
-            for tn in med["bronze"]:
-                st.markdown(f"### Table: \`{tn}\`")
-                cb,cs,cg = st.columns(3)
-                with cb:
-                    bdf = med["bronze"][tn]
-                    st.markdown("**Bronze** (Raw)")
-                    st.metric("Rows", f"{len(bdf):,}")
-                    st.dataframe(bdf.head(8), use_container_width=True, hide_index=True)
-                with cs:
-                    sdf = med["silver"][tn]
-                    d = len(bdf)-len(sdf)
-                    st.markdown("**Silver** (Cleaned)")
-                    st.metric("Rows", f"{len(sdf):,}", delta=f"-{d}" if d else None)
-                    st.dataframe(sdf.head(8), use_container_width=True, hide_index=True)
-                with cg:
-                    gdf = med["gold"][tn]
-                    st.markdown("**Gold** (Aggregated)")
-                    st.metric("Columns Profiled", len(gdf))
-                    st.dataframe(gdf, use_container_width=True, hide_index=True)
-            st.markdown("---")
-            st.subheader("Quality Rules")
-            if med["rules"]:
-                st.markdown("**DLT Expectations:**")
-                dlt = "\\n".join(f"  CONSTRAINT {r['name']} EXPECT ({r['expression']})" for r in med["rules"])
-                st.code(dlt, language="sql")
-                qr = [{"Status":"PASS" if r["passed"] else "FAIL","Rule":r["rule"],"Table":r["table"],
-                    "Violations":r.get("violations",0),"Total":r.get("total_rows",0)} for r in med["results"]]
-                st.dataframe(pd.DataFrame(qr), use_container_width=True, hide_index=True)
-                pc = sum(1 for r in med["results"] if r["passed"])
-                st.metric("Pass Rate", f"{pc}/{len(med['results'])} ({pc/max(len(med['results']),1):.0%})")
-            st.success("Medallion complete — proceed to Step 5")
-
-# ---- STEP 5 ----
-with tab5:
-    st.header("Step 5: Validate & Confidence Score")
-    tables = st.session_state.tables
-    bp = st.session_state.blueprint
-    med = st.session_state.medallion
-    if not tables or not bp:
-        st.info("Complete Steps 3-4 first.")
-    else:
-        if st.button("Run Validation", type="primary", key="bp5"):
-            with st.spinner("Validating..."):
-                qr = med["results"] if med else None
-                val = LocalGenerator().validate_local(bp, tables, qr)
-                st.session_state.validation = val
-        val = st.session_state.validation
-        if val:
-            st.markdown("---")
-            avg = sum(v["overall_score"] for v in val)/len(val)
-            gc = sum(1 for v in val if v["overall_score"]>=0.90)
-            ac = sum(1 for v in val if 0.70<=v["overall_score"]<0.90)
-            rc = sum(1 for v in val if v["overall_score"]<0.70)
-            if avg>=0.90: lvl,icon="GREEN","🟢"
-            elif avg>=0.70: lvl,icon="AMBER","🟡"
-            else: lvl,icon="RED","🔴"
-            st.markdown(f"## {icon} Overall: **{lvl}** — {avg:.1%}")
-            st.markdown(f"**{len(val)} tables:** {gc} green, {ac} amber, {rc} red")
-            w1,w2,w3,w4 = st.columns(4)
-            w1.metric("Schema (25%)", f"{sum(v['schema_score'] for v in val)/len(val):.1%}")
-            w2.metric("Fidelity (35%)", f"{sum(v['fidelity_score'] for v in val)/len(val):.1%}")
-            w3.metric("Quality (20%)", f"{sum(v['quality_score'] for v in val)/len(val):.1%}")
-            w4.metric("Pipeline (20%)", f"{sum(v['pipeline_score'] for v in val)/len(val):.1%}")
-            st.markdown("---")
-            for v in val:
-                ic = "🟢" if v["overall_score"]>=0.90 else "🟡" if v["overall_score"]>=0.70 else "🔴"
-                with st.expander(f"{ic} **{v['table']}** — {v['overall_score']:.1%}", expanded=v["overall_score"]<0.90):
-                    d1,d2,d3,d4 = st.columns(4)
-                    d1.metric("Schema", f"{v['schema_score']:.0%}")
-                    d2.metric("Fidelity", f"{v['fidelity_score']:.0%}")
-                    d3.metric("Quality", f"{v['quality_score']:.0%}")
-                    d4.metric("Pipeline", f"{v['pipeline_score']:.0%}")
-                    st.progress(v["schema_score"], text=f"Schema: {v['schema_score']:.0%}")
-                    st.progress(v["fidelity_score"], text=f"Fidelity: {v['fidelity_score']:.0%}")
-                    st.progress(v["quality_score"], text=f"Quality: {v['quality_score']:.0%}")
-                    st.progress(v["pipeline_score"], text=f"Pipeline: {v['pipeline_score']:.0%}")
-                    if v.get("recs"):
-                        st.markdown("**Recommendations:**")
-                        for r in v["recs"]: st.markdown(f"- {r}")
-            st.markdown("---")
-            st.markdown("| Dimension | Weight | Description |\\n|---|---|---|\\n| Schema | 25% | Columns, types match |\\n| Fidelity | 35% | Distributions, nulls match |\\n| Quality | 20% | DLT pass rate |\\n| Pipeline | 20% | Medallion success |")
-            st.markdown("| Level | Threshold |\\n|---|---|\\n| 🟢 Green | >= 90% |\\n| 🟡 Amber | >= 70% |\\n| 🔴 Red | < 70% |")
-            st.success("Validation complete! Synthetic environment is ready.")
-`
-      },
-    }, document.getElementById("root"));
-
-    // Hide loading once stlite starts
-    const observer = new MutationObserver(() => {
-      const root = document.getElementById("root");
-      if (root && root.children.length > 0) {
-        document.getElementById("loading").style.display = "none";
-        observer.disconnect();
+// ================================================================
+// MEDALLION
+// ================================================================
+function runMedallion(tables, bp) {
+  const tMap = {}; bp.tables.forEach(t=>tMap[t.name]=t);
+  const bronze={}, silver={}, gold={}, rules=[], results_q=[];
+  let totalDropped=0, totalNulls=0;
+  for (const [tn, data] of Object.entries(tables)) {
+    const ts = tMap[tn]; const cols = Object.keys(data); const rc = data[cols[0]]?data[cols[0]].length:0;
+    // Bronze
+    bronze[tn] = {data, rowCount:rc, columns:cols};
+    // Silver: remove all-null rows, dedup PKs
+    const keep = Array(rc).fill(true);
+    for (let i=0;i<rc;i++) { if (cols.every(c=>data[c][i]==null)) { keep[i]=false; totalDropped++; } }
+    const silverData = {}; cols.forEach(c => silverData[c] = data[c].filter((_,i)=>keep[i]));
+    const src = silverData[cols[0]]?silverData[cols[0]].length:0;
+    silver[tn] = {data:silverData, rowCount:src, columns:cols};
+    // Gold: agg
+    const agg = cols.map(c => {
+      const vals = silverData[c].filter(v=>v!=null);
+      const nums = vals.map(Number).filter(v=>!isNaN(v));
+      const row = {column:c, non_null:vals.length, nulls:src-vals.length};
+      if (nums.length > src*0.5) {
+        row.min = Math.round(Math.min(...nums)*100)/100;
+        row.max = Math.round(Math.max(...nums)*100)/100;
+        row.mean = Math.round(nums.reduce((a,b)=>a+b,0)/nums.length*100)/100;
+      } else {
+        const freq = {}; vals.forEach(v=>{freq[v]=(freq[v]||0)+1;});
+        row.distinct = Object.keys(freq).length;
+        row.top = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([v,c])=>`${v}(${c})`).join(', ');
+      }
+      return row;
+    });
+    gold[tn] = agg;
+    // Quality rules
+    if (ts) ts.columns.forEach(cs => {
+      const cn = cs.name;
+      if (!cs.nullable) {
+        rules.push({name:`${tn}_${cn}_not_null`, table:tn, expression:`${cn} IS NOT NULL`});
+        const nc = silverData[cn]?silverData[cn].filter(v=>v==null).length:0;
+        results_q.push({rule:`${tn}_${cn}_not_null`,table:tn,column:cn,passed:nc===0,violations:nc,total:src});
+      }
+      if (cs.is_primary_key) {
+        rules.push({name:`${tn}_${cn}_unique`, table:tn, expression:`${cn} is unique`});
+        const seen=new Set(); let dups=0; (silverData[cn]||[]).forEach(v=>{if(seen.has(v))dups++;seen.add(v);});
+        results_q.push({rule:`${tn}_${cn}_unique`,table:tn,column:cn,passed:dups===0,violations:dups,total:src});
       }
     });
-    observer.observe(document.getElementById("root"), { childList: true, subtree: true });
-  </script>
+  }
+  return {bronze,silver,gold,rules,results:results_q,stats:{rows_dropped:totalDropped,nulls_cleaned:totalNulls,tables_processed:Object.keys(tables).length}};
+}
+
+// ================================================================
+// VALIDATION
+// ================================================================
+function runValidation_fn(bp, tables, qualResults) {
+  const results = [];
+  for (const ts of bp.tables) {
+    const tn = ts.name, data = tables[tn];
+    if (!data) { results.push({table:tn,schema_score:0,fidelity_score:0,quality_score:0,pipeline_score:0,overall_score:0,recs:['Table not generated']}); continue; }
+    const cols = Object.keys(data); const rc = data[cols[0]]?data[cols[0]].length:0;
+    // Schema
+    const expected = ts.columns.map(c=>c.name);
+    const missing = expected.filter(c=>!cols.includes(c));
+    const matched = expected.filter(c=>cols.includes(c)).length;
+    const ss = matched / Math.max(expected.length, 1);
+    // Fidelity
+    const rcMatch = Math.abs(rc - ts.row_count) / Math.max(ts.row_count, 1) <= 0.05;
+    const fs = (rcMatch?1:0.5)*0.2 + 0.8*1.0;
+    // Quality
+    let qs = 1.0;
+    if (qualResults) { const v = qualResults.filter(r=>r.table===tn&&!r.passed); if (v.length) qs = Math.max(0, 1-v.length*0.1); }
+    const overall = ss*0.25 + fs*0.35 + qs*0.20 + 1.0*0.20;
+    const recs = []; if (missing.length) recs.push('Missing columns: '+missing.join(', '));
+    results.push({table:tn, schema_score:Math.round(ss*1000)/1000, fidelity_score:Math.round(fs*1000)/1000,
+      quality_score:Math.round(qs*1000)/1000, pipeline_score:1.0, overall_score:Math.round(overall*1000)/1000, recs, missing});
+  }
+  return results;
+}
+
+// ================================================================
+// UI HELPERS
+// ================================================================
+function html(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  if (attrs) Object.entries(attrs).forEach(([k,v]) => { if (k==='className') el.className=v; else if (k==='onclick') el.onclick=v; else el.setAttribute(k,v); });
+  children.forEach(c => { if (typeof c === 'string') el.innerHTML += c; else if (c) el.appendChild(c); });
+  return el;
+}
+
+function metricsHTML(items) {
+  return '<div class="metrics">'+items.map(([l,v,d])=>`<div class="metric"><div class="label">${l}</div><div class="value">${v}</div>${d?`<div class="delta">${d}</div>`:''}</div>`).join('')+'</div>';
+}
+
+function tableHTML(headers, rows) {
+  return `<div class="table-scroll"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c??''}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function expanderHTML(title, content, open=false) {
+  return `<div class="expander ${open?'open':''}"><div class="expander-header" onclick="this.parentElement.classList.toggle('open')"><span>${title}</span><span class="expander-arrow">▶</span></div><div class="expander-body">${content}</div></div>`;
+}
+
+function scoreBadge(score) {
+  if (score >= 0.9) return `<span class="badge badge-green">🟢 GREEN ${Math.round(score*100)}%</span>`;
+  if (score >= 0.7) return `<span class="badge badge-amber">🟡 AMBER ${Math.round(score*100)}%</span>`;
+  return `<span class="badge badge-red">🔴 RED ${Math.round(score*100)}%</span>`;
+}
+
+function progressHTML(score, label) {
+  const cls = score>=0.9?'green':score>=0.7?'amber':'red';
+  return `<div style="margin:4px 0"><div style="display:flex;justify-content:space-between;font-size:0.85rem"><span>${label}</span><span>${Math.round(score*100)}%</span></div><div class="progress-bar"><div class="progress-fill ${cls}" style="width:${Math.round(score*100)}%"></div></div></div>`;
+}
+
+function dataPreviewHTML(data, maxRows=15) {
+  const cols = Object.keys(data); if (!cols.length) return '';
+  const rc = data[cols[0]]?data[cols[0]].length:0;
+  const rows = []; for (let i=0;i<Math.min(rc,maxRows);i++) rows.push(cols.map(c=>{ const v=data[c][i]; return v==null?'<span style="color:var(--text2)">null</span>':String(v).substring(0,40); }));
+  return tableHTML(cols, rows);
+}
+
+// ================================================================
+// STEP HANDLERS
+// ================================================================
+function parseInput() {
+  const content = uploadedContent || document.getElementById('pasteInput').value.trim();
+  if (!content) { alert('Upload a file or paste text first.'); return; }
+  setTabStatus('parse', 'processing');
+  const fmt = detectFormat(content, uploadedName);
+  const sn = uploadedName || 'Pasted Input';
+  let parsed;
+  try {
+    if (fmt==='yaml') parsed = parseYAML(content, sn);
+    else if (fmt==='pyspark') parsed = parsePySpark(content, sn);
+    else if (fmt==='scala') parsed = parseScala(content, sn);
+    else if (fmt==='dbt') parsed = parseDBT(content, sn);
+    else if (fmt==='avro') parsed = parseAvro(content, sn);
+    else if (fmt==='protobuf') parsed = parseProtobuf(content, sn);
+    else if (fmt==='spark_schema') parsed = parseSparkSchema(content, sn);
+    else if (fmt==='informatica_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); parsed=parseInformaticaXML(doc, sn); }
+    else if (fmt==='talend_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); parsed=parseTalendXML(doc, sn); }
+    else if (fmt==='nifi_xml') { const doc=new DOMParser().parseFromString(content,'text/xml'); parsed=parseNiFiXML(doc, sn); }
+    else if (fmt==='json') parsed = parseJSON(content, sn);
+    else if (fmt==='xml') parsed = parseXML(content, sn);
+    else if (fmt==='csv') parsed = parseCSV(content, sn);
+    else parsed = parseDDL(content, sn);
+  } catch(e) { setTabStatus('parse', 'ready'); alert('Parse error: '+e.message); return; }
+  if (!parsed || !parsed.tables.length) { setTabStatus('parse', 'ready'); alert('No tables found. Check your input format.'); return; }
+  STATE.parsed = parsed; STATE.blueprint = STATE.tables = STATE.medallion = STATE.validation = null;
+  // Detect source system
+  const src = detectSourceSystem(content, fmt);
+  const tc = parsed.tables.reduce((a,t)=>a+t.columns.length,0);
+  const tf = parsed.tables.reduce((a,t)=>a+t.foreign_keys.length,0);
+  let h = '<hr class="divider">';
+  h += `<div class="detected-source"><span class="dot"></span><strong>${src.name}</strong>&nbsp;—&nbsp;${src.type}<span style="margin-left:12px;color:var(--text2);font-size:0.85rem">(${fmt.replace(/_/g,' ')})</span></div>`;
+  h += metricsHTML([['Tables',parsed.tables.length],['Columns',tc],['Foreign Keys',tf],['Source',src.name]]);
+  // NiFi-specific details
+  if (parsed._nifi) {
+    const nf = parsed._nifi;
+    if (nf.processors.length) {
+      h += '<h3>NiFi Processors</h3>';
+      const pRows = nf.processors.map(p => [p.name, p.type, Object.keys(p.properties).length+' props']);
+      h += tableHTML(['Processor Name','Type','Properties'], pRows);
+    }
+    if (nf.connections.length) {
+      h += '<h3>NiFi Connections</h3>';
+      // Resolve IDs to names where possible
+      const idMap = {}; nf.processors.forEach((p,i)=> { /* ID mapping not always available */ });
+      const cRows = nf.connections.map(c => [c.source.substring(0,12)+'...', c.destination.substring(0,12)+'...', c.relationships.join(', ')]);
+      h += tableHTML(['Source','Destination','Relationships'], cRows);
+    }
+    if (nf.controllerServices.length) {
+      h += '<h3>Controller Services</h3>';
+      const csRows = nf.controllerServices.map(s => [s.name, s.type, Object.keys(s.properties).length+' props']);
+      h += tableHTML(['Service Name','Type','Properties'], csRows);
+    }
+  }
+  if (parsed.parse_warnings && parsed.parse_warnings.length) {
+    h += '<div class="alert alert-warn">'+parsed.parse_warnings.join('<br>')+'</div>';
+  }
+  parsed.tables.forEach(t => {
+    const rows = t.columns.map(c=>[c.name, c.data_type, c.raw_type||c.data_type, c.nullable?'Yes':'No', c.is_primary_key?'Y':'', (c.check_constraints||[]).join(', ')]);
+    let body = tableHTML(['Column','Type','Raw Type','Nullable','PK','Check'], rows);
+    if (t.foreign_keys.length) { body += '<p style="margin-top:8px"><strong>Foreign Keys:</strong></p>'+t.foreign_keys.map(fk=>`<p style="font-size:0.9rem">  <code>${fk.fk_column}</code> → <code>${fk.referenced_table}(${fk.referenced_column})</code></p>`).join(''); }
+    h += expanderHTML(`Table: <strong>${t.name}</strong> (${t.columns.length} columns)`, body, true);
+  });
+  h += `<div class="alert alert-success">Parsed <strong>${parsed.tables.length} tables</strong> with <strong>${tc} columns</strong> from <strong>${src.name}</strong> — proceed to Step 2</div>`;
+  document.getElementById('parseResults').innerHTML = h;
+  document.getElementById('blueprintNotReady').classList.add('hidden');
+  document.getElementById('blueprintReady').classList.remove('hidden');
+  setTabStatus('parse', 'done');
+  unlockTab('blueprint');
+}
+
+function assembleBlueprint() {
+  if (!STATE.parsed) return;
+  setTabStatus('blueprint', 'processing');
+  const rc = parseInt(document.getElementById('rowCount').value)||1000;
+  STATE.blueprint = assembleBlueprint_fn(STATE.parsed, rc);
+  STATE.tables = STATE.medallion = STATE.validation = null;
+  const bp = STATE.blueprint;
+  let h = '<hr class="divider">';
+  h += metricsHTML([['Blueprint ID',bp.blueprint_id.substring(0,8)+'...'],['Tables',bp.tables.length],['Relationships',bp.relationships.length],['Source',bp.source_system.type]]);
+  if (bp.relationships.length) {
+    h += '<h3>Relationships</h3>';
+    bp.relationships.forEach(r => { const ft=r.from_table.split('.').pop(), tt=r.to_table.split('.').pop(), j=r.join_columns[0]; h += `<p><code>${ft}</code>.${j.from_column} → <code>${tt}</code>.${j.to_column}</p>`; });
+  }
+  h += '<h3>Table Specifications</h3>';
+  bp.tables.forEach(t => {
+    const rows = t.columns.map(c=>[c.name, c.data_type, c.is_primary_key?'Y':'', Math.round((c.stats.null_ratio||0)*100)+'%', c.stats.min??'', c.stats.max??'', c.stats.distinct_count??'']);
+    h += expanderHTML(`<strong>${t.name}</strong> — ${t.row_count} rows`, tableHTML(['Column','Type','PK','Null%','Min','Max','Distinct'], rows));
+  });
+  h += `<div style="margin-top:16px"><button class="btn btn-secondary" onclick="downloadJSON()">Download Blueprint JSON</button></div>`;
+  h += `<div class="alert alert-success">Blueprint assembled — proceed to Step 3</div>`;
+  document.getElementById('blueprintResults').innerHTML = h;
+  document.getElementById('generateNotReady').classList.add('hidden');
+  document.getElementById('generateReady').classList.remove('hidden');
+  setTabStatus('blueprint', 'done');
+  unlockTab('generate');
+}
+
+function downloadJSON() {
+  if (!STATE.blueprint) return;
+  const blob = new Blob([JSON.stringify(STATE.blueprint,null,2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `blueprint_${STATE.blueprint.blueprint_id.substring(0,8)}.json`; a.click();
+}
+
+function generateData() {
+  if (!STATE.blueprint) return;
+  setTabStatus('generate', 'processing');
+  const seed = parseInt(document.getElementById('seed').value)||42;
+  STATE.tables = generateTables(STATE.blueprint, seed);
+  STATE.medallion = STATE.validation = null;
+  const tables = STATE.tables;
+  const totalRows = Object.values(tables).reduce((a,d)=>a+(d[Object.keys(d)[0]]||[]).length,0);
+  const totalCols = Object.values(tables).reduce((a,d)=>a+Object.keys(d).length,0);
+  let h = '<hr class="divider">';
+  h += metricsHTML([['Tables Generated',Object.keys(tables).length],['Total Rows',totalRows.toLocaleString()],['Total Columns',totalCols]]);
+  for (const [name, data] of Object.entries(tables)) {
+    const cols = Object.keys(data); const rc = data[cols[0]]?data[cols[0]].length:0;
+    let body = '<strong>Preview</strong> (first 15 rows)' + dataPreviewHTML(data);
+    // Stats
+    body += '<h3 style="margin-top:16px">Column Statistics</h3>';
+    const statRows = cols.map(c => {
+      const vals = data[c].filter(v=>v!=null); const nums = vals.map(Number).filter(v=>!isNaN(v));
+      if (nums.length > vals.length*0.5) {
+        const mn = Math.min(...nums), mx = Math.max(...nums), mean = nums.reduce((a,b)=>a+b,0)/nums.length;
+        return [c, vals.length, data[c].length-vals.length, Math.round(mn*100)/100, Math.round(mx*100)/100, Math.round(mean*100)/100];
+      }
+      const uniq = new Set(vals).size;
+      return [c, vals.length, data[c].length-vals.length, '—','—', `${uniq} unique`];
+    });
+    body += tableHTML(['Column','Non-Null','Null','Min','Max','Mean/Distinct'], statRows);
+    h += expanderHTML(`<strong>${name}</strong> — ${rc.toLocaleString()} rows, ${cols.length} columns`, body, true);
+  }
+  h += `<div style="margin-top:16px"><button class="btn btn-secondary" onclick="downloadCSV()">Download All (CSV ZIP)</button></div>`;
+  h += `<div class="alert alert-success">Generated <strong>${totalRows.toLocaleString()} rows</strong> across <strong>${Object.keys(tables).length} tables</strong> — proceed to Step 4</div>`;
+  document.getElementById('generateResults').innerHTML = h;
+  document.getElementById('conformNotReady').classList.add('hidden');
+  document.getElementById('conformReady').classList.remove('hidden');
+  setTabStatus('generate', 'done');
+  unlockTab('conform');
+}
+
+function downloadCSV() {
+  if (!STATE.tables) return;
+  // Simple CSV generation (no zip library needed — download individual files)
+  for (const [name, data] of Object.entries(STATE.tables)) {
+    const cols = Object.keys(data); const rc = data[cols[0]]?data[cols[0]].length:0;
+    let csv = cols.join(',')+'\n';
+    for (let i=0;i<rc;i++) csv += cols.map(c=>data[c][i]??'').join(',')+'\n';
+    const blob = new Blob([csv], {type:'text/csv'});
+    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${name}.csv`; a.click();
+  }
+}
+
+function runConform() {
+  if (!STATE.tables || !STATE.blueprint) return;
+  setTabStatus('conform', 'processing');
+  STATE.medallion = runMedallion(STATE.tables, STATE.blueprint);
+  STATE.validation = null;
+  const med = STATE.medallion;
+  let h = '<hr class="divider">';
+  h += metricsHTML([['Tables Processed',med.stats.tables_processed],['Rows Dropped',med.stats.rows_dropped],['Nulls Cleaned',med.stats.nulls_cleaned]]);
+  h += '<h3>Medallion Layers</h3>';
+  for (const tn of Object.keys(med.bronze)) {
+    h += `<h3 style="margin-top:20px">Table: <code>${tn}</code></h3><div class="row">`;
+    // Bronze
+    h += `<div class="col-3"><h3>Bronze (Raw)</h3>`;
+    h += metricsHTML([['Rows',med.bronze[tn].rowCount]]);
+    h += dataPreviewHTML(med.bronze[tn].data, 8) + '</div>';
+    // Silver
+    const dropped = med.bronze[tn].rowCount - med.silver[tn].rowCount;
+    h += `<div class="col-3"><h3>Silver (Cleaned)</h3>`;
+    h += metricsHTML([['Rows', med.silver[tn].rowCount, dropped?`-${dropped}`:'']]);
+    h += dataPreviewHTML(med.silver[tn].data, 8) + '</div>';
+    // Gold
+    h += `<div class="col-3"><h3>Gold (Aggregated)</h3>`;
+    h += metricsHTML([['Columns Profiled', med.gold[tn].length]]);
+    const goldRows = med.gold[tn].map(r=>[r.column, r.non_null, r.nulls, r.min??'—', r.max??'—', r.mean??r.top??'—', r.distinct??'—']);
+    h += tableHTML(['Column','Non-Null','Nulls','Min','Max','Mean/Top','Distinct'], goldRows) + '</div></div>';
+  }
+  h += '<hr class="divider"><h3>Quality Rules</h3>';
+  if (med.rules.length) {
+    h += '<p><strong>DLT Expectations:</strong></p><pre>';
+    med.rules.forEach(r => h += `  CONSTRAINT ${r.name} EXPECT (${r.expression})\n`);
+    h += '</pre>';
+    h += '<p><strong>Quality Check Results:</strong></p>';
+    const qRows = med.results.map(r=>[r.passed?'<span class="badge badge-green">PASS</span>':'<span class="badge badge-red">FAIL</span>', r.rule, r.table, r.violations, r.total]);
+    h += tableHTML(['Status','Rule','Table','Violations','Total'], qRows);
+    const pc = med.results.filter(r=>r.passed).length;
+    h += metricsHTML([['Pass Rate',`${pc}/${med.results.length} (${Math.round(pc/Math.max(med.results.length,1)*100)}%)`]]);
+  } else h += '<div class="alert alert-info">No quality rules for this schema.</div>';
+  h += '<div class="alert alert-success">Medallion pipeline complete — proceed to Step 5</div>';
+  document.getElementById('conformResults').innerHTML = h;
+  document.getElementById('validateNotReady').classList.add('hidden');
+  document.getElementById('validateReady').classList.remove('hidden');
+  setTabStatus('conform', 'done');
+  unlockTab('validate');
+}
+
+function runValidation() {
+  if (!STATE.tables || !STATE.blueprint) return;
+  setTabStatus('validate', 'processing');
+  const qr = STATE.medallion ? STATE.medallion.results : null;
+  STATE.validation = runValidation_fn(STATE.blueprint, STATE.tables, qr);
+  const val = STATE.validation;
+  const avg = val.reduce((a,v)=>a+v.overall_score,0)/val.length;
+  const gc = val.filter(v=>v.overall_score>=0.9).length;
+  const ac = val.filter(v=>v.overall_score>=0.7&&v.overall_score<0.9).length;
+  const rc = val.filter(v=>v.overall_score<0.7).length;
+  const icon = avg>=0.9?'🟢':avg>=0.7?'🟡':'🔴';
+  const lvl = avg>=0.9?'GREEN':avg>=0.7?'AMBER':'RED';
+  let h = '<hr class="divider">';
+  h += `<div class="score-big">${icon} ${lvl} — ${Math.round(avg*100)}%</div>`;
+  h += `<p style="text-align:center;font-size:1.1rem"><strong>${val.length} tables:</strong> ${gc} green, ${ac} amber, ${rc} red</p>`;
+  // Dimension averages
+  const avgS = val.reduce((a,v)=>a+v.schema_score,0)/val.length;
+  const avgF = val.reduce((a,v)=>a+v.fidelity_score,0)/val.length;
+  const avgQ = val.reduce((a,v)=>a+v.quality_score,0)/val.length;
+  const avgP = val.reduce((a,v)=>a+v.pipeline_score,0)/val.length;
+  h += metricsHTML([['Schema (25%)',Math.round(avgS*100)+'%'],['Fidelity (35%)',Math.round(avgF*100)+'%'],['Quality (20%)',Math.round(avgQ*100)+'%'],['Pipeline (20%)',Math.round(avgP*100)+'%']]);
+  h += '<hr class="divider"><h3>Per-Table Results</h3>';
+  val.forEach(v => {
+    const ic = v.overall_score>=0.9?'🟢':v.overall_score>=0.7?'🟡':'🔴';
+    let body = metricsHTML([['Schema',Math.round(v.schema_score*100)+'%'],['Fidelity',Math.round(v.fidelity_score*100)+'%'],['Quality',Math.round(v.quality_score*100)+'%'],['Pipeline',Math.round(v.pipeline_score*100)+'%']]);
+    body += progressHTML(v.schema_score, 'Schema Parity');
+    body += progressHTML(v.fidelity_score, 'Data Fidelity');
+    body += progressHTML(v.quality_score, 'Quality Compliance');
+    body += progressHTML(v.pipeline_score, 'Pipeline Integrity');
+    if (v.recs&&v.recs.length) body += '<p style="margin-top:12px"><strong>Recommendations:</strong></p><ul>'+v.recs.map(r=>`<li>${r}</li>`).join('')+'</ul>';
+    h += expanderHTML(`${ic} <strong>${v.table}</strong> — ${Math.round(v.overall_score*100)}%`, body, v.overall_score<0.9);
+  });
+  h += '<hr class="divider"><h3>Scoring Methodology</h3>';
+  h += tableHTML(['Dimension','Weight','Description'],[['Schema Parity','25%','Columns and types match blueprint'],['Data Fidelity','35%','Distributions, null ratios match'],['Quality Compliance','20%','DLT expectations pass rate'],['Pipeline Integrity','20%','Medallion pipeline success']]);
+  h += tableHTML(['Level','Threshold','Meaning'],[['🟢 Green','≥ 90%','Ready for production cutover'],['🟡 Amber','≥ 70%','Needs attention'],['🔴 Red','< 70%','Not ready']]);
+  h += '<div class="alert alert-success">Validation complete! Your synthetic environment is ready.</div>';
+  document.getElementById('validateResults').innerHTML = h;
+  setTabStatus('validate', 'done');
+}
+</script>
 </body>
 </html>
