@@ -1271,7 +1271,7 @@ function parseNiFiXML(doc, sourceName) {
       const tblRefs = v.match(/(?:FROM|JOIN|INTO|TABLE|UPDATE)\s+(?:\$\{[^}]+\}|[\w.]+)/gi);
       if (tblRefs) tblRefs.forEach(m => {
         const tn = m.replace(/^(FROM|JOIN|INTO|TABLE|UPDATE)\s+/i,'').trim();
-        if (tn && !tn.startsWith('(') && tn.length > 2 && !/^(select|where|set|and|or|as|on)$/i.test(tn)) sqlTables.add(tn);
+        if (tn && !tn.startsWith('(') && tn.length > 2 && !/^(select|where|set|and|or|as|on|in|is|not|null|case|when|then|else|end|group|order|by|having|limit|offset|union|all|exists|between|like|true|false|values|into|for|if|with|from|table|now|production|varchar|int|bigint|text|date|timestamp|decimal|boolean|float|double)$/i.test(tn)) sqlTables.add(tn);
       });
     });
     // Extract table names from specific NiFi properties
