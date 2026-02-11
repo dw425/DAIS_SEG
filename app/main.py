@@ -23,6 +23,14 @@ from dais_seg.config import SEGConfig, set_config
 from dais_seg.genie.interface import GenieInterface, GenieResponse, IntentType
 from dais_seg.ingest import EnvParser, SourceCredentials, ConnectionManager
 from dais_seg.pipeline import PipelineRunner, PipelineResult, PipelineStatus
+from dais_seg.source_loader import (
+    BlueprintAssembler,
+    DDLParser,
+    ETLMappingParser,
+    FormatDetector,
+    InputFormat,
+    SchemaDefinitionParser,
+)
 from dais_seg.workspace_manager.lifecycle_manager import LifecycleManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -76,6 +84,10 @@ if "credentials" not in st.session_state:
     st.session_state.credentials = None
 if "pipeline_results" not in st.session_state:
     st.session_state.pipeline_results = []
+if "loader_parsed" not in st.session_state:
+    st.session_state.loader_parsed = None
+if "loader_blueprint" not in st.session_state:
+    st.session_state.loader_blueprint = None
 
 
 # --------------------------------------------------------------------------- #
@@ -379,9 +391,235 @@ def handle_unknown(request) -> GenieResponse:
 #  Tabs
 # --------------------------------------------------------------------------- #
 
-tab_genie, tab_dashboard, tab_pipeline, tab_validation = st.tabs(
-    ["Genie Interface", "Dashboard", "Pipeline", "Validation"]
+tab_loader, tab_genie, tab_dashboard, tab_pipeline, tab_validation = st.tabs(
+    ["Source Loader", "Genie Interface", "Dashboard", "Pipeline", "Validation"]
 )
+
+
+# ---- Tab 0: Source Loader ---- #
+with tab_loader:
+    st.header("Universal Source Loader")
+    st.caption(
+        "Upload DDL, ETL mappings, schema files, or paste SQL to generate synthetic environments"
+    )
+
+    # Input method: upload vs paste
+    loader_col1, loader_col2 = st.columns(2)
+
+    with loader_col1:
+        st.subheader("Upload File")
+        uploaded_file = st.file_uploader(
+            "Choose a file",
+            type=["sql", "ddl", "csv", "tsv", "xlsx", "xls", "json", "yaml", "yml"],
+            help="Supported: DDL (.sql), ETL mappings (.csv/.xlsx), JSON/YAML schemas",
+            key="loader_upload",
+        )
+
+    with loader_col2:
+        st.subheader("Paste Text")
+        pasted_text = st.text_area(
+            "Paste DDL, schema, or mapping text",
+            height=200,
+            placeholder="CREATE TABLE customers (\n  id INT PRIMARY KEY,\n  name VARCHAR(100) NOT NULL,\n  ...\n);",
+            key="loader_paste",
+        )
+
+    # Parse button
+    if st.button("Parse Input", type="primary", key="loader_parse"):
+        content = ""
+        filename = None
+
+        if uploaded_file:
+            filename = uploaded_file.name
+            if filename.lower().endswith((".xlsx", ".xls")):
+                # Excel: read bytes and use ETL parser directly
+                file_bytes = uploaded_file.read()
+                try:
+                    parser = ETLMappingParser()
+                    parsed = parser.parse_excel(file_bytes, source_name=filename)
+                    st.session_state.loader_parsed = parsed
+                    st.session_state.loader_blueprint = None
+                    st.success(f"Parsed Excel: {len(parsed.tables)} tables from **{filename}**")
+                except Exception as e:
+                    st.error(f"Excel parse error: {e}")
+                content = ""  # skip text-based parsing
+            else:
+                content = uploaded_file.read().decode("utf-8")
+        elif pasted_text.strip():
+            content = pasted_text.strip()
+        else:
+            st.warning("Upload a file or paste text first.")
+            content = ""
+
+        if content:
+            # Auto-detect format
+            fmt = FormatDetector.detect(content, filename)
+            st.info(f"Detected format: **{fmt.value}**" + (f" (from `{filename}`)" if filename else ""))
+
+            # Select parser
+            parser = None
+            if fmt in (InputFormat.DDL, InputFormat.RAW_TEXT):
+                parser = DDLParser()
+            elif fmt == InputFormat.ETL_MAPPING:
+                parser = ETLMappingParser()
+            elif fmt in (InputFormat.SCHEMA_JSON, InputFormat.SCHEMA_YAML):
+                parser = SchemaDefinitionParser()
+            elif fmt == InputFormat.ENV_FILE:
+                st.info("This looks like a .env credentials file. Use the **sidebar** to load source credentials instead.")
+            elif fmt == InputFormat.UNKNOWN:
+                st.warning("Could not detect format. Trying DDL parser as fallback...")
+                parser = DDLParser()
+
+            if parser:
+                try:
+                    kwargs = {"source_name": filename or "Pasted Input"}
+                    if hasattr(parser, "can_parse") and not parser.can_parse(content):
+                        st.warning("Parser cannot recognize this content. Results may be incomplete.")
+                    parsed = parser.parse(content, **kwargs)
+                    st.session_state.loader_parsed = parsed
+                    st.session_state.loader_blueprint = None
+
+                    if parsed.parse_warnings:
+                        for w in parsed.parse_warnings:
+                            st.warning(w)
+                except Exception as e:
+                    st.error(f"Parse error: {e}")
+
+    # Show parsed results
+    parsed = st.session_state.loader_parsed
+    if parsed:
+        st.markdown("---")
+        total_cols = sum(len(t.columns) for t in parsed.tables)
+        total_fks = sum(len(t.foreign_keys) for t in parsed.tables)
+        st.markdown(
+            f"### Parsed: **{len(parsed.tables)} tables** | "
+            f"**{total_cols} columns** | **{total_fks} foreign keys**"
+        )
+        st.markdown(f"Source: **{parsed.source_name}** ({parsed.source_type})")
+
+        for table in parsed.tables:
+            with st.expander(f"Table: **{table.name}** ({len(table.columns)} columns)", expanded=False):
+                # Column details as a table
+                col_data = []
+                for c in table.columns:
+                    col_data.append({
+                        "Column": c.name,
+                        "Type": c.data_type,
+                        "Raw Type": c.raw_type or c.data_type,
+                        "Nullable": "Yes" if c.nullable else "No",
+                        "PK": "Y" if c.is_primary_key else "",
+                        "Check": ", ".join(c.check_constraints) if c.check_constraints else "",
+                    })
+                st.table(col_data)
+
+                if table.foreign_keys:
+                    st.markdown("**Foreign Keys:**")
+                    for fk in table.foreign_keys:
+                        st.markdown(f"- `{fk.fk_column}` → `{fk.referenced_table}({fk.referenced_column})`")
+
+        # Configuration and generate
+        st.markdown("---")
+        st.subheader("Configuration")
+
+        cfg_col1, cfg_col2, cfg_col3 = st.columns(3)
+        with cfg_col1:
+            loader_row_count = st.number_input("Rows per table", min_value=10, max_value=100000, value=1000, step=100)
+        with cfg_col2:
+            loader_scale = st.slider("Scale factor", 0.1, 2.0, 1.0, 0.1, key="loader_scale")
+        with cfg_col3:
+            loader_workspace = st.text_input("Workspace name", value="loader_default", key="loader_ws")
+
+        gen_col1, gen_col2 = st.columns(2)
+
+        with gen_col1:
+            if st.button("Assemble Blueprint", type="primary", key="loader_assemble"):
+                assembler = BlueprintAssembler()
+                blueprint = assembler.assemble(parsed, row_count=loader_row_count)
+                st.session_state.loader_blueprint = blueprint
+                st.success(
+                    f"Blueprint assembled: `{blueprint['blueprint_id'][:8]}...` — "
+                    f"{len(blueprint['tables'])} tables, "
+                    f"{len(blueprint['relationships'])} relationships"
+                )
+
+        with gen_col2:
+            if st.button("Download Blueprint JSON", key="loader_download", disabled=not st.session_state.loader_blueprint):
+                pass  # download handled below
+
+        # Show blueprint and download
+        bp = st.session_state.loader_blueprint
+        if bp:
+            bp_json = json.dumps(bp, indent=2, default=str)
+
+            st.download_button(
+                label="Save Blueprint JSON",
+                data=bp_json,
+                file_name=f"blueprint_{bp['blueprint_id'][:8]}.json",
+                mime="application/json",
+                key="loader_download_btn",
+            )
+
+            with st.expander("Blueprint JSON preview"):
+                st.json(bp)
+
+            # Generate on Databricks
+            st.markdown("---")
+            st.subheader("Generate Synthetic Environment on Databricks")
+
+            if not config.cluster_id:
+                st.warning(
+                    "Databricks cluster not configured (SEG_CLUSTER_ID not set). "
+                    "You can download the blueprint JSON above and use it with the Databricks notebooks directly."
+                )
+            else:
+                if st.button("Generate Synthetic Environment", type="primary", key="loader_generate"):
+                    status_container = st.status("Running Source Loader pipeline...", expanded=True)
+                    progress = st.progress(0)
+
+                    stage_messages = {
+                        PipelineStatus.PROFILING: ("Saving blueprint to Delta...", 0.15),
+                        PipelineStatus.GENERATING: ("Generating synthetic Delta Tables...", 0.40),
+                        PipelineStatus.CONFORMING: ("Running medallion pipeline...", 0.65),
+                        PipelineStatus.VALIDATING: ("Validating synthetic environment...", 0.85),
+                        PipelineStatus.COMPLETE: ("Pipeline complete!", 1.0),
+                    }
+
+                    def on_loader_status(status: PipelineStatus, message: str):
+                        msg, pct = stage_messages.get(status, (message, 0))
+                        progress.progress(pct)
+                        status_container.update(label=msg)
+
+                    result = pipeline_runner.run_from_blueprint(
+                        blueprint=bp,
+                        scale_factor=loader_scale,
+                        workspace_name=loader_workspace,
+                        on_status_change=on_loader_status,
+                    )
+
+                    st.session_state.pipeline_results.append(result)
+
+                    if result.status == PipelineStatus.COMPLETE:
+                        progress.progress(1.0)
+                        status_container.update(label="Pipeline complete!", state="complete")
+                        st.balloons()
+
+                        res_c1, res_c2, res_c3 = st.columns(3)
+                        level_icon = {"green": "🟢", "amber": "🟡", "red": "🔴"}.get(result.confidence_level, "⚪")
+                        res_c1.metric("Confidence", f"{level_icon} {result.confidence_level.upper()}")
+                        res_c2.metric("Tables", result.tables_generated)
+                        res_c3.metric("Duration", f"{result.total_duration_seconds:.0f}s")
+
+                        st.markdown(f"**Blueprint ID:** `{result.blueprint_id}`")
+                        st.markdown(f"**Workspace:** `{result.workspace_id}`")
+
+                        with st.expander("Full pipeline details"):
+                            st.json(result.to_dict())
+                    else:
+                        status_container.update(label=f"Pipeline failed: {result.error}", state="error")
+                        st.error(f"Pipeline failed: {result.error}")
+                        with st.expander("Stage details"):
+                            st.json(result.to_dict())
+
 
 # ---- Tab 1: Genie Interface (Chat) ---- #
 with tab_genie:

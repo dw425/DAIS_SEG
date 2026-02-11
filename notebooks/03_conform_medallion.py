@@ -110,3 +110,14 @@ print(f"   Silver: {len(result.silver.tables)} tables in {catalog}.{result.silve
 print(f"   Gold:   {len(result.gold.tables)} tables in {catalog}.{result.gold.schema}")
 print(f"   Quality violations: {len(violations)}")
 print(f"\nNext step: Run notebook 04_validate_workspace")
+
+# COMMAND ----------
+
+import json
+dbutils.notebook.exit(json.dumps({
+    "tables_processed": result.tables_processed,
+    "bronze_schema": result.bronze.schema,
+    "silver_schema": result.silver.schema,
+    "gold_schema": result.gold.schema,
+    "quality_violations": len(violations),
+}))

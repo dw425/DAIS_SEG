@@ -260,6 +260,122 @@ class PipelineRunner:
 
         return result
 
+    def run_from_blueprint(
+        self,
+        blueprint: dict,
+        scale_factor: float = 1.0,
+        workspace_name: str = "loader_default",
+        on_status_change: Optional[Callable[[PipelineStatus, str], None]] = None,
+    ) -> PipelineResult:
+        """Execute the pipeline from a pre-assembled blueprint — no live DB needed.
+
+        Skips Connect + Profile stages entirely. Runs:
+          Save Blueprint → Generate → Conform → Validate
+
+        Args:
+            blueprint: Blueprint dict (from BlueprintAssembler.assemble()).
+            scale_factor: Data scale multiplier (1.0 = use row_count as-is).
+            workspace_name: Name for the synthetic workspace.
+            on_status_change: Optional callback for status updates.
+
+        Returns:
+            PipelineResult with full execution details.
+        """
+        start_time = time.time()
+        result = PipelineResult(status=PipelineStatus.PENDING)
+        result.blueprint_id = blueprint.get("blueprint_id", "")
+
+        def update_status(status: PipelineStatus, message: str = ""):
+            result.status = status
+            logger.info(f"Pipeline [{status.value}]: {message}")
+            if on_status_change:
+                on_status_change(status, message)
+
+        try:
+            # ---- Stage 0: Save Blueprint to Delta ---- #
+            update_status(PipelineStatus.PROFILING, "Saving blueprint to Delta Table")
+            stage_start = time.time()
+
+            blueprint_json = json.dumps(blueprint)
+            save_output = self._run_notebook(
+                "00_save_blueprint",
+                {
+                    "blueprint_json": blueprint_json,
+                    "catalog": self.config.catalog,
+                    "schema": self.config.schema,
+                },
+            )
+            result.stages.append(save_output)
+            if save_output.status == "failed":
+                raise RuntimeError(f"Blueprint save failed: {save_output.error}")
+
+            # ---- Stage 3: Generate Synthetic Environment ---- #
+            update_status(PipelineStatus.GENERATING, "Generating synthetic Delta Tables")
+
+            target_schema = f"seg_{workspace_name}"
+            generate_output = self._run_notebook(
+                "02_generate_synthetic",
+                {
+                    "blueprint_id": result.blueprint_id,
+                    "catalog": self.config.catalog,
+                    "target_schema": target_schema,
+                    "scale_factor": str(scale_factor),
+                },
+            )
+            result.stages.append(generate_output)
+            if generate_output.status == "failed":
+                raise RuntimeError(f"Generation failed: {generate_output.error}")
+
+            result.workspace_id = f"{self.config.catalog}.{target_schema}"
+            result.tables_generated = generate_output.output.get("tables_generated", 0)
+
+            # ---- Stage 4: Conform to Medallion ---- #
+            update_status(PipelineStatus.CONFORMING, "Running Bronze → Silver → Gold pipeline")
+
+            conform_output = self._run_notebook(
+                "03_conform_medallion",
+                {
+                    "blueprint_id": result.blueprint_id,
+                    "catalog": self.config.catalog,
+                    "source_schema": target_schema,
+                },
+            )
+            result.stages.append(conform_output)
+            if conform_output.status == "failed":
+                raise RuntimeError(f"Conformance failed: {conform_output.error}")
+
+            # ---- Stage 5: Validate ---- #
+            update_status(PipelineStatus.VALIDATING, "Running validation and confidence scoring")
+
+            validate_output = self._run_notebook(
+                "04_validate_workspace",
+                {
+                    "blueprint_id": result.blueprint_id,
+                    "workspace_id": result.workspace_id,
+                    "catalog": self.config.catalog,
+                    "gold_schema": self.config.gold_schema,
+                    "scale_factor": str(scale_factor),
+                },
+            )
+            result.stages.append(validate_output)
+            if validate_output.status == "failed":
+                raise RuntimeError(f"Validation failed: {validate_output.error}")
+
+            result.confidence_score = validate_output.output.get("score")
+            result.confidence_level = validate_output.output.get("level", "")
+
+            # ---- Complete ---- #
+            result.total_duration_seconds = time.time() - start_time
+            update_status(PipelineStatus.COMPLETE, f"Done in {result.total_duration_seconds:.0f}s")
+
+        except Exception as e:
+            result.status = PipelineStatus.FAILED
+            result.error = str(e)
+            result.total_duration_seconds = time.time() - start_time
+            logger.error(f"Pipeline (from blueprint) failed: {e}")
+
+        return result
+
     def run_single_stage(
         self, stage: str, parameters: dict[str, str]
     ) -> StageResult:
@@ -269,6 +385,7 @@ class PipelineRunner:
         just one step (e.g., 'profile the oracle database').
         """
         notebook_map = {
+            "save_blueprint": "00_save_blueprint",
             "profile": "01_profile_source",
             "generate": "02_generate_synthetic",
             "conform": "03_conform_medallion",
