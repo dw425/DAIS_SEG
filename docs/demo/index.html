@@ -20,9 +20,9 @@ h1 { font-size: 2rem; margin-bottom: 4px; }
 h2 { font-size: 1.4rem; margin: 24px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
 h3 { font-size: 1.1rem; margin: 16px 0 8px; }
 .caption { color: var(--text2); font-size: 0.9rem; margin-bottom: 20px; }
-.tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 24px; overflow-x: auto; }
-.tab { padding: 10px 20px; cursor: pointer; color: var(--text2); border-bottom: 2px solid transparent;
-  margin-bottom: -2px; white-space: nowrap; font-size: 0.95rem; transition: all 0.2s; }
+.tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; margin-bottom: 24px; }
+.tab { padding: 10px 8px; cursor: pointer; color: var(--text2); border-bottom: 2px solid var(--border);
+  white-space: nowrap; font-size: 0.88rem; transition: all 0.2s; text-align: center; }
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
 .panel { display: none; } .panel.active { display: block; }
