@@ -196,6 +196,46 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 .sidebar-clear-btn { font-size: 0.65rem; color: var(--primary); cursor: pointer; margin-top: 6px;
   display: none; text-align: center; padding: 4px; border-radius: 4px; }
 .sidebar-clear-btn:hover { background: rgba(255,75,75,0.1); }
+/* Notebook preview */
+.notebook-preview { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  max-height: 600px; overflow-y: auto; margin: 12px 0; }
+.notebook-cell { padding: 10px 16px; border-bottom: 1px solid var(--border); font-family: 'SF Mono',Monaco,Consolas,monospace;
+  font-size: 0.78rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.notebook-cell:last-child { border-bottom: none; }
+.notebook-cell.cell-md { background: rgba(59,130,246,0.06); color: #93c5fd; }
+.notebook-cell.cell-sql { background: rgba(168,85,247,0.06); }
+.notebook-cell.cell-code { background: var(--surface); }
+.notebook-cell .cell-label { display: inline-block; padding: 1px 8px; border-radius: 3px;
+  font-size: 0.65rem; font-weight: 700; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.cell-label.lb-source { background: #1d3557; color: #93c5fd; }
+.cell-label.lb-transform { background: #2d1b4e; color: #c4b5fd; }
+.cell-label.lb-sink { background: #14532d; color: #86efac; }
+.cell-label.lb-route { background: #422006; color: #fde68a; }
+.cell-label.lb-process { background: #1e1b4b; color: #a5b4fc; }
+.cell-label.lb-utility { background: #1f2937; color: #9ca3af; }
+.cell-label.lb-config { background: #0c4a6e; color: #7dd3fc; }
+.cell-label.lb-manual { background: #450a0a; color: #fca5a5; }
+/* Gap cards */
+.gap-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px; margin: 6px 0; border-left: 3px solid var(--red); }
+.gap-card .gap-title { font-weight: 600; font-size: 0.85rem; margin-bottom: 2px; }
+.gap-card .gap-meta { color: var(--text2); font-size: 0.75rem; }
+.gap-card .gap-rec { color: var(--amber); font-size: 0.8rem; margin-top: 4px; }
+/* Coverage ring */
+.coverage-ring { width: 120px; height: 120px; border-radius: 50%; position: relative;
+  display: inline-flex; align-items: center; justify-content: center; }
+.coverage-ring .ring-text { font-size: 1.6rem; font-weight: 800; z-index: 1; }
+/* Mapping table */
+.mapping-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin: 12px 0; }
+.mapping-table th { text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--border);
+  font-size: 0.7rem; text-transform: uppercase; color: var(--text2); }
+.mapping-table td { padding: 5px 10px; border-bottom: 1px solid var(--border); }
+.mapping-table tr.unmapped { opacity: 0.5; }
+.conf-badge { padding: 1px 6px; border-radius: 3px; font-size: 0.65rem; font-weight: 700; }
+.conf-high { background: rgba(33,195,84,0.2); color: #86efac; }
+.conf-med { background: rgba(234,179,8,0.2); color: #fde68a; }
+.conf-low { background: rgba(239,68,68,0.2); color: #fca5a5; }
+.conf-none { background: rgba(128,132,149,0.15); color: #9ca3af; }
 </style>
 </head>
 <body>
@@ -209,6 +249,8 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
     <div class="tab locked" data-tab="generate">3. Generate<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
     <div class="tab locked" data-tab="conform">4. Conform<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
     <div class="tab locked" data-tab="validate">5. Validate<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="notebook">6. Notebook<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="report">7. Report<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
   </div>
 
   <!-- STEP 1: PARSE -->
@@ -328,13 +370,36 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
       <div id="validateResults"></div>
     </div>
   </div>
+  <!-- STEP 6: NOTEBOOK -->
+  <div class="panel" id="panel-notebook">
+    <h2>Step 6: NiFi &rarr; Databricks Notebook</h2>
+    <div id="notebookNotReady" class="alert alert-info">Complete validation first with a NiFi flow.</div>
+    <div id="notebookNotNifi" class="alert alert-info hidden">This step is only available for NiFi flow inputs.</div>
+    <div id="notebookReady" class="hidden">
+      <p style="color:var(--text2);font-size:0.9rem;margin-bottom:12px">
+        Reverse-engineer your NiFi flow into a Databricks Python notebook with PySpark equivalents,
+        Unity Catalog definitions, and a Databricks workflow.
+      </p>
+      <button class="btn btn-primary" onclick="generateNotebook()">Generate Notebook</button>
+      <div id="notebookResults"></div>
+    </div>
+  </div>
+  <!-- STEP 7: MIGRATION REPORT -->
+  <div class="panel" id="panel-report">
+    <h2>Step 7: Migration Report</h2>
+    <div id="reportNotReady" class="alert alert-info">Generate the notebook first (Step 6).</div>
+    <div id="reportReady" class="hidden">
+      <button class="btn btn-primary" onclick="generateReport()">Generate Report</button>
+      <div id="reportResults"></div>
+    </div>
+  </div>
 </div>
 
 <script>
 // ================================================================
 // STATE
 // ================================================================
-let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null };
+let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null, notebook: null, migrationReport: null };
 
 // ================================================================
 // TAB NAVIGATION
@@ -1647,6 +1712,229 @@ const ROLE_TIER_LABELS = {
   transform:'TRANSFORMS — Conversion & Enrichment', process:'PROCESSING — Execution & Lookup',
   sink:'SINKS — Output & Delivery', utility:'UTILITY — Logging & Control'
 };
+
+// ── NiFi → Databricks processor mapping ──
+const NIFI_DATABRICKS_MAP = {
+  // SOURCES
+  GetFile:{cat:'Auto Loader',tpl:'df_{v} = (spark.readStream\n  .format("cloudFiles")\n  .option("cloudFiles.format", "{format}")\n  .option("cloudFiles.schemaLocation", "/mnt/schema/{v}")\n  .load("/Volumes/{catalog}/{schema}/{path}"))',desc:'Auto Loader from Databricks Volumes',notes:'Configure volume mount path',imp:[],conf:0.85},
+  GetHTTP:{cat:'Python Requests',tpl:'import requests\n_resp = requests.get("{url}")\ndf_{v} = spark.createDataFrame([_resp.json()])',desc:'REST API ingestion',notes:'Wrap in UDF for large-scale; add error handling',imp:['import requests'],conf:0.70},
+  ConsumeKafka:{cat:'Structured Streaming',tpl:'df_{v} = (spark.readStream\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("subscribe", "{topic}")\n  .load())',desc:'Kafka streaming source',notes:'Configure security protocol if needed',imp:[],conf:0.90},
+  ConsumeKafka_2_6:{cat:'Structured Streaming',tpl:'df_{v} = (spark.readStream\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("subscribe", "{topic}")\n  .load())',desc:'Kafka streaming source',notes:'Same as ConsumeKafka',imp:[],conf:0.90},
+  ConsumeKafkaRecord_2_6:{cat:'Structured Streaming',tpl:'df_{v} = (spark.readStream\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("subscribe", "{topic}")\n  .load()\n  .select(from_json(col("value").cast("string"), schema).alias("data"))\n  .select("data.*"))',desc:'Kafka record streaming',notes:'Define schema for deserialization',imp:[],conf:0.85},
+  QueryDatabaseTable:{cat:'JDBC Source',tpl:'df_{v} = (spark.read\n  .format("jdbc")\n  .option("url", "{url}")\n  .option("dbtable", "{table}")\n  .option("driver", "{driver}")\n  .load())',desc:'JDBC database read',notes:'Store credentials in Databricks secret scope',imp:[],conf:0.90},
+  QueryDatabaseTableRecord:{cat:'JDBC Source',tpl:'df_{v} = (spark.read\n  .format("jdbc")\n  .option("url", "{url}")\n  .option("dbtable", "{table}")\n  .load())',desc:'JDBC database read with record',notes:'Same as QueryDatabaseTable',imp:[],conf:0.90},
+  ListenHTTP:{cat:'Manual',tpl:'# TODO: No direct equivalent for ListenHTTP\n# Consider: Databricks Model Serving, REST API, or webhook trigger',desc:'HTTP listener endpoint',notes:'No native HTTP server in Databricks — use Model Serving or external trigger',imp:[],conf:0.10},
+  GetSFTP:{cat:'External Storage',tpl:'# Copy from SFTP to Volumes\ndbutils.fs.cp("sftp://{host}/{path}", "/Volumes/{catalog}/{schema}/landing/")\ndf_{v} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/landing/")',desc:'SFTP file retrieval',notes:'Requires SFTP mount or external transfer utility',imp:[],conf:0.50},
+  GetFTP:{cat:'External Storage',tpl:'# Copy from FTP (use external transfer)\ndf_{v} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/landing/")',desc:'FTP file retrieval',notes:'No native FTP; use external transfer tool',imp:[],conf:0.40},
+  GenerateFlowFile:{cat:'Test Data',tpl:'df_{v} = spark.range({count}).toDF("id")\n# Add test columns as needed',desc:'Test data generator',notes:'Replace with actual test data generation',imp:[],conf:0.60},
+  ListS3:{cat:'Cloud Storage',tpl:'files = dbutils.fs.ls("s3://{bucket}/{prefix}")\ndf_{v} = spark.createDataFrame(files)',desc:'List S3 objects',notes:'Use Unity Catalog external locations',imp:[],conf:0.85},
+  FetchS3Object:{cat:'Cloud Storage',tpl:'df_{v} = spark.read.format("{format}").load("s3://{bucket}/{key}")',desc:'Read S3 object',notes:'Configure external location in Unity Catalog',imp:[],conf:0.85},
+  GetS3Object:{cat:'Cloud Storage',tpl:'df_{v} = spark.read.format("{format}").load("s3://{bucket}/{key}")',desc:'Read S3 object',notes:'Same as FetchS3Object',imp:[],conf:0.85},
+  TailFile:{cat:'Auto Loader',tpl:'df_{v} = (spark.readStream\n  .format("cloudFiles")\n  .option("cloudFiles.format", "text")\n  .load("/Volumes/{catalog}/{schema}/{path}"))',desc:'File tail via Auto Loader',notes:'Streaming mode handles new files automatically',imp:[],conf:0.80},
+  ListFile:{cat:'Cloud Storage',tpl:'files = dbutils.fs.ls("/Volumes/{catalog}/{schema}/{path}")\ndf_{v} = spark.createDataFrame(files)',desc:'List files in directory',notes:'Use Volumes or external location',imp:[],conf:0.80},
+  GetMongo:{cat:'MongoDB Connector',tpl:'df_{v} = (spark.read\n  .format("mongodb")\n  .option("connection.uri", "{uri}")\n  .option("database", "{database}")\n  .option("collection", "{collection}")\n  .load())',desc:'MongoDB read',notes:'Install mongodb-spark-connector library',imp:[],conf:0.75},
+  GetElasticsearch:{cat:'ES Connector',tpl:'df_{v} = (spark.read\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .option("es.resource", "{index}")\n  .load())',desc:'Elasticsearch read',notes:'Install elasticsearch-spark library',imp:[],conf:0.65},
+  // TRANSFORMS
+  ConvertRecord:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.selectExpr("*")  # Convert record format\n# Adjust column types/names as needed',desc:'Record format conversion',notes:'Spark handles format conversion natively',imp:[],conf:0.80},
+  ConvertJSONToSQL:{cat:'Spark SQL',tpl:'df_{in}.createOrReplaceTempView("tmp_{v}")\ndf_{v} = spark.sql("SELECT * FROM tmp_{v}")',desc:'JSON to SQL conversion',notes:'Parse JSON and query with SQL',imp:[],conf:0.75},
+  SplitRecord:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("item", explode(col("{array_field}")))\n  .select("item.*")',desc:'Split records by array field',notes:'Identify the array field to explode',imp:[],conf:0.75},
+  MergeRecord:{cat:'DataFrame API',tpl:'df_{v} = df_{in1}.unionByName(df_{in2}, allowMissingColumns=True)',desc:'Merge/union records',notes:'Ensure compatible schemas',imp:[],conf:0.85},
+  MergeContent:{cat:'DataFrame API',tpl:'df_{v} = df_{in1}.unionByName(df_{in2}, allowMissingColumns=True)',desc:'Merge content streams',notes:'Same as MergeRecord for DataFrames',imp:[],conf:0.80},
+  ReplaceText:{cat:'DataFrame API',tpl:'from pyspark.sql.functions import regexp_replace\ndf_{v} = df_{in}.withColumn("{col}", regexp_replace(col("{col}"), "{pattern}", "{replacement}"))',desc:'Regex text replacement',notes:'Apply to specific text columns',imp:[],conf:0.85},
+  UpdateAttribute:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("{attr}", lit("{value}"))',desc:'Set/update attributes as columns',notes:'Map NiFi attributes to DataFrame columns',imp:[],conf:0.80},
+  JoltTransformJSON:{cat:'JSON Processing',tpl:'from pyspark.sql.functions import from_json, to_json, col\n# Define target schema\nschema = "..."\ndf_{v} = df_{in}.withColumn("parsed", from_json(col("value"), schema))\n  .select("parsed.*")',desc:'Complex JSON transformation',notes:'Jolt specs must be manually translated to Spark JSON ops',imp:[],conf:0.50},
+  EvaluateJsonPath:{cat:'DataFrame API',tpl:'from pyspark.sql.functions import get_json_object\ndf_{v} = df_{in}.withColumn("{field}", get_json_object(col("value"), "$.{path}"))',desc:'Extract JSON paths',notes:'Map each JsonPath expression to get_json_object',imp:[],conf:0.80},
+  ExtractText:{cat:'DataFrame API',tpl:'from pyspark.sql.functions import regexp_extract\ndf_{v} = df_{in}.withColumn("{field}", regexp_extract(col("{col}"), "{pattern}", {group}))',desc:'Regex text extraction',notes:'Translate NiFi regex groups to Spark',imp:[],conf:0.80},
+  SplitJson:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("items", explode(from_json(col("value"), ArrayType(StringType()))))',desc:'Split JSON array',notes:'Define element schema',imp:[],conf:0.75},
+  SplitText:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("lines", explode(split(col("value"), "\\\\n")))',desc:'Split text by delimiter',notes:'Adjust delimiter as needed',imp:[],conf:0.80},
+  CompressContent:{cat:'Native',tpl:'# Delta Lake handles compression natively (snappy/zstd)\n# No explicit compression step needed',desc:'Compression',notes:'Delta Lake auto-compresses',imp:[],conf:0.95},
+  EncryptContent:{cat:'Security',tpl:'# Use Databricks column-level encryption\n# Or configure encryption at storage level\ndf_{v} = df_{in}  # TODO: Add encryption logic',desc:'Encryption',notes:'Use workspace-level encryption or column masking',imp:[],conf:0.40},
+  HashContent:{cat:'DataFrame API',tpl:'from pyspark.sql.functions import sha2\ndf_{v} = df_{in}.withColumn("{col}_hash", sha2(col("{col}"), 256))',desc:'SHA-256 hashing',notes:'Apply to specific columns',imp:[],conf:0.90},
+  TransformXml:{cat:'XML Processing',tpl:'# Use spark-xml library\ndf_{v} = spark.read.format("com.databricks.spark.xml").option("rowTag", "{tag}").load("{path}")',desc:'XML transformation',notes:'Install spark-xml; define row tag',imp:[],conf:0.60},
+  ExecuteScript:{cat:'Python Cell',tpl:'# Custom script from NiFi ExecuteScript\n# Original engine: {engine}\n# TODO: Translate script logic to PySpark\ndf_{v} = df_{in}',desc:'Custom script execution',notes:'Manual translation required — review original script',imp:[],conf:0.30},
+  ExecuteStreamCommand:{cat:'Shell Command',tpl:'import subprocess\nresult = subprocess.run(["{command}"], capture_output=True, text=True)\nprint(result.stdout)',desc:'External command execution',notes:'Ensure command is available on cluster',imp:[],conf:0.40},
+  ConvertAvroToJSON:{cat:'DataFrame API',tpl:'from pyspark.sql.avro.functions import from_avro\ndf_{v} = df_{in}.select(from_avro("value", schema).alias("data")).select("data.*")',desc:'Avro to JSON',notes:'Spark handles Avro natively',imp:[],conf:0.85},
+  AttributesToJSON:{cat:'DataFrame API',tpl:'from pyspark.sql.functions import to_json, struct\ndf_{v} = df_{in}.select(to_json(struct("*")).alias("json_value"))',desc:'Columns to JSON',notes:'Converts all columns to single JSON string',imp:[],conf:0.85},
+  // ROUTES
+  RouteOnAttribute:{cat:'DataFrame Filter',tpl:'# Route based on attribute conditions\ndf_{v}_matched = df_{in}.filter("{condition}")\ndf_{v}_unmatched = df_{in}.filter("NOT ({condition})")',desc:'Conditional routing',notes:'Map NiFi routing rules to filter conditions',imp:[],conf:0.80},
+  RouteOnContent:{cat:'DataFrame Filter',tpl:'df_{v} = df_{in}.filter(col("value").rlike("{pattern}"))',desc:'Content-based routing',notes:'Translate content match patterns to regex',imp:[],conf:0.75},
+  ValidateRecord:{cat:'DLT Expectations',tpl:'# Data quality validation\n# In DLT: @dlt.expect_or_drop("{rule}", "{expression}")\ndf_{v} = df_{in}.filter("{expression}")  # Drop invalid rows',desc:'Record validation',notes:'Best implemented as DLT expectations',imp:[],conf:0.85},
+  DistributeLoad:{cat:'Spark Partitioning',tpl:'df_{v} = df_{in}.repartition({partitions})',desc:'Load distribution',notes:'Spark handles distribution automatically; repartition if needed',imp:[],conf:0.90},
+  DetectDuplicate:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.dropDuplicates(["{key}"])',desc:'Duplicate detection/removal',notes:'Specify dedup key columns',imp:[],conf:0.90},
+  // PROCESSING
+  ExecuteSQL:{cat:'Spark SQL',tpl:'df_{in}.createOrReplaceTempView("tmp_{v}")\ndf_{v} = spark.sql("""\n{sql}\n""")',desc:'SQL execution',notes:'Register input as temp view first',imp:[],conf:0.90},
+  ExecuteSQLRecord:{cat:'Spark SQL',tpl:'df_{in}.createOrReplaceTempView("tmp_{v}")\ndf_{v} = spark.sql("""\n{sql}\n""")',desc:'SQL execution with records',notes:'Same as ExecuteSQL',imp:[],conf:0.90},
+  LookupRecord:{cat:'DataFrame Join',tpl:'# Load lookup table\ndf_lookup = spark.table("{catalog}.{schema}.{lookup_table}")\ndf_{v} = df_{in}.join(df_lookup, on="{key}", how="left")',desc:'Record lookup via join',notes:'Ensure lookup table exists in Unity Catalog',imp:[],conf:0.85},
+  InvokeHTTP:{cat:'Python Requests',tpl:'import requests\ndef call_api(row):\n  resp = requests.{method}("{url}", json=row.asDict())\n  return resp.json()\n# Apply row-wise (for small datasets)\n# For large: use pandas UDF',desc:'HTTP API call',notes:'Consider rate limiting and error handling',imp:['import requests'],conf:0.60},
+  PutDatabaseRecord:{cat:'JDBC Write',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "{url}")\n  .option("dbtable", "{table}")\n  .mode("append")\n  .save())',desc:'Database record write',notes:'Store JDBC credentials in secret scope',imp:[],conf:0.85},
+  HandleHttpRequest:{cat:'Manual',tpl:'# TODO: No direct equivalent for HandleHttpRequest\n# Consider: Databricks Model Serving endpoint\n# Or: External API gateway triggering a Databricks job',desc:'HTTP server endpoint',notes:'Databricks cannot host HTTP endpoints natively — use Model Serving',imp:[],conf:0.10},
+  HandleHttpResponse:{cat:'Manual',tpl:'# TODO: No direct equivalent for HandleHttpResponse\n# Pair with HandleHttpRequest replacement',desc:'HTTP response handler',notes:'Use with HandleHttpRequest alternative',imp:[],conf:0.10},
+  // SINKS
+  PutFile:{cat:'Delta Lake Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .saveAsTable("{catalog}.{schema}.{table}"))',desc:'Write to Delta Lake table',notes:'Uses Unity Catalog managed table',imp:[],conf:0.90},
+  PutSQL:{cat:'JDBC Write',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "{url}")\n  .option("dbtable", "{table}")\n  .mode("append")\n  .save())',desc:'SQL database write',notes:'Store credentials in secret scope',imp:[],conf:0.85},
+  PutKafka:{cat:'Kafka Write',tpl:'(df_{in}\n  .selectExpr("to_json(struct(*)) AS value")\n  .write\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("topic", "{topic}")\n  .save())',desc:'Write to Kafka topic',notes:'Configure security protocol',imp:[],conf:0.85},
+  PublishKafka:{cat:'Kafka Write',tpl:'(df_{in}\n  .selectExpr("to_json(struct(*)) AS value")\n  .write\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("topic", "{topic}")\n  .save())',desc:'Publish to Kafka',notes:'Same as PutKafka',imp:[],conf:0.85},
+  PublishKafka_2_6:{cat:'Kafka Write',tpl:'(df_{in}\n  .selectExpr("to_json(struct(*)) AS value")\n  .write\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("topic", "{topic}")\n  .save())',desc:'Publish to Kafka 2.6',notes:'Same as PutKafka',imp:[],conf:0.85},
+  PublishKafkaRecord_2_6:{cat:'Kafka Write',tpl:'(df_{in}\n  .selectExpr("to_json(struct(*)) AS value")\n  .write\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("topic", "{topic}")\n  .save())',desc:'Publish Kafka records',notes:'Same as PutKafka',imp:[],conf:0.85},
+  PutS3Object:{cat:'Cloud Storage Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .save("s3a://{bucket}/{path}"))',desc:'Write to S3',notes:'Use external location in Unity Catalog',imp:[],conf:0.85},
+  PutHDFS:{cat:'Cloud Storage Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .save("{path}"))',desc:'Write to cloud storage',notes:'Map HDFS path to cloud storage',imp:[],conf:0.80},
+  PutEmail:{cat:'Webhook',tpl:'import requests\nrequests.post("{webhook_url}", json={"subject": "{subject}", "body": "Pipeline completed"})',desc:'Email notification',notes:'No native email — use webhook or notification service',imp:['import requests'],conf:0.35},
+  PutMongo:{cat:'MongoDB Connector',tpl:'(df_{in}.write\n  .format("mongodb")\n  .option("connection.uri", "{uri}")\n  .option("database", "{database}")\n  .option("collection", "{collection}")\n  .mode("append")\n  .save())',desc:'MongoDB write',notes:'Install mongodb-spark-connector',imp:[],conf:0.75},
+  PutElasticsearch:{cat:'ES Connector',tpl:'(df_{in}.write\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .save("{index}"))',desc:'Elasticsearch write',notes:'Install elasticsearch-spark',imp:[],conf:0.65},
+  PutDatabaseRecord:{cat:'JDBC Write',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "{url}")\n  .option("dbtable", "{table}")\n  .mode("append")\n  .save())',desc:'Database record write',notes:'Store credentials in secret scope',imp:[],conf:0.85},
+  // UTILITY
+  LogMessage:{cat:'Python Logging',tpl:'import logging\nlogger = logging.getLogger("{v}")\nlogger.info("Processing complete for {v}")',desc:'Logging',notes:'Use Spark driver logs',imp:[],conf:0.90},
+  LogAttribute:{cat:'Python Logging',tpl:'print(f"Schema: {df_{in}.columns}")\ndf_{in}.show(5, truncate=False)',desc:'Log attributes/preview',notes:'Use display() in notebooks',imp:[],conf:0.85},
+  Wait:{cat:'Scheduling',tpl:'import time\ntime.sleep({duration})  # Consider Databricks workflow scheduling instead',desc:'Wait/delay',notes:'Prefer workflow-level scheduling over sleep',imp:[],conf:0.70},
+  Notify:{cat:'Workflow Signal',tpl:'dbutils.notebook.exit("SUCCESS")  # Signal to downstream workflow tasks',desc:'Signal/notify completion',notes:'Use workflow task dependencies',imp:[],conf:0.80},
+  DebugFlow:{cat:'Debug',tpl:'display(df_{in})\ndf_{in}.printSchema()',desc:'Debug/inspect data',notes:'Use display() in Databricks notebooks',imp:[],conf:0.90},
+  CountText:{cat:'DataFrame API',tpl:'_count = df_{in}.count()\nprint(f"Row count: {_count}")',desc:'Count rows',notes:'',imp:[],conf:0.95},
+  ControlRate:{cat:'Streaming Trigger',tpl:'# Rate control: use trigger interval\n# .trigger(processingTime="{interval}")',desc:'Rate limiting',notes:'Use structured streaming trigger interval',imp:[],conf:0.70},
+};
+
+function sanitizeVarName(name) {
+  return name.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^(\d)/, '_$1').toLowerCase().substring(0, 40);
+}
+
+function mapNiFiToDatabricks(nifi) {
+  const processors = nifi.processors || [];
+  const conns = nifi.connections || [];
+  // Build connection graph: processor name -> {inputs:[], outputs:[]}
+  const connGraph = {};
+  conns.forEach(c => {
+    if (!connGraph[c.destinationName]) connGraph[c.destinationName] = {inputs:[],outputs:[]};
+    connGraph[c.destinationName].inputs.push(c.sourceName);
+    if (!connGraph[c.sourceName]) connGraph[c.sourceName] = {inputs:[],outputs:[]};
+    connGraph[c.sourceName].outputs.push(c.destinationName);
+  });
+  return processors.map(p => {
+    const role = classifyNiFiProcessor(p.type);
+    const mapEntry = NIFI_DATABRICKS_MAP[p.type];
+    const varName = sanitizeVarName(p.name);
+    const inputProcs = (connGraph[p.name] && connGraph[p.name].inputs) || [];
+    const inputVar = inputProcs.length ? sanitizeVarName(inputProcs[0]) : 'input';
+    if (mapEntry) {
+      let code = mapEntry.tpl.replace(/\{v\}/g, varName).replace(/\{in\}/g, inputVar)
+        .replace(/\{in1\}/g, inputVar).replace(/\{in2\}/g, inputProcs[1] ? sanitizeVarName(inputProcs[1]) : 'input2');
+      // Substitute from processor properties
+      Object.entries(p.properties || {}).forEach(([k, val]) => {
+        const key = k.replace(/\s+/g, '_').toLowerCase();
+        code = code.replace(new RegExp('\\{' + key + '\\}', 'gi'), val);
+      });
+      code = code.replace(/\{(\w+)\}/g, '<$1>');
+      return { name: p.name, type: p.type, group: p.group, role, mapped: true,
+        confidence: mapEntry.conf, category: mapEntry.cat, code, desc: mapEntry.desc,
+        notes: mapEntry.notes, imports: mapEntry.imp || [], state: p.state };
+    }
+    return { name: p.name, type: p.type, group: p.group, role, mapped: false,
+      confidence: 0, category: 'Unknown', code: `# TODO: No mapping for ${p.type}\n# Processor: ${p.name}\n# Review manually`,
+      desc: 'No known Databricks equivalent', notes: 'Manual migration required',
+      imports: [], state: p.state, gapReason: `Processor type "${p.type}" has no known Databricks equivalent` };
+  });
+}
+
+function generateDatabricksNotebook(mappings, nifi, blueprint) {
+  const cells = [];
+  const allImports = new Set(['from pyspark.sql.functions import *','from pyspark.sql.types import *']);
+  mappings.forEach(m => (m.imports || []).forEach(i => allImports.add(i)));
+  const flowName = (nifi.processGroups && nifi.processGroups[0] ? nifi.processGroups[0].name : 'NiFi Flow');
+  // Header
+  cells.push({type:'md',label:'Header',source:`# MAGIC %md\n# MAGIC # NiFi Migration: ${flowName}\n# MAGIC Generated by SEG Demo | ${new Date().toISOString().split('T')[0]}\n# MAGIC \n# MAGIC **Processors:** ${mappings.length} | **Mapped:** ${mappings.filter(m=>m.mapped).length} | **Coverage:** ${Math.round(mappings.filter(m=>m.mapped).length/mappings.length*100)}%`,role:'config'});
+  // Imports
+  cells.push({type:'code',label:'Imports & Config',source:[...allImports].join('\n')+'\n\n# Configure logging\nimport logging\nlogging.basicConfig(level=logging.INFO)\nlogger = logging.getLogger("nifi_migration")',role:'config'});
+  // Unity Catalog DDL
+  const tables = (blueprint && blueprint.tables) || [];
+  if (tables.length) {
+    let ddl = '# MAGIC %sql\n# MAGIC CREATE SCHEMA IF NOT EXISTS nifi_migration;\n';
+    tables.forEach(t => {
+      ddl += `# MAGIC CREATE TABLE IF NOT EXISTS nifi_migration.${t.name} (\n`;
+      ddl += t.columns.map(c => `# MAGIC   ${c.name} ${(c.data_type||c.type||'STRING').toUpperCase()}`).join(',\n');
+      ddl += '\n# MAGIC ) USING DELTA;\n';
+    });
+    cells.push({type:'sql',label:'Unity Catalog Setup',source:ddl,role:'config'});
+  }
+  // Group by process group, sorted by role
+  const groups = {};
+  mappings.forEach(m => { if (!groups[m.group]) groups[m.group] = []; groups[m.group].push(m); });
+  const roleOrd = {source:0,route:1,transform:2,process:3,sink:4,utility:5};
+  const sortedGroups = Object.entries(groups).sort((a,b) => {
+    const aMin = Math.min(...a[1].map(m => roleOrd[m.role] || 3));
+    const bMin = Math.min(...b[1].map(m => roleOrd[m.role] || 3));
+    return aMin - bMin;
+  });
+  sortedGroups.forEach(([gName, procs]) => {
+    const mapped = procs.filter(m=>m.mapped).length;
+    cells.push({type:'md',label:gName,source:`# MAGIC %md\n# MAGIC ## Process Group: ${gName}\n# MAGIC **${procs.length} processors** | ${mapped} mapped | ${procs.length-mapped} manual`,role:'config'});
+    // Sort processors: sources first, then transforms, then sinks
+    procs.sort((a,b) => (roleOrd[a.role]||3) - (roleOrd[b.role]||3));
+    procs.forEach(m => {
+      const lbl = `[${m.role.toUpperCase()}] ${m.name} → ${m.category}`;
+      cells.push({type:'code',label:lbl,source:`# ${lbl}\n# ${m.desc}${m.notes ? '  |  ' + m.notes : ''}\n${m.code}`,role:m.role,processor:m.name,procType:m.type,confidence:m.confidence,mapped:m.mapped});
+    });
+  });
+  // Footer
+  cells.push({type:'code',label:'Pipeline Complete',source:'logger.info("NiFi migration pipeline complete")\ndbutils.notebook.exit("SUCCESS")',role:'utility'});
+  return { cells, flowName, metadata: { processorCount: mappings.length, mappedCount: mappings.filter(m=>m.mapped).length, generatedAt: new Date().toISOString() }};
+}
+
+function generateWorkflowJSON(mappings, nifi) {
+  const conns = nifi.connections || [];
+  const procToGroup = {};
+  (nifi.processors || []).forEach(p => { procToGroup[p.name] = p.group || '(root)'; });
+  const groups = [...new Set(Object.values(procToGroup))];
+  const groupDeps = {};
+  groups.forEach(g => { groupDeps[g] = new Set(); });
+  conns.forEach(c => {
+    const sg = procToGroup[c.sourceName], dg = procToGroup[c.destinationName];
+    if (sg && dg && sg !== dg) groupDeps[dg].add(sg);
+  });
+  const tasks = groups.map(g => ({
+    task_key: sanitizeVarName(g),
+    description: `Process group: ${g}`,
+    notebook_task: { notebook_path: `/Workspace/Migrations/NiFi/${sanitizeVarName(g)}_notebook`, source: 'WORKSPACE' },
+    depends_on: [...groupDeps[g]].map(d => ({ task_key: sanitizeVarName(d) })),
+    new_cluster: { spark_version: '14.3.x-scala2.12', node_type_id: 'Standard_DS3_v2', num_workers: 2 }
+  }));
+  return { name: `NiFi_Migration_${sanitizeVarName(groups[0] || 'flow')}`, tasks, format: 'MULTI_TASK',
+    tags: { source: 'nifi_migration', generated_by: 'seg_demo' } };
+}
+
+function generateMigrationReport(mappings, nifi) {
+  const total = mappings.length, mapped = mappings.filter(m=>m.mapped).length;
+  const byRole = {};
+  ROLE_TIER_ORDER.forEach(r => { byRole[r] = { total:0, mapped:0, unmapped:0, procs:[] }; });
+  mappings.forEach(m => {
+    const r = byRole[m.role] || byRole.process;
+    r.total++; if (m.mapped) r.mapped++; else r.unmapped++;
+    r.procs.push(m);
+  });
+  const byGroup = {};
+  mappings.forEach(m => {
+    if (!byGroup[m.group]) byGroup[m.group] = { total:0, mapped:0, unmapped:0, procs:[] };
+    byGroup[m.group].total++; if (m.mapped) byGroup[m.group].mapped++; else byGroup[m.group].unmapped++;
+    byGroup[m.group].procs.push(m);
+  });
+  const gaps = mappings.filter(m => !m.mapped || m.confidence < 0.3).map(m => ({
+    name: m.name, type: m.type, group: m.group, role: m.role,
+    reason: m.gapReason || `Low confidence mapping (${Math.round(m.confidence*100)}%)`,
+    recommendation: m.type.match(/^(Listen|Handle)/) ? 'Consider Databricks Model Serving or external API gateway'
+      : m.type.match(/^Execute(Script|Stream)/) ? 'Manual translation required — review original script logic'
+      : m.type.match(/^(Put|Send)(Email|TCP|Syslog)/) ? 'Use webhook notification service or Databricks workflow alerts'
+      : 'Review processor documentation and implement custom PySpark logic'
+  }));
+  const recs = [];
+  if (gaps.length > total * 0.2) recs.push('High gap rate — consider custom UDFs for unsupported processor types');
+  if (mappings.some(m => m.type.match(/Listen|Handle/))) recs.push('HTTP endpoints detected — evaluate Databricks Model Serving for REST API replacement');
+  if (mappings.some(m => m.type.match(/Consume.*Kafka|Subscribe/))) recs.push('Streaming sources present — use Structured Streaming with Auto Loader trigger intervals');
+  if ((nifi.controllerServices||[]).length) recs.push(`${nifi.controllerServices.length} controller service(s) detected — map credentials to Databricks secret scopes`);
+  if (mapped > total * 0.8) recs.push('High coverage — prioritize testing the mapped processors before addressing gaps');
+  recs.push('Run the generated notebook in a Databricks workspace to validate each cell');
+  const coveragePct = total ? Math.round(mapped / total * 100) : 0;
+  const effort = coveragePct >= 85 ? 'Low' : coveragePct >= 60 ? 'Medium' : 'High';
+  return { summary: { totalProcessors: total, mappedProcessors: mapped, unmappedProcessors: total - mapped, coveragePercent: coveragePct,
+    totalProcessGroups: Object.keys(byGroup).length, totalConnections: (nifi.connections||[]).length, controllerServices: (nifi.controllerServices||[]).length },
+    byRole, byGroup, gaps, recommendations: recs, effort };
+}
 
 // Tarjan's SCC algorithm — returns arrays of node groups forming cycles (size > 1 only)
 function detectCyclesSCC(adjacencyMap) {
@@ -3505,7 +3793,17 @@ function parseInput() {
     alert('No tables found. Check your input format.' + (warnings ? '\n\n' + warnings : ''));
     return;
   }
-  STATE.parsed = parsed; STATE.blueprint = STATE.tables = STATE.medallion = STATE.validation = null;
+  STATE.parsed = parsed; STATE.blueprint = STATE.tables = STATE.medallion = STATE.validation = STATE.notebook = STATE.migrationReport = null;
+  // Lock steps 6+7 until validation completes
+  setTabStatus('notebook', 'locked');
+  setTabStatus('report', 'locked');
+  document.getElementById('notebookNotReady').classList.remove('hidden');
+  document.getElementById('notebookNotNifi').classList.add('hidden');
+  document.getElementById('notebookReady').classList.add('hidden');
+  document.getElementById('notebookResults').innerHTML = '';
+  document.getElementById('reportNotReady').classList.remove('hidden');
+  document.getElementById('reportReady').classList.add('hidden');
+  document.getElementById('reportResults').innerHTML = '';
   // Detect source system
   const fmt = parsed.detected_format || parsed.input_format || 'unknown';
   const src = detectSourceSystem(content, fmt);
@@ -3809,6 +4107,230 @@ function runValidation() {
   // Add validation scoring to diagram
   try { addValidationTier(val, avg); } catch(e) { console.warn('Validation tier error:', e); }
   setTabStatus('validate', 'done');
+  // Unlock Step 6 for NiFi flows
+  if (STATE.parsed && STATE.parsed._nifi) {
+    document.getElementById('notebookNotReady').classList.add('hidden');
+    document.getElementById('notebookNotNifi').classList.add('hidden');
+    document.getElementById('notebookReady').classList.remove('hidden');
+    unlockTab('notebook');
+  } else {
+    document.getElementById('notebookNotReady').classList.add('hidden');
+    document.getElementById('notebookNotNifi').classList.remove('hidden');
+    document.getElementById('notebookReady').classList.add('hidden');
+  }
+}
+
+// ================================================================
+// STEP 6 — GENERATE NOTEBOOK
+// ================================================================
+function generateNotebook() {
+  if (!STATE.parsed || !STATE.parsed._nifi) return;
+  setTabStatus('notebook', 'processing');
+  const nifi = STATE.parsed._nifi;
+  const mappings = mapNiFiToDatabricks(nifi);
+  const nbResult = generateDatabricksNotebook(mappings, nifi, STATE.blueprint);
+  const cells = nbResult.cells;
+  const workflow = generateWorkflowJSON(mappings, nifi);
+  STATE.notebook = { mappings, cells, workflow };
+
+  let h = '<hr class="divider">';
+
+  // --- Mapping Summary Table ---
+  h += '<h3>Processor Mapping</h3>';
+  const mapRows = mappings.map(m => [
+    m.name,
+    `<span style="color:${ROLE_TIER_COLORS[m.role]||'#808495'}">${m.role}</span>`,
+    m.group || '—',
+    m.mapped ? m.desc : '<em style="color:var(--text2)">No equivalent</em>',
+    m.mapped ? `<span class="conf-badge ${m.confidence>=0.8?'conf-high':m.confidence>=0.5?'conf-med':'conf-low'}">${Math.round(m.confidence*100)}%</span>`
+             : '<span class="conf-badge conf-none">—</span>'
+  ]);
+  h += `<div class="table-scroll"><table class="mapping-table"><thead><tr><th>NiFi Processor</th><th>Role</th><th>Group</th><th>Databricks Equivalent</th><th>Confidence</th></tr></thead><tbody>${mapRows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+
+  // --- Notebook Preview ---
+  h += '<hr class="divider"><h3>Generated Notebook</h3>';
+  h += '<div class="notebook-preview">';
+  cells.forEach((cell, i) => {
+    const lbl = cell.label || (cell.type === 'md' ? 'markdown' : 'code');
+    const lblClass = cell.role ? 'lb-' + cell.role : 'lb-config';
+    const code = cell.source.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    h += `<div class="notebook-cell"><div class="cell-label ${lblClass}">[${i+1}] ${lbl}</div><pre>${code}</pre></div>`;
+  });
+  h += '</div>';
+
+  // --- Unity Catalog DDL ---
+  const ddlCells = cells.filter(c => c.label && c.label.includes('Unity Catalog'));
+  if (ddlCells.length) {
+    h += '<hr class="divider"><h3>Unity Catalog DDL</h3>';
+    ddlCells.forEach(c => {
+      const code = c.source.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      h += `<div class="notebook-preview"><div class="notebook-cell"><div class="cell-label lb-config">SQL</div><pre>${code}</pre></div></div>`;
+    });
+  }
+
+  // --- Workflow JSON ---
+  h += '<hr class="divider"><h3>Databricks Workflow (Jobs API)</h3>';
+  const wfJson = JSON.stringify(workflow, null, 2).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  h += `<div class="notebook-preview"><div class="notebook-cell"><div class="cell-label lb-config">JSON</div><pre>${wfJson}</pre></div></div>`;
+
+  // --- Download buttons ---
+  h += '<hr class="divider"><div style="display:flex;gap:8px;flex-wrap:wrap">';
+  h += `<button class="btn" onclick="downloadNotebook()">Download .py Notebook</button>`;
+  h += `<button class="btn" onclick="downloadWorkflow()">Download Workflow JSON</button>`;
+  h += '</div>';
+
+  document.getElementById('notebookResults').innerHTML = h;
+  setTabStatus('notebook', 'done');
+
+  // Unlock Step 7
+  document.getElementById('reportNotReady').classList.add('hidden');
+  document.getElementById('reportReady').classList.remove('hidden');
+  unlockTab('report');
+}
+
+function downloadNotebook() {
+  if (!STATE.notebook) return;
+  const nb = STATE.notebook.cells.map(c => c.source).join('\n\n# COMMAND ----------\n\n');
+  const blob = new Blob([nb], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'nifi_migration_notebook.py';
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+function downloadWorkflow() {
+  if (!STATE.notebook) return;
+  const blob = new Blob([JSON.stringify(STATE.notebook.workflow, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'databricks_workflow.json';
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ================================================================
+// STEP 7 — MIGRATION REPORT
+// ================================================================
+function generateReport() {
+  if (!STATE.notebook || !STATE.parsed || !STATE.parsed._nifi) return;
+  setTabStatus('report', 'processing');
+  const nifi = STATE.parsed._nifi;
+  const report = generateMigrationReport(STATE.notebook.mappings, nifi);
+  STATE.migrationReport = report;
+  const s = report.summary;
+
+  let h = '<hr class="divider">';
+
+  // --- Coverage Score ---
+  const pct = s.coveragePercent;
+  const cls = pct >= 85 ? 'green' : pct >= 60 ? 'amber' : 'red';
+  const icon = pct >= 85 ? '🟢' : pct >= 60 ? '🟡' : '🔴';
+  const lvl = pct >= 85 ? 'HIGH COVERAGE' : pct >= 60 ? 'PARTIAL COVERAGE' : 'LOW COVERAGE';
+  h += `<div class="score-big">${icon} ${lvl} — ${pct}%</div>`;
+  h += metricsHTML([
+    ['Total Processors', s.totalProcessors],
+    ['Mapped', s.mappedProcessors],
+    ['Unmapped', s.unmappedProcessors],
+    ['Process Groups', s.totalProcessGroups],
+    ['Connections', s.totalConnections],
+    ['Effort', `<span class="badge badge-${report.effort==='Low'?'green':report.effort==='Medium'?'amber':'red'}">${report.effort}</span>`]
+  ]);
+
+  // --- By Role Breakdown ---
+  h += '<hr class="divider"><h3>Coverage by Role</h3>';
+  const roleOrder = ['source','route','transform','process','sink','utility'];
+  roleOrder.forEach(role => {
+    const rd = report.byRole[role];
+    if (!rd) return;
+    const rpct = rd.total ? Math.round(rd.mapped / rd.total * 100) : 0;
+    const rcls = rpct >= 85 ? 'green' : rpct >= 60 ? 'amber' : 'red';
+    const color = ROLE_TIER_COLORS[role] || '#808495';
+    h += `<div style="margin:8px 0">`;
+    h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">`;
+    h += `<span style="font-weight:600;color:${color};text-transform:uppercase;font-size:0.85rem">${role}</span>`;
+    h += `<span style="font-size:0.85rem;color:var(--text2)">${rd.mapped}/${rd.total} (${rpct}%)</span>`;
+    h += `</div>`;
+    h += `<div class="progress-bar"><div class="progress-fill ${rcls}" style="width:${rpct}%"></div></div>`;
+    if (rd.procs && rd.procs.length) {
+      h += `<div style="font-size:0.8rem;color:var(--text2);margin-top:2px">${rd.procs.map(p=>p.name).join(', ')}</div>`;
+    }
+    h += `</div>`;
+  });
+
+  // --- By Group Breakdown ---
+  h += '<hr class="divider"><h3>Coverage by Process Group</h3>';
+  Object.entries(report.byGroup).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([gname, gd]) => {
+    const gpct = gd.total ? Math.round(gd.mapped / gd.total * 100) : 0;
+    const gcls = gpct >= 85 ? 'green' : gpct >= 60 ? 'amber' : 'red';
+    let body = `<div class="progress-bar" style="margin-bottom:8px"><div class="progress-fill ${gcls}" style="width:${gpct}%"></div></div>`;
+    body += `<div style="font-size:0.85rem;color:var(--text2)">Mapped: ${gd.mapped} / ${gd.total}</div>`;
+    if (gd.procs && gd.procs.length) {
+      body += '<div style="margin-top:6px">';
+      gd.procs.forEach(p => {
+        const picon = p.mapped ? '✅' : '❌';
+        body += `<div style="font-size:0.85rem;padding:2px 0">${picon} <strong>${p.name}</strong> (${p.type}) → ${p.mapped ? p.desc : '<em>unmapped</em>'}</div>`;
+      });
+      body += '</div>';
+    }
+    h += expanderHTML(`<span style="color:${gcls==='green'?'var(--green)':gcls==='amber'?'var(--amber)':'var(--red)'}">${gpct}%</span> ${gname} (${gd.mapped}/${gd.total})`, body, gpct < 85);
+  });
+
+  // --- Gap Analysis ---
+  if (report.gaps.length) {
+    h += '<hr class="divider"><h3>Gap Analysis — Unmapped Processors</h3>';
+    report.gaps.forEach(g => {
+      h += `<div class="gap-card">`;
+      h += `<div class="gap-title">${g.name} <span class="gap-meta">${g.type} &middot; ${g.group || 'ungrouped'}</span></div>`;
+      h += `<div class="gap-rec">${g.recommendation || 'Manual implementation required'}</div>`;
+      h += `</div>`;
+    });
+  }
+
+  // --- Recommendations ---
+  if (report.recommendations.length) {
+    h += '<hr class="divider"><h3>Recommendations</h3>';
+    h += '<ul style="margin:0;padding-left:20px">';
+    report.recommendations.forEach(r => { h += `<li style="margin:4px 0">${r}</li>`; });
+    h += '</ul>';
+  }
+
+  // --- Download ---
+  h += '<hr class="divider"><div style="display:flex;gap:8px;flex-wrap:wrap">';
+  h += `<button class="btn" onclick="downloadReport()">Download Report (Markdown)</button>`;
+  h += '</div>';
+
+  document.getElementById('reportResults').innerHTML = h;
+  setTabStatus('report', 'done');
+}
+
+function downloadReport() {
+  if (!STATE.migrationReport) return;
+  const r = STATE.migrationReport;
+  const s = r.summary;
+  let md = `# NiFi → Databricks Migration Report\n\n`;
+  md += `## Summary\n| Metric | Value |\n|--------|-------|\n`;
+  md += `| Total Processors | ${s.totalProcessors} |\n| Mapped | ${s.mappedProcessors} |\n| Unmapped | ${s.unmappedProcessors} |\n`;
+  md += `| Coverage | ${s.coveragePercent}% |\n| Process Groups | ${s.totalProcessGroups} |\n| Effort | ${r.effort} |\n\n`;
+  md += `## By Role\n| Role | Mapped | Total | % |\n|------|--------|-------|---|\n`;
+  Object.entries(r.byRole).forEach(([role, rd]) => {
+    md += `| ${role} | ${rd.mapped} | ${rd.total} | ${rd.total?Math.round(rd.mapped/rd.total*100):0}% |\n`;
+  });
+  md += `\n## By Group\n| Group | Mapped | Total | % |\n|-------|--------|-------|---|\n`;
+  Object.entries(r.byGroup).forEach(([g, gd]) => {
+    md += `| ${g} | ${gd.mapped} | ${gd.total} | ${gd.total?Math.round(gd.mapped/gd.total*100):0}% |\n`;
+  });
+  if (r.gaps.length) {
+    md += `\n## Gaps\n| Processor | Type | Group | Recommendation |\n|-----------|------|-------|----------------|\n`;
+    r.gaps.forEach(g => { md += `| ${g.processor} | ${g.type} | ${g.group||'—'} | ${g.recommendation||'Manual'} |\n`; });
+  }
+  if (r.recommendations.length) {
+    md += `\n## Recommendations\n`;
+    r.recommendations.forEach(rec => { md += `- ${rec}\n`; });
+  }
+  const blob = new Blob([md], {type:'text/markdown'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'migration_report.md';
+  a.click(); URL.revokeObjectURL(a.href);
 }
 
 // ================================================================
