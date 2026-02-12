@@ -2073,7 +2073,8 @@ function buildResourceManifest(nifi) {
     matches.forEach(m => {
       const inner = m.slice(2, -1);
       const funcName = inner.split(':')[0].trim();
-      if (!NIFI_EL_FUNCS.has(funcName) && !funcName.includes('.') && !/^(filename|path|absolute\.path|uuid|fileSize|file\.size|entryDate|lineageStartDate|flowfile)/.test(funcName)) {
+      const baseFuncName = funcName.replace(/\(.*$/, '');
+      if (!NIFI_EL_FUNCS.has(funcName) && !NIFI_EL_FUNCS.has(baseFuncName) && !funcName.includes('.') && !/^(filename|path|absolute\.path|uuid|fileSize|file\.size|entryDate|lineageStartDate|flowfile)/.test(funcName)) {
         parameters.push({ expr: m, processor: proc, attrName: funcName, resolved: false });
       }
     });
@@ -2446,7 +2447,7 @@ const NIFI_DATABRICKS_MAP = {
   HashContent:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("{col}_hash", sha2(col("{col}").cast("string"), 256))',desc:'SHA-256 hashing',notes:'Apply to specific columns',imp:[],conf:0.90},
   TransformXml:{cat:'XML Processing',tpl:'# Use spark-xml library\ndf_{v} = spark.read.format("com.databricks.spark.xml").option("rowTag", "{tag}").load("{path}")',desc:'XML transformation',notes:'Install spark-xml; define row tag',imp:[],conf:0.60},
   ExecuteScript:{cat:'PySpark Cell',tpl:'# Custom script from NiFi ExecuteScript\n# Original engine: {engine}\n# TODO: Translate script logic to PySpark DataFrame operations\ndf_{v} = df_{in}',desc:'Custom script execution',notes:'Manual translation to PySpark required — review original script',imp:[],conf:0.30},
-  ExecuteStreamCommand:{cat:'dbutils Shell',tpl:'# Execute shell command via %sh magic or dbutils\n# %sh {command}\n# Or use dbutils.notebook.run() to call a helper notebook\ndbutils.fs.put("/tmp/{v}_cmd.sh", "{command}", True)',desc:'External command via dbutils',notes:'Use %sh cell magic or dbutils.notebook.run()',imp:[],conf:0.40},
+  ExecuteStreamCommand:{cat:'dbutils Shell',tpl:'# Execute shell command via %sh magic or dbutils\n# %sh {command}\n# Or use dbutils.notebook.run() to call a helper notebook\ndbutils.fs.put("/tmp/{v}_cmd.sh", "{command}", True)',desc:'External command via dbutils',notes:'Use %sh cell magic or dbutils.notebook.run()',imp:[],conf:0.55},
   ConvertAvroToJSON:{cat:'DataFrame API',tpl:'from pyspark.sql.avro.functions import from_avro\ndf_{v} = df_{in}.select(from_avro("value", _schema).alias("data")).select("data.*")',desc:'Avro to JSON',notes:'Spark handles Avro natively',imp:[],conf:0.85},
   AttributesToJSON:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.select(to_json(struct("*")).alias("json_value"))',desc:'Columns to JSON',notes:'Converts all columns to single JSON string',imp:[],conf:0.85},
   // ROUTES
@@ -5795,8 +5796,8 @@ function buildInitialVirtualEnv(nifiData, tables, manifest) {
         const fname = `${grp}_${p.name.replace(/\s+/g,'_').toLowerCase()}_${i}.${fmt}`;
         const content = generateSyntheticFileContent(cols, 10 + i * 5, fmt);
         env.writeFile('SEED', `${dir}/${fname}`, content, fmt);
-        // Also seed Volumes path for DBX engine
-        env.writeFile('SEED', `/Volumes/input/${grp}/${fname}`, content, fmt);
+        // Also seed Volumes path for DBX engine — same content, /Volumes prefix
+        env.writeFile('SEED', `/Volumes${dir}/${fname}`, content, fmt);
       }
     }
     if (p.type === 'FetchFile') {
@@ -5804,33 +5805,36 @@ function buildInitialVirtualEnv(nifiData, tables, manifest) {
       const dir = props['Input Directory'] || `/data/fetch/${grp}`;
       const content = generateSyntheticFileContent(defaultCols, 15, 'csv');
       env.writeFile('SEED', `${dir}/${fname}`, content, 'csv');
-      // Also seed Volumes path for DBX engine
-      env.writeFile('SEED', `/Volumes/fetch/${grp}/${fname}`, content, 'csv');
+      // Also seed Volumes path for DBX engine — same content, /Volumes prefix
+      env.writeFile('SEED', `/Volumes${dir}/${fname}`, content, 'csv');
     }
     if (p.type === 'ListFile') {
       const dir = props['Input Directory'] || props['input-directory'] || `/data/list/${grp}`;
       const fmt = (props['File Filter'] || '').includes('.json') ? 'json' : 'csv';
       for (let i = 0; i < 4; i++) {
         const fname = `${grp}_${p.name.replace(/\s+/g,'_').toLowerCase()}_${i}.${fmt}`;
-        env.writeFile('SEED', `${dir}/${fname}`, generateSyntheticFileContent(defaultCols, 8 + i * 3, fmt), fmt);
-      }
-      // Also seed Volumes path for DBX engine
-      for (let i = 0; i < 4; i++) {
-        const fname = `${grp}_${p.name.replace(/\s+/g,'_').toLowerCase()}_${i}.${fmt}`;
-        env.writeFile('SEED', `/Volumes/list/${grp}/${fname}`, generateSyntheticFileContent(defaultCols, 8 + i * 3, fmt), fmt);
+        const content = generateSyntheticFileContent(defaultCols, 8 + i * 3, fmt);
+        env.writeFile('SEED', `${dir}/${fname}`, content, fmt);
+        // Also seed Volumes path for DBX engine — same content, /Volumes prefix
+        env.writeFile('SEED', `/Volumes${dir}/${fname}`, content, fmt);
       }
     }
     if (p.type === 'PutFile' || p.type === 'PutSFTP' || p.type === 'PutHDFS') {
-      const dir = props['Directory'] || props['Remote Path'] || props['Hostname'] || `/data/output/${grp}`;
-      env.writeFile('SEED', `${dir}/.marker`, '', 'raw');
-      // Also seed Volumes target dirs for DBX engine
-      if (p.type === 'PutFile') env.writeFile('SEED', `/Volumes/output/${grp}/.marker`, '', 'raw');
-      else if (p.type === 'PutSFTP') {
+      if (p.type === 'PutFile') {
+        const dir = props['Directory'] || `/data/output/${grp}`;
+        env.writeFile('SEED', `${dir}/.marker`, '', 'raw');
+        env.writeFile('SEED', `/Volumes${dir}/.marker`, '', 'raw');
+      } else if (p.type === 'PutSFTP') {
         const host = props['Hostname'] || props['hostname'] || 'sftp.example.com';
         const remotePath = props['Remote Path'] || 'upload';
-        env.writeFile('SEED', `/Volumes/sftp/${host}/${remotePath}/.marker`, '', 'raw');
+        const dir = `/sftp/${host}/${remotePath}`;
+        env.writeFile('SEED', `${dir}/.marker`, '', 'raw');
+        env.writeFile('SEED', `/Volumes${dir}/.marker`, '', 'raw');
+      } else if (p.type === 'PutHDFS') {
+        const dir = props['Directory'] || props['directory'] || `/hdfs/output/${grp}`;
+        env.writeFile('SEED', `${dir}/.marker`, '', 'raw');
+        env.writeFile('SEED', `/Volumes${dir}/.marker`, '', 'raw');
       }
-      else if (p.type === 'PutHDFS') env.writeFile('SEED', `/Volumes/hdfs/${grp}/.marker`, '', 'raw');
     }
     if (p.type === 'ExecuteStreamCommand') {
       const cmd = props['Command'] || props['command'] || '';
@@ -6272,7 +6276,8 @@ function evaluateNiFiEL(expr, attributes) {
 const PROCESSOR_SIM_V2 = {
   GetFile: function(env, proc, inputFF, isDbx) {
     const props = proc.properties || {};
-    const dir = isDbx ? `/Volumes/input/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Input Directory'] || `/data/input/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+    const nifiDir = props['Input Directory'] || props['input-directory'] || `/data/input/${proc.group.replace(/\s+/g,'_').toLowerCase()}`;
+    const dir = isDbx ? `/Volumes${nifiDir}` : nifiDir;
     const files = env.listFiles(proc.name, dir);
     const outFFs = [];
     files.forEach(path => {
@@ -6293,9 +6298,10 @@ const PROCESSOR_SIM_V2 = {
       let filePath;
       if (ff.attributes['absolute.path']) {
         const absPath = ff.attributes['absolute.path'].replace(/\/$/, '');
-        filePath = isDbx ? `/Volumes/fetch/${absPath.split('/').pop()}/${fname}` : `${absPath}/${fname}`;
+        filePath = isDbx ? `/Volumes${absPath}/${fname}` : `${absPath}/${fname}`;
       } else {
-        const dir = isDbx ? `/Volumes/fetch/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Input Directory'] || `/data/fetch/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+        const nifiDir = props['Input Directory'] || `/data/fetch/${proc.group.replace(/\s+/g,'_').toLowerCase()}`;
+        const dir = isDbx ? `/Volumes${nifiDir}` : nifiDir;
         filePath = `${dir}/${fname}`;
       }
       const content = env.readFile(proc.name, filePath) || ff.content;
@@ -6304,7 +6310,8 @@ const PROCESSOR_SIM_V2 = {
   },
   ListFile: function(env, proc, inputFF, isDbx) {
     const props = proc.properties || {};
-    const dir = isDbx ? `/Volumes/list/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Input Directory'] || `/data/list/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+    const nifiDir = props['Input Directory'] || `/data/list/${proc.group.replace(/\s+/g,'_').toLowerCase()}`;
+    const dir = isDbx ? `/Volumes${nifiDir}` : nifiDir;
     const filter = props['File Filter'] || '';
     const files = env.listFiles(proc.name, dir);
     const outFFs = [];
@@ -6320,7 +6327,8 @@ const PROCESSOR_SIM_V2 = {
   },
   PutFile: function(env, proc, inputFF, isDbx) {
     const props = proc.properties || {};
-    const dir = isDbx ? `/Volumes/output/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Directory'] || `/data/output/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+    const nifiDir = props['Directory'] || `/data/output/${proc.group.replace(/\s+/g,'_').toLowerCase()}`;
+    const dir = isDbx ? `/Volumes${nifiDir}` : nifiDir;
     return inputFF.map(ff => {
       const fname = ff.attributes.filename || `output_${simHash(ff.content.substring(0, 20))}.dat`;
       env.writeFile(proc.name, `${dir}/${fname}`, ff.content, ff.attributes.format || 'raw');
@@ -6331,7 +6339,8 @@ const PROCESSOR_SIM_V2 = {
     const props = proc.properties || {};
     const host = props['Hostname'] || props['hostname'] || 'sftp.example.com';
     const remotePath = evaluateNiFiEL(props['Remote Path'] || 'upload', inputFF[0] ? inputFF[0].attributes : {});
-    const dir = isDbx ? `/Volumes/sftp/${host}/${remotePath}` : `/sftp/${host}/${remotePath}`;
+    const nifiDir = `/sftp/${host}/${remotePath}`;
+    const dir = isDbx ? `/Volumes${nifiDir}` : nifiDir;
     return inputFF.map(ff => {
       let fname = ff.attributes.filename || 'uploaded.dat';
       if (fname.includes('${')) fname = evaluateNiFiEL(fname, ff.attributes);
@@ -6341,7 +6350,8 @@ const PROCESSOR_SIM_V2 = {
   },
   PutHDFS: function(env, proc, inputFF, isDbx) {
     const props = proc.properties || {};
-    const dir = isDbx ? `/Volumes/hdfs/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Directory'] || props['directory'] || `/hdfs/output/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+    const nifiDir = props['Directory'] || props['directory'] || `/hdfs/output/${proc.group.replace(/\s+/g,'_').toLowerCase()}`;
+    const dir = isDbx ? `/Volumes${nifiDir}` : nifiDir;
     return inputFF.map(ff => {
       let fname = ff.attributes.filename || `hdfs_${simHash((ff.content || '').substring(0, 20))}.dat`;
       if (fname.includes('${')) fname = evaluateNiFiEL(fname, ff.attributes);
@@ -6767,19 +6777,7 @@ function simulateEngine(engineName, processors, connections, tables, mappings, e
       output = deepCopyColumnar(groupPools[proc.group] || {});
       if (useV2 && (!outputFF || !outputFF.length)) outputFF = columnarToFlowfiles(output, 'csv');
     }
-    // Databricks confidence-based differences
-    if (isDbx && mapping && mapping.mapped && output && Object.keys(output).length) {
-      const oc = Object.keys(output);
-      const rc = oc.length && output[oc[0]] ? output[oc[0]].length : 0;
-      if (rc > 0 && mapping.confidence >= 0.50 && mapping.confidence < 0.80) {
-        output['_dbx_processed'] = Array(rc).fill(proc.type);
-      }
-      if (rc > 0 && mapping.confidence < 0.50 && mapping.mapped) {
-        output['_dbx_review'] = Array(rc).fill('NEEDS_REVIEW');
-        const keepN = Math.max(1, Math.ceil(rc * Math.max(0.5, mapping.confidence)));
-        Object.keys(output).forEach(c => { output[c] = output[c].slice(0, keepN); });
-      }
-    }
+    // Databricks output — no artificial column injection (removed for exact fidelity)
     ffOutputs[idx] = outputFF;
     const snapAfter = useV2 ? env.snapshot() : null;
     const procActions = useV2 ? env.getProcessorActions(proc.name) : [];
@@ -6804,9 +6802,10 @@ function compareSimOutputs(nifiOut, dbxOut) {
   const dR = dC.length ? (dbxOut[dC[0]] || []).length : 0;
   const rowMatch = Math.max(nR, dR) ? Math.round(Math.min(nR, dR) / Math.max(nR, dR) * 100) : 100;
   let mc = 0, tc = 0;
+  function normCellPath(v) { return String(v).replace(/^\/Volumes\//,'/').replace(/^\/Volumes/,'/').replace(/\/+/g,'/'); }
   common.forEach(c => {
     const mr = Math.min(nR, dR);
-    for (let i = 0; i < mr; i++) { tc++; if (String(nifiOut[c][i]) === String(dbxOut[c][i])) mc++; }
+    for (let i = 0; i < mr; i++) { tc++; if (String(nifiOut[c][i]) === String(dbxOut[c][i]) || normCellPath(nifiOut[c][i]) === normCellPath(dbxOut[c][i])) mc++; }
   });
   const dataFidelity = tc ? Math.round(mc / tc * 100) : 100;
   const extra = dC.filter(c => !nC.includes(c));
