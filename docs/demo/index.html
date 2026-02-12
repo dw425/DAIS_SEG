@@ -1612,45 +1612,177 @@ function buildTierData(blueprint, parsed) {
 
 function buildNiFiTierData(nifi, blueprint) {
   const nodes = [], connections = [];
-  const tierLabels = {
-    1: {label:'INGESTION — Source Processors', color:'#3B82F6', bg:'rgba(59,130,246,0.06)'},
-    2: {label:'ROUTING & TRANSFORMATION', color:'#EAB308', bg:'rgba(234,179,8,0.06)'},
-    3: {label:'PROCESSING', color:'#A855F7', bg:'rgba(168,85,247,0.06)'},
-    4: {label:'OUTPUT — Sink Processors', color:'#21C354', bg:'rgba(33,195,84,0.06)'},
-    5: {label:'UTILITY', color:'#808495', bg:'rgba(128,132,149,0.06)'},
-  };
-  const roleTier = {source:1, route:2, transform:2, process:3, sink:4, utility:5};
-  // Build nodes from processors
-  nifi.processors.forEach(p => {
+  const tierLabels = {};
+  const processors = nifi.processors || [];
+  const conns = nifi.connections || [];
+  const processGroups = nifi.processGroups || [];
+
+  // ── Step 1: Build per-group stats ──
+  const groupStats = {};  // groupName -> {sources, sinks, routes, transforms, processes, utilities, total, processors:[]}
+  processors.forEach(p => {
+    const g = p.group || '(root)';
+    if (!groupStats[g]) groupStats[g] = { sources:0, sinks:0, routes:0, transforms:0, processes:0, utilities:0, total:0, processors:[], typeCount:{} };
     const role = classifyNiFiProcessor(p.type);
-    nodes.push({
-      id: p.name + '_' + p.type,
-      name: p.name || p.type,
-      tier: roleTier[role] || 3,
-      type: 'processor',
-      subtype: role,
-      meta: p.type,
-      group: p.group,
-      state: p.state,
-      propCount: Object.keys(p.properties).length,
-      detail: p
-    });
+    groupStats[g][role + 's'] = (groupStats[g][role + 's'] || 0) + 1;
+    groupStats[g].total++;
+    groupStats[g].processors.push(p);
+    groupStats[g].typeCount[p.type] = (groupStats[g].typeCount[p.type] || 0) + 1;
   });
-  // Build connections
-  nifi.connections.forEach((c, i) => {
-    const srcNode = nodes.find(n => n.name === c.sourceName || n.id.startsWith(c.sourceName));
-    const dstNode = nodes.find(n => n.name === c.destinationName || n.id.startsWith(c.destinationName));
-    if (srcNode && dstNode) {
-      connections.push({
-        from: srcNode.id, to: dstNode.id,
-        label: c.relationships.join(', '),
-        type: 'flow', color: '#4B5563', width: 1.5
-      });
+
+  // ── Step 2: Build inter-group connections ──
+  // Map processor name -> group
+  const procToGroup = {};
+  processors.forEach(p => { procToGroup[p.name] = p.group || '(root)'; });
+  // Count inter-group connections
+  const interGroupConns = {};  // "fromGroup|toGroup" -> count
+  const intraGroupConns = {};  // groupName -> count
+  conns.forEach(c => {
+    const srcGroup = procToGroup[c.sourceName] || '(root)';
+    const dstGroup = procToGroup[c.destinationName] || '(root)';
+    if (srcGroup !== dstGroup) {
+      const key = srcGroup + '|' + dstGroup;
+      interGroupConns[key] = (interGroupConns[key] || 0) + 1;
+    } else {
+      intraGroupConns[srcGroup] = (intraGroupConns[srcGroup] || 0) + 1;
     }
   });
-  // Remove utility tier if empty
-  if (!nodes.some(n => n.tier === 5)) delete tierLabels[5];
-  return {nodes, connections, tierLabels, diagramType: 'nifi_flow'};
+
+  // ── Step 3: Determine group tier via topological sort ──
+  const groupNames = Object.keys(groupStats);
+  const groupUpstream = {};  // group -> [upstream groups]
+  const groupDownstream = {};
+  Object.keys(interGroupConns).forEach(key => {
+    const [from, to] = key.split('|');
+    if (!groupUpstream[to]) groupUpstream[to] = new Set();
+    groupUpstream[to].add(from);
+    if (!groupDownstream[from]) groupDownstream[from] = new Set();
+    groupDownstream[from].add(to);
+  });
+  const groupDepth = {};
+  function getGroupDepth(gn, visited) {
+    if (groupDepth[gn] !== undefined) return groupDepth[gn];
+    if (visited.has(gn)) return 0;
+    visited.add(gn);
+    const ups = groupUpstream[gn] ? [...groupUpstream[gn]] : [];
+    if (!ups.length) { groupDepth[gn] = 0; return 0; }
+    const maxD = Math.max(...ups.map(u => getGroupDepth(u, new Set(visited))));
+    groupDepth[gn] = maxD + 1;
+    return groupDepth[gn];
+  }
+  groupNames.forEach(gn => getGroupDepth(gn, new Set()));
+  // If all depths are 0 (no inter-group connections), use process-group hierarchy or role-based ordering
+  if (Math.max(0, ...Object.values(groupDepth)) === 0 && groupNames.length > 1) {
+    // Sort by: groups with most sources first, then most sinks last
+    groupNames.sort((a, b) => {
+      const as = groupStats[a], bs = groupStats[b];
+      const aScore = (as.sources * 3) - (as.sinks * 3) + (as.transforms) - (as.utilities);
+      const bScore = (bs.sources * 3) - (bs.sinks * 3) + (bs.transforms) - (bs.utilities);
+      return bScore - aScore;
+    });
+    groupNames.forEach((gn, i) => { groupDepth[gn] = i; });
+  }
+  const maxGroupDepth = Math.max(0, ...Object.values(groupDepth));
+
+  // ── Step 4: Build tier layout ──
+  const tierColorPool = ['#3B82F6','#EAB308','#A855F7','#21C354','#F97316','#EC4899','#06B6D4','#8B5CF6','#F43F5E','#10B981'];
+  const tierBgPool = ['rgba(59,130,246,0.06)','rgba(234,179,8,0.06)','rgba(168,85,247,0.06)','rgba(33,195,84,0.06)','rgba(249,115,22,0.06)','rgba(236,72,153,0.06)','rgba(6,182,212,0.06)','rgba(139,92,246,0.06)','rgba(244,63,94,0.06)','rgba(16,185,129,0.06)'];
+
+  // Group groups by depth
+  const depthGroups = {};
+  groupNames.forEach(gn => {
+    const d = groupDepth[gn] || 0;
+    if (!depthGroups[d]) depthGroups[d] = [];
+    depthGroups[d].push(gn);
+  });
+  const sortedDepths = Object.keys(depthGroups).map(Number).sort((a, b) => a - b);
+  let tierNum = 0;
+  const groupTierMap = {};
+
+  sortedDepths.forEach((depth, di) => {
+    const groups = depthGroups[depth];
+    tierNum++;
+    const label = depth === 0 && maxGroupDepth > 0 ? 'INGESTION — Source Groups'
+      : depth === maxGroupDepth && maxGroupDepth > 0 ? 'OUTPUT — Terminal Groups'
+      : maxGroupDepth === 0 ? 'PROCESS GROUPS' : `PROCESSING LAYER ${depth}`;
+    tierLabels[tierNum] = { label, color: tierColorPool[tierNum % tierColorPool.length], bg: tierBgPool[tierNum % tierBgPool.length] };
+
+    groups.forEach(gn => {
+      groupTierMap[gn] = tierNum;
+      const stats = groupStats[gn];
+      const topTypes = Object.entries(stats.typeCount).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([t, c]) => `${t}(${c})`).join(', ');
+      const intraConns = intraGroupConns[gn] || 0;
+      // Determine dominant role for coloring
+      const dominant = [['sources', stats.sources], ['sinks', stats.sinks], ['transforms', stats.transforms], ['routes', stats.routes], ['processes', stats.processes]].sort((a, b) => b[1] - a[1])[0];
+      nodes.push({
+        id: 'pg_' + gn, name: gn, tier: tierNum,
+        type: 'process_group',
+        subtype: dominant[0],
+        procCount: stats.total,
+        srcCount: stats.sources, sinkCount: stats.sinks,
+        routeCount: stats.routes, transformCount: stats.transforms,
+        processCount: stats.processes, utilityCount: stats.utilities,
+        intraConns: intraConns,
+        topTypes: topTypes,
+        detail: { processors: stats.processors, typeCount: stats.typeCount, intraConns }
+      });
+    });
+  });
+
+  // ── Step 5: Build inter-group connections ──
+  Object.entries(interGroupConns).forEach(([key, count]) => {
+    const [from, to] = key.split('|');
+    connections.push({
+      from: 'pg_' + from, to: 'pg_' + to,
+      label: count > 1 ? count + ' flows' : '1 flow',
+      type: 'flow', color: '#4B5563', width: Math.min(1 + count * 0.3, 4)
+    });
+  });
+
+  // ── Step 6: If there are few groups (<=3), also show top processors within each ──
+  if (groupNames.length <= 3 && processors.length <= 50) {
+    // Add processor-level tiers within each group
+    const extraNodes = [], extraConns = [];
+    groupNames.forEach(gn => {
+      const stats = groupStats[gn];
+      const baseTier = groupTierMap[gn];
+      // Sub-tier for each role within the group
+      const roleOrder = ['source', 'route', 'transform', 'process', 'sink', 'utility'];
+      roleOrder.forEach((role, ri) => {
+        const procs = stats.processors.filter(p => classifyNiFiProcessor(p.type) === role);
+        if (!procs.length) return;
+        tierNum++;
+        const roleLabel = { source: 'SOURCES', route: 'ROUTING', transform: 'TRANSFORMS', process: 'PROCESSING', sink: 'SINKS', utility: 'UTILITY' };
+        tierLabels[tierNum] = { label: `${gn} — ${roleLabel[role] || role.toUpperCase()}`, color: tierColorPool[tierNum % tierColorPool.length], bg: tierBgPool[tierNum % tierBgPool.length] };
+        procs.forEach(p => {
+          extraNodes.push({
+            id: p.name + '_' + p.type, name: p.name || p.type, tier: tierNum,
+            type: 'processor', subtype: role, meta: p.type,
+            group: gn, state: p.state, propCount: Object.keys(p.properties).length, detail: p
+          });
+        });
+      });
+    });
+    nodes.push(...extraNodes);
+    // Add individual processor connections
+    conns.forEach(c => {
+      const srcNode = nodes.find(n => n.type === 'processor' && (n.name === c.sourceName || n.id.startsWith(c.sourceName)));
+      const dstNode = nodes.find(n => n.type === 'processor' && (n.name === c.destinationName || n.id.startsWith(c.destinationName)));
+      if (srcNode && dstNode) {
+        connections.push({ from: srcNode.id, to: dstNode.id, label: c.relationships.join(', '), type: 'flow', color: '#4B5563', width: 1 });
+      }
+    });
+  }
+
+  // ── Step 7: Connection density sidebar — processor types across the flow ──
+  const densityData = [];
+  const globalTypeCount = {};
+  processors.forEach(p => { globalTypeCount[p.type] = (globalTypeCount[p.type] || 0) + 1; });
+  Object.entries(globalTypeCount).sort((a, b) => b[1] - a[1]).forEach(([type, count]) => {
+    const role = classifyNiFiProcessor(type);
+    densityData.push({ name: type, writers: count, readers: 0, lookups: 0, total: count, role });
+  });
+
+  return { nodes, connections, tierLabels, diagramType: 'nifi_flow', densityData };
 }
 
 function buildSQLTierData(blueprint) {
@@ -2244,7 +2376,44 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
         clsEl.textContent = 'CONFLICT';
         el.appendChild(clsEl);
       }
-      // ── Generic nodes (NiFi, SQL, flat) ──
+      // ── Process group nodes (NiFi) ──
+      else if (node.type === 'process_group') {
+        el.className = 'tier-node';
+        const roleColor = node.subtype === 'sources' ? '#3B82F6' : node.subtype === 'sinks' ? '#21C354' : node.subtype === 'transforms' ? '#A855F7' : node.subtype === 'routes' ? '#EAB308' : '#6366F1';
+        el.style.borderTopColor = roleColor;
+        el.style.borderTopWidth = '3px';
+        el.style.minWidth = '160px';
+        el.style.maxWidth = '240px';
+        // Name
+        const nameEl = document.createElement('div');
+        nameEl.className = 'node-name';
+        nameEl.textContent = node.name.length > 28 ? node.name.substring(0, 25) + '...' : node.name;
+        nameEl.title = node.name;
+        el.appendChild(nameEl);
+        // Processor count badge
+        const badge = document.createElement('div');
+        badge.className = 'node-badge';
+        badge.textContent = node.procCount;
+        badge.title = node.procCount + ' processors';
+        el.appendChild(badge);
+        // Colored stat badges
+        const statsDiv = document.createElement('div');
+        statsDiv.className = 'node-stats';
+        if (node.srcCount) statsDiv.innerHTML += `<span class="ns ns-tx">${node.srcCount} src</span>`;
+        if (node.transformCount + node.routeCount) statsDiv.innerHTML += `<span class="ns" style="background:#A855F7;color:white">${node.transformCount + node.routeCount} xfm</span>`;
+        if (node.processCount) statsDiv.innerHTML += `<span class="ns ns-ext">${node.processCount} proc</span>`;
+        if (node.sinkCount) statsDiv.innerHTML += `<span class="ns" style="background:#21C354;color:white">${node.sinkCount} sink</span>`;
+        if (node.utilityCount) statsDiv.innerHTML += `<span class="ns" style="background:#808495;color:white">${node.utilityCount} util</span>`;
+        el.appendChild(statsDiv);
+        // Top types
+        if (node.topTypes) {
+          const metaEl = document.createElement('div');
+          metaEl.className = 'node-meta';
+          metaEl.textContent = node.topTypes;
+          el.appendChild(metaEl);
+        }
+      }
+      // ── Generic nodes (NiFi processors, SQL, flat) ──
       else {
         el.className = 'tier-node';
         if (node.state === 'DISABLED' || node.state === 'STOPPED') el.style.opacity = '0.5';
@@ -2297,18 +2466,28 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
   const barsEl = document.getElementById('densityBars');
   if (sidebarEl && barsEl && densityData && densityData.length) {
     sidebarEl.classList.remove('hidden');
+    const sidebarTitle = sidebarEl.querySelector('h4');
+    if (sidebarTitle) sidebarTitle.textContent = diagramType === 'nifi_flow' ? 'Processor Types' : 'Connection Density';
     barsEl.innerHTML = '';
     const maxTotal = Math.max(...densityData.map(d => d.total));
     densityData.forEach(d => {
       const row = document.createElement('div');
       row.className = 'density-row';
-      const wPct = Math.max(2, (d.writers / maxTotal) * 60);
-      const rPct = Math.max(0, (d.readers / maxTotal) * 60);
-      const lPct = Math.max(0, (d.lookups / maxTotal) * 60);
-      let barsHTML = `<span class="density-bar" style="width:${wPct}px;background:#EF4444" title="${d.writers} writer(s)"></span>`;
-      if (d.readers) barsHTML += `<span class="density-bar" style="width:${rPct}px;background:#3B82F6" title="${d.readers} reader(s)"></span>`;
-      if (d.lookups) barsHTML += `<span class="density-bar" style="width:${lPct}px;background:#F59E0B" title="${d.lookups} lookup(s)"></span>`;
-      row.innerHTML = barsHTML + `<span class="density-label" title="${d.name}">${d.name}</span>`;
+      if (d.role) {
+        // NiFi: single bar colored by role
+        const roleColors = { source:'#3B82F6', sink:'#21C354', route:'#EAB308', transform:'#A855F7', process:'#6366F1', utility:'#808495' };
+        const barW = Math.max(4, (d.total / maxTotal) * 80);
+        row.innerHTML = `<span class="density-bar" style="width:${barW}px;background:${roleColors[d.role]||'#808495'}" title="${d.total}x"></span><span class="density-label" title="${d.name}">${d.name} (${d.total})</span>`;
+      } else {
+        // Dependency graph: multi-bar for writer/reader/lookup
+        const wPct = Math.max(2, (d.writers / maxTotal) * 60);
+        const rPct = Math.max(0, (d.readers / maxTotal) * 60);
+        const lPct = Math.max(0, (d.lookups / maxTotal) * 60);
+        let barsHTML = `<span class="density-bar" style="width:${wPct}px;background:#EF4444" title="${d.writers} writer(s)"></span>`;
+        if (d.readers) barsHTML += `<span class="density-bar" style="width:${rPct}px;background:#3B82F6" title="${d.readers} reader(s)"></span>`;
+        if (d.lookups) barsHTML += `<span class="density-bar" style="width:${lPct}px;background:#F59E0B" title="${d.lookups} lookup(s)"></span>`;
+        row.innerHTML = barsHTML + `<span class="density-label" title="${d.name}">${d.name}</span>`;
+      }
       barsEl.appendChild(row);
     });
   } else if (sidebarEl) {
@@ -2332,7 +2511,12 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
         '<span><span class="leg-line" style="background:#F59E0B"></span> Chain</span>',
       ].join('');
     } else if (diagramType === 'nifi_flow') {
+      const pgCount = nodes.filter(n => n.type === 'process_group').length;
+      const procCount = nodes.filter(n => n.type === 'processor').length;
       legendEl.innerHTML = [
+        `<span>${pgCount} Process Groups</span>`,
+        procCount ? `<span>${procCount} Processors</span>` : '',
+        `<span>${connections.length} Connections</span>`,
         '<span><span class="leg-line" style="background:#3B82F6"></span> Source</span>',
         '<span><span class="leg-line" style="background:#EAB308"></span> Route/Transform</span>',
         '<span><span class="leg-line" style="background:#A855F7"></span> Process</span>',
@@ -2464,7 +2648,35 @@ function showNodeDetail(node, detailEl, diagramType) {
   if (!detailEl) return;
   let h = '<div class="node-detail">';
   h += `<h4>${node.name}</h4>`;
-  if (diagramType === 'nifi_flow' && node.detail) {
+  if (diagramType === 'nifi_flow' && node.type === 'process_group' && node.detail) {
+    const d = node.detail;
+    h += `<p><strong>Processors:</strong> ${node.procCount} · <strong>Internal Connections:</strong> ${d.intraConns || 0}</p>`;
+    // Role breakdown
+    h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">';
+    if (node.srcCount) h += `<span class="ns ns-tx">${node.srcCount} sources</span>`;
+    if (node.routeCount) h += `<span class="ns" style="background:#EAB308;color:#000">${node.routeCount} routes</span>`;
+    if (node.transformCount) h += `<span class="ns" style="background:#A855F7;color:white">${node.transformCount} transforms</span>`;
+    if (node.processCount) h += `<span class="ns ns-ext">${node.processCount} processors</span>`;
+    if (node.sinkCount) h += `<span class="ns" style="background:#21C354;color:white">${node.sinkCount} sinks</span>`;
+    if (node.utilityCount) h += `<span class="ns" style="background:#808495;color:white">${node.utilityCount} utility</span>`;
+    h += '</div>';
+    // Processor type breakdown
+    if (d.typeCount) {
+      const types = Object.entries(d.typeCount).sort((a, b) => b[1] - a[1]);
+      h += '<table style="font-size:0.75rem"><thead><tr><th>Processor Type</th><th>Count</th></tr></thead><tbody>';
+      types.slice(0, 15).forEach(([t, c]) => { h += `<tr><td>${t}</td><td>${c}</td></tr>`; });
+      if (types.length > 15) h += `<tr><td colspan="2" style="color:var(--text2)">+${types.length - 15} more types</td></tr>`;
+      h += '</tbody></table>';
+    }
+    // First few processor names
+    if (d.processors && d.processors.length) {
+      h += `<p style="margin-top:8px"><strong>Processors (first 10):</strong></p>`;
+      h += '<ul style="font-size:0.75rem;margin:4px 0 4px 16px">';
+      d.processors.slice(0, 10).forEach(p => { h += `<li>${p.name} <code style="font-size:0.65rem">${p.type}</code></li>`; });
+      if (d.processors.length > 10) h += `<li style="color:var(--text2)">+${d.processors.length - 10} more</li>`;
+      h += '</ul>';
+    }
+  } else if (diagramType === 'nifi_flow' && node.detail) {
     const p = node.detail;
     h += `<p><strong>Type:</strong> ${p.type} <code style="font-size:0.7rem">${p.fullType||''}</code></p>`;
     h += `<p><strong>Group:</strong> ${p.group || '(root)'}</p>`;
