@@ -236,6 +236,22 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 .conf-med { background: rgba(234,179,8,0.2); color: #fde68a; }
 .conf-low { background: rgba(239,68,68,0.2); color: #fca5a5; }
 .conf-none { background: rgba(128,132,149,0.15); color: #9ca3af; }
+/* Step 8: Comparison Dashboard */
+.comparison-donuts { display:flex; gap:32px; justify-content:center; flex-wrap:wrap; margin:24px 0; }
+.donut-chart { text-align:center; flex:0 0 160px; }
+.donut-chart svg { filter:drop-shadow(0 2px 8px rgba(0,0,0,0.3)); }
+.donut-label { font-size:0.85rem; font-weight:600; margin-top:8px; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; }
+.donut-sub { font-size:0.75rem; color:var(--text2); margin-top:2px; }
+.match-badge { display:inline-block; padding:1px 8px; border-radius:3px; font-size:0.7rem; font-weight:700; }
+.match-exact { background:rgba(33,195,84,0.2); color:#86efac; }
+.match-functional { background:rgba(234,179,8,0.2); color:#fde68a; }
+.match-gap { background:rgba(239,68,68,0.2); color:#fca5a5; }
+.comparison-detail { margin-top:16px; }
+.comparison-detail summary { cursor:pointer; font-weight:600; font-size:0.95rem; padding:10px 0; color:var(--text); }
+.comparison-detail summary:hover { color:var(--primary); }
+.comparison-detail table { width:100%; font-size:0.8rem; }
+.comparison-detail td, .comparison-detail th { padding:6px 8px; }
+.comparison-detail tr:hover { background:var(--surface2); }
 </style>
 </head>
 <body>
@@ -251,6 +267,7 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
     <div class="tab locked" data-tab="validate">5. Validate<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
     <div class="tab locked" data-tab="notebook">6. Notebook<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
     <div class="tab locked" data-tab="report">7. Report<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="comparison">8. Compare<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
   </div>
 
   <!-- STEP 1: PARSE -->
@@ -393,13 +410,26 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
       <div id="reportResults"></div>
     </div>
   </div>
+  <!-- STEP 8: CROSS-COMPARISON -->
+  <div class="panel" id="panel-comparison">
+    <h2>Step 8: Cross-Comparison Dashboard</h2>
+    <div id="comparisonNotReady" class="alert alert-info">Generate the migration report first (Step 7).</div>
+    <div id="comparisonReady" class="hidden">
+      <p style="color:var(--text2);font-size:0.9rem;margin-bottom:12px">
+        Compare the original NiFi flow against the generated Databricks notebook —
+        exact code matches, functional intent coverage, and pipeline action conversion.
+      </p>
+      <button class="btn btn-primary" onclick="generateComparison()">Run Comparison</button>
+      <div id="comparisonResults"></div>
+    </div>
+  </div>
 </div>
 
 <script>
 // ================================================================
 // STATE
 // ================================================================
-let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null, notebook: null, migrationReport: null };
+let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null, notebook: null, migrationReport: null, comparison: null };
 
 // ================================================================
 // TAB NAVIGATION
@@ -1934,6 +1964,56 @@ function generateMigrationReport(mappings, nifi) {
   return { summary: { totalProcessors: total, mappedProcessors: mapped, unmappedProcessors: total - mapped, coveragePercent: coveragePct,
     totalProcessGroups: Object.keys(byGroup).length, totalConnections: (nifi.connections||[]).length, controllerServices: (nifi.controllerServices||[]).length },
     byRole, byGroup, gaps, recommendations: recs, effort };
+}
+
+// ================================================================
+// STEP 8 — CROSS-COMPARISON LOGIC
+// ================================================================
+function computeComparison(mappings, nifi) {
+  const total = mappings.length;
+  // Exact match: high-confidence direct 1:1 mappings (conf >= 0.8)
+  const exactCount = mappings.filter(m => m.mapped && m.confidence >= 0.8).length;
+  // Functional match: any mapped processor (intent preserved regardless of confidence)
+  const funcCount = mappings.filter(m => m.mapped).length;
+  // Actions converted: connections where BOTH source and destination are mapped
+  const conns = nifi.connections || [];
+  const mappedNames = new Set(mappings.filter(m => m.mapped).map(m => m.name));
+  const totalActions = conns.length;
+  const convertedActions = conns.filter(c => mappedNames.has(c.sourceName) && mappedNames.has(c.destinationName)).length;
+  // Build comparison rows
+  const rows = mappings.map((m, i) => {
+    let matchType;
+    if (!m.mapped) matchType = 'gap';
+    else if (m.confidence >= 0.8) matchType = 'exact';
+    else matchType = 'functional';
+    return { idx: i + 1, name: m.name, type: m.type, group: m.group || '—', role: m.role,
+      equiv: m.mapped ? m.desc : '—', category: m.mapped ? m.category : '—',
+      matchType, confidence: m.confidence, code: m.code };
+  });
+  return {
+    exact: { count: exactCount, total, pct: total ? Math.round(exactCount / total * 100) : 0 },
+    functional: { count: funcCount, total, pct: total ? Math.round(funcCount / total * 100) : 0 },
+    actions: { count: convertedActions, total: totalActions, pct: totalActions ? Math.round(convertedActions / totalActions * 100) : 0 },
+    rows
+  };
+}
+
+function donutSVG(pct, label, sublabel) {
+  const r = 54, circ = 2 * Math.PI * r;
+  const filled = circ * pct / 100, gap = circ - filled;
+  const color = pct >= 85 ? '#21C354' : pct >= 60 ? '#EAB308' : '#EF4444';
+  const track = 'rgba(128,132,149,0.15)';
+  return `<div class="donut-chart">
+    <svg width="140" height="140" viewBox="0 0 140 140">
+      <circle cx="70" cy="70" r="${r}" fill="none" stroke="${track}" stroke-width="12"/>
+      <circle cx="70" cy="70" r="${r}" fill="none" stroke="${color}" stroke-width="12"
+        stroke-dasharray="${filled} ${gap}" stroke-dashoffset="${circ * 0.25}"
+        stroke-linecap="round" style="transition:stroke-dasharray 0.6s ease"/>
+      <text x="70" y="66" text-anchor="middle" fill="${color}" font-size="28" font-weight="800">${pct}%</text>
+      <text x="70" y="84" text-anchor="middle" fill="#9ca3af" font-size="11">${sublabel}</text>
+    </svg>
+    <div class="donut-label">${label}</div>
+  </div>`;
 }
 
 // Tarjan's SCC algorithm — returns arrays of node groups forming cycles (size > 1 only)
@@ -3793,10 +3873,11 @@ function parseInput() {
     alert('No tables found. Check your input format.' + (warnings ? '\n\n' + warnings : ''));
     return;
   }
-  STATE.parsed = parsed; STATE.blueprint = STATE.tables = STATE.medallion = STATE.validation = STATE.notebook = STATE.migrationReport = null;
-  // Lock steps 6+7 until validation completes
+  STATE.parsed = parsed; STATE.blueprint = STATE.tables = STATE.medallion = STATE.validation = STATE.notebook = STATE.migrationReport = STATE.comparison = null;
+  // Lock steps 6+7+8 until validation completes
   setTabStatus('notebook', 'locked');
   setTabStatus('report', 'locked');
+  setTabStatus('comparison', 'locked');
   document.getElementById('notebookNotReady').classList.remove('hidden');
   document.getElementById('notebookNotNifi').classList.add('hidden');
   document.getElementById('notebookReady').classList.add('hidden');
@@ -3804,6 +3885,9 @@ function parseInput() {
   document.getElementById('reportNotReady').classList.remove('hidden');
   document.getElementById('reportReady').classList.add('hidden');
   document.getElementById('reportResults').innerHTML = '';
+  document.getElementById('comparisonNotReady').classList.remove('hidden');
+  document.getElementById('comparisonReady').classList.add('hidden');
+  document.getElementById('comparisonResults').innerHTML = '';
   // Detect source system
   const fmt = parsed.detected_format || parsed.input_format || 'unknown';
   const src = detectSourceSystem(content, fmt);
@@ -4300,6 +4384,10 @@ function generateReport() {
 
   document.getElementById('reportResults').innerHTML = h;
   setTabStatus('report', 'done');
+  // Unlock Step 8
+  document.getElementById('comparisonNotReady').classList.add('hidden');
+  document.getElementById('comparisonReady').classList.remove('hidden');
+  unlockTab('comparison');
 }
 
 function downloadReport() {
@@ -4331,6 +4419,69 @@ function downloadReport() {
   a.href = URL.createObjectURL(blob);
   a.download = 'migration_report.md';
   a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ================================================================
+// STEP 8 — CROSS-COMPARISON DASHBOARD
+// ================================================================
+function generateComparison() {
+  if (!STATE.notebook || !STATE.parsed || !STATE.parsed._nifi) return;
+  setTabStatus('comparison', 'processing');
+  const cmp = computeComparison(STATE.notebook.mappings, STATE.parsed._nifi);
+  STATE.comparison = cmp;
+
+  let h = '<hr class="divider">';
+
+  // --- Three Donut Charts ---
+  h += '<div class="comparison-donuts">';
+  h += donutSVG(cmp.exact.pct, 'Exact Match', `${cmp.exact.count} / ${cmp.exact.total}`);
+  h += donutSVG(cmp.functional.pct, 'Functional Match', `${cmp.functional.count} / ${cmp.functional.total}`);
+  h += donutSVG(cmp.actions.pct, 'Actions Converted', `${cmp.actions.count} / ${cmp.actions.total}`);
+  h += '</div>';
+
+  // --- Summary Metrics ---
+  const gaps = cmp.exact.total - cmp.functional.count;
+  h += metricsHTML([
+    ['Total Processors', cmp.exact.total],
+    ['Exact Matches', `<span style="color:#21C354">${cmp.exact.count}</span>`],
+    ['Functional Matches', `<span style="color:#EAB308">${cmp.functional.count}</span>`],
+    ['Gaps', `<span style="color:#EF4444">${gaps}</span>`],
+    ['Pipeline Actions', `${cmp.actions.count} / ${cmp.actions.total}`]
+  ]);
+
+  // --- Legend ---
+  h += '<div style="margin:16px 0;font-size:0.85rem;color:var(--text2)">';
+  h += '<strong>Exact Match</strong> = direct 1:1 code equivalent (confidence &ge; 80%) &nbsp;|&nbsp; ';
+  h += '<strong>Functional</strong> = intent preserved (any confidence) &nbsp;|&nbsp; ';
+  h += '<strong>Actions</strong> = pipeline connections where both ends are mapped';
+  h += '</div>';
+
+  // --- Line-by-Line Comparison Table (inside details) ---
+  h += '<hr class="divider">';
+  h += `<details class="comparison-detail"><summary>Line-by-Line Comparison (${cmp.rows.length} processors)</summary>`;
+  h += '<div class="table-scroll"><table><thead><tr>';
+  h += '<th>#</th><th>NiFi Processor</th><th>Type</th><th>Group</th><th></th><th>Databricks Equivalent</th><th>Category</th><th>Match</th><th>Confidence</th>';
+  h += '</tr></thead><tbody>';
+  cmp.rows.forEach(r => {
+    const badgeCls = r.matchType === 'exact' ? 'match-exact' : r.matchType === 'functional' ? 'match-functional' : 'match-gap';
+    const badgeLabel = r.matchType === 'exact' ? 'Exact' : r.matchType === 'functional' ? 'Functional' : 'Gap';
+    const confStr = r.matchType === 'gap' ? '—' : Math.round(r.confidence * 100) + '%';
+    h += `<tr>`;
+    h += `<td>${r.idx}</td>`;
+    h += `<td><strong>${r.name}</strong></td>`;
+    h += `<td style="color:var(--text2)">${r.type}</td>`;
+    h += `<td style="color:var(--text2)">${r.group}</td>`;
+    h += `<td style="text-align:center;color:var(--text2)">&rarr;</td>`;
+    h += `<td>${r.equiv}</td>`;
+    h += `<td style="color:var(--text2)">${r.category}</td>`;
+    h += `<td><span class="match-badge ${badgeCls}">${badgeLabel}</span></td>`;
+    h += `<td style="text-align:center">${confStr}</td>`;
+    h += `</tr>`;
+  });
+  h += '</tbody></table></div></details>';
+
+  document.getElementById('comparisonResults').innerHTML = h;
+  setTabStatus('comparison', 'done');
 }
 
 // ================================================================
