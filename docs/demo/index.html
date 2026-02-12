@@ -275,6 +275,18 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 .sample-info strong { font-size:0.85rem; color:var(--text1); }
 .sample-info span { font-size:0.75rem; color:var(--text2); }
 .sample-tags { font-size:0.7rem !important; color:var(--accent) !important; opacity:0.8; }
+.ops-log { max-height:400px; overflow-y:auto; font-family:var(--mono); font-size:0.78rem; }
+.ops-log-row { display:grid; grid-template-columns:50px 180px 100px 1fr 80px; gap:4px; padding:3px 0; border-bottom:1px solid var(--border); align-items:center; }
+.ops-log-row:hover { background:rgba(255,107,53,0.05); }
+.ops-log-row.header { font-weight:700; color:var(--text2); font-size:0.72rem; text-transform:uppercase; border-bottom:2px solid var(--border); }
+.ops-action { font-weight:600; font-size:0.75rem; }
+.ops-action.file { color:#4285F4; } .ops-action.sql { color:#21C354; } .ops-action.token { color:#FACA15; } .ops-action.signal { color:#FF6D70; } .ops-action.counter { color:#8B5CF6; } .ops-action.queue { color:#29B5E8; }
+.resource-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+.resource-dot.used { background:#21C354; } .resource-dot.orphaned { background:#FACA15; } .resource-dot.missing { background:#FF4B4B; }
+.manifest-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; margin:8px 0; }
+.manifest-stat { text-align:center; padding:8px; border-radius:8px; background:var(--surface2); }
+.manifest-stat .num { font-size:1.3rem; font-weight:700; color:var(--accent); }
+.manifest-stat .lbl { font-size:0.72rem; color:var(--text2); }
 .venv-tree { font-family:var(--mono); font-size:0.82rem; line-height:1.7; padding:8px 0; }
 .venv-tree .dir { color:var(--text2); font-weight:600; }
 .venv-tree .file { color:var(--accent); }
@@ -560,7 +572,7 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 // ================================================================
 // STATE
 // ================================================================
-let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null, notebook: null, migrationReport: null, comparison: null, simulation: null, finalReport: null, virtualEnv: null };
+let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null, notebook: null, migrationReport: null, comparison: null, simulation: null, finalReport: null, virtualEnv: null, manifest: null };
 
 // ================================================================
 // TAB NAVIGATION
@@ -2024,6 +2036,240 @@ function parseNiFiXML(doc, sourceName) {
   const result = {source_name:sourceName||'Apache NiFi Flow', source_type:'nifi', tables, input_format:'nifi_xml', parse_warnings:warnings};
   result._nifi = {processors, connections, controllerServices, processGroups, sqlTables:[...sqlTables]};
   return result;
+}
+
+// ================================================================
+// RESOURCE MANIFEST — Identifies ALL resources needed by NiFi flow
+// ================================================================
+function buildResourceManifest(nifi) {
+  const dirs = {}, files = {}, sqlTbls = {}, tokens = {}, signals = {};
+  const httpEndpoints = [], kafkaTopics = [], dbConnections = [], scripts = [], parameters = [], counters = [];
+  const connectedIds = new Set();
+  const NIFI_EL_FUNCS = new Set(['now','nextInt','UUID','hostname','IP','literal','thread','format','toDate','substring','substringBefore','substringAfter','replace','replaceAll','replaceFirst','replaceEmpty','replaceNull','toUpper','toLower','trim','length','isEmpty','equals','equalsIgnoreCase','contains','startsWith','endsWith','append','prepend','plus','minus','multiply','divide','mod','gt','ge','lt','le','and','or','not','ifElse','toString','toNumber','math','getStateValue','count','padLeft','padRight','escapeJson','escapeXml','escapeCsv','unescapeJson','unescapeXml','urlEncode','urlDecode','base64Encode','base64Decode','toRadix','jsonPath','jsonPathDelete','jsonPathAdd','jsonPathSet','jsonPathPut']);
+
+  function addDir(path, type, proc) {
+    if (!path || path.includes('${')) return;
+    if (!dirs[path]) dirs[path] = { type, processors: [] };
+    dirs[path].processors.push(proc);
+  }
+  function addFile(path, role, proc, fmt) {
+    if (!path) return;
+    if (!files[path]) files[path] = { producers: [], consumers: [], format: fmt || 'unknown' };
+    if (role === 'read') files[path].consumers.push(proc);
+    else files[path].producers.push(proc);
+  }
+  function addSqlTable(name, role, proc) {
+    if (!name || name === 'dual' || name.length < 2) return;
+    const n = name.replace(/^["'`]+|["'`]+$/g, '').trim();
+    if (!n || /^(waiting|because|account|log|Dates|LeadLag|startGrouping|grps|Temptation)$/i.test(n)) return;
+    if (!sqlTbls[n]) sqlTbls[n] = { readers: [], writers: [] };
+    if (role === 'read') sqlTbls[n].readers.push(proc);
+    else sqlTbls[n].writers.push(proc);
+  }
+  function findUnresolvedEL(value, proc) {
+    if (!value || typeof value !== 'string') return;
+    const matches = value.match(/\$\{([^}]+)\}/g);
+    if (!matches) return;
+    matches.forEach(m => {
+      const inner = m.slice(2, -1);
+      const funcName = inner.split(':')[0].trim();
+      if (!NIFI_EL_FUNCS.has(funcName) && !funcName.includes('.') && !/^(filename|path|absolute\.path|uuid|fileSize|file\.size|entryDate|lineageStartDate|flowfile)/.test(funcName)) {
+        parameters.push({ expr: m, processor: proc, attrName: funcName, resolved: false });
+      }
+    });
+  }
+
+  // Scan connections for connected processor IDs
+  (nifi.connections || []).forEach(c => {
+    if (c.sourceType === 'PROCESSOR') connectedIds.add(c.sourceId || c.sourceName);
+    if (c.destinationType === 'PROCESSOR') connectedIds.add(c.destinationId || c.destinationName);
+    connectedIds.add(c.sourceName); connectedIds.add(c.destinationName);
+  });
+
+  // Scan each processor
+  (nifi.processors || []).forEach(p => {
+    const props = p.properties || {};
+    const pName = p.name;
+    const t = p.type;
+
+    // Scan ALL properties for unresolved expressions
+    Object.entries(props).forEach(([k, v]) => findUnresolvedEL(v, pName));
+
+    // Per-type resource extraction
+    if (t === 'GetFile') {
+      const dir = props['Input Directory']; addDir(dir, 'input', pName);
+      if (dir) addFile(dir + '/*.csv', 'read', pName, 'csv');
+    } else if (t === 'ListFile') {
+      const dir = props['Input Directory']; addDir(dir, 'input', pName);
+    } else if (t === 'FetchFile') {
+      const fp = props['File to Fetch'] || props['Filename']; addFile(fp || '(dynamic)', 'read', pName);
+    } else if (t === 'PutFile') {
+      const dir = props['Directory']; addDir(dir, 'output', pName);
+    } else if (t === 'PutSFTP') {
+      const host = props['Hostname'] || 'sftp-host';
+      const rp = props['Remote Path'] || '/';
+      addDir(`sftp://${host}${rp}`, 'output', pName);
+      addFile(`sftp://${host}${rp}/(dynamic)`, 'write', pName);
+    } else if (t === 'PutHDFS' || t === 'PutParquet') {
+      const dir = props['Directory'] || props['directory']; addDir(dir, 'output', pName);
+    } else if (t === 'ExecuteSQL' || t === 'ExecuteSQLRecord') {
+      const sql = props['SQL select query'] || props['sql-select-query'] || '';
+      const tblRefs = sql.match(/(?:FROM|JOIN)\s+([\w$.{}"]+)/gi);
+      if (tblRefs) tblRefs.forEach(r => {
+        const tn = r.replace(/^(FROM|JOIN)\s+/i, '').trim();
+        addSqlTable(tn, 'read', pName);
+      });
+      const dbcp = props['Database Connection Pooling Service'] || props['dbcp-service'];
+      if (dbcp) dbConnections.push({ name: dbcp, processor: pName, type: 'read' });
+    } else if (t === 'PutDatabaseRecord' || t === 'PutSQL') {
+      const tn = props['Table Name'] || props['table-name'] || props['put-db-record-table-name'];
+      addSqlTable(tn, 'write', pName);
+      const dbcp = props['Database Connection Pooling Service'] || props['dbcp-service'];
+      if (dbcp) dbConnections.push({ name: dbcp, processor: pName, type: 'write' });
+    } else if (t === 'ExecuteStreamCommand') {
+      const cmd = props['Command'] || '';
+      const args = props['Command Arguments'] || '';
+      if (cmd) scripts.push({ path: cmd, args, processor: pName });
+      // Check for hdfs/impala/kinit patterns in args
+      if (/hdfs\s+dfs/.test(args)) {
+        const hdfsMatch = args.match(/(?:-cp|-mv|-put|-get|-ls|-rm)\s+(\S+)/);
+        if (hdfsMatch) addDir(hdfsMatch[1], args.includes('-ls') ? 'input' : 'output', pName);
+      }
+    } else if (t === 'InvokeHTTP') {
+      const url = props['Remote URL'] || props['remote-url'] || '';
+      const method = props['HTTP Method'] || props['http-method'] || 'GET';
+      if (url) httpEndpoints.push({ url, method, processor: pName });
+    } else if (t === 'ConsumeKafka_2_6' || t === 'ConsumeKafka' || t === 'ConsumeKafkaRecord_2_6') {
+      const topic = props['Topic Name(s)'] || props['topic'] || '';
+      const brokers = props['Kafka Brokers'] || props['bootstrap.servers'] || '';
+      if (topic) kafkaTopics.push({ topic, brokers, processor: pName, direction: 'consume' });
+    } else if (t === 'PublishKafka_2_6' || t === 'PublishKafka' || t === 'PublishKafkaRecord_2_6') {
+      const topic = props['Topic Name(s)'] || props['topic'] || '';
+      const brokers = props['Kafka Brokers'] || props['bootstrap.servers'] || '';
+      if (topic) kafkaTopics.push({ topic, brokers, processor: pName, direction: 'produce' });
+    } else if (t === 'Wait') {
+      const sn = props['Signal Counter Name'] || '';
+      const target = parseInt(props['Target Signal Count']) || 1;
+      if (sn) { if (!signals[sn]) signals[sn] = { senders: [], waiters: [], target }; signals[sn].waiters.push(pName); }
+    } else if (t === 'Notify') {
+      const sn = props['Signal Counter Name'] || '';
+      if (sn) { if (!signals[sn]) signals[sn] = { senders: [], waiters: [], target: 1 }; signals[sn].senders.push(pName); }
+    } else if (t === 'ControlRate') {
+      const tn = 'rate_' + pName.replace(/\s+/g, '_');
+      tokens[tn] = { acquirers: [pName], releasers: [pName] };
+    } else if (t === 'LogMessage') {
+      counters.push({ name: 'log_' + pName, processor: pName });
+    } else if (t === 'LookupAttribute' || t === 'LookupRecord') {
+      addSqlTable('lookup_' + pName.replace(/\s+/g, '_').toLowerCase(), 'read', pName);
+    }
+  });
+
+  // Scan controller services for DB connections
+  (nifi.controllerServices || []).forEach(cs => {
+    const props = cs.properties || {};
+    const url = props['Database Connection URL'] || props['database-connection-url'] || '';
+    if (url || cs.type.includes('DBCP') || cs.type.includes('ConnectionPool')) {
+      dbConnections.push({ name: cs.name, url: url ? url.replace(/password=[^&;]+/gi, 'password=***') : '', processor: '(controller service)', type: 'service' });
+    }
+  });
+
+  // Detect disconnected processors
+  const disconnected = (nifi.processors || []).filter(p => !connectedIds.has(p.name) && !connectedIds.has(p.id));
+
+  // Deduplicate parameters
+  const uniqueParams = [];
+  const seenParams = new Set();
+  parameters.forEach(p => { const k = p.expr + '|' + p.processor; if (!seenParams.has(k)) { seenParams.add(k); uniqueParams.push(p); } });
+
+  // Summary counts
+  const totalResources = Object.keys(dirs).length + Object.keys(files).length + Object.keys(sqlTbls).length +
+    Object.keys(tokens).length + Object.keys(signals).length + httpEndpoints.length + kafkaTopics.length +
+    scripts.length + dbConnections.length + counters.length;
+
+  return {
+    directories: dirs, files, sqlTables: sqlTbls, tokens, signals,
+    httpEndpoints, kafkaTopics, dbConnections, scripts,
+    parameters: uniqueParams, counters, disconnected,
+    totalResources,
+    warnings: [
+      ...disconnected.map(p => `Processor "${p.name}" (${p.type}) has no connections — may never execute`),
+      ...uniqueParams.filter(p => !p.resolved).slice(0, 10).map(p => `Unresolved expression ${p.expr} in "${p.processor}"`),
+      ...(dbConnections.filter(d => d.type !== 'service').length > 0 && dbConnections.filter(d => d.type === 'service').length === 0 ?
+        ['Processors reference DB connections but no DBCP controller service found'] : [])
+    ]
+  };
+}
+
+function renderManifestHTML(manifest) {
+  const m = manifest;
+  const dirCount = Object.keys(m.directories).length;
+  const fileCount = Object.keys(m.files).length;
+  const sqlCount = Object.keys(m.sqlTables).length;
+  const tokCount = Object.keys(m.tokens).length;
+  const sigCount = Object.keys(m.signals).length;
+
+  let h = '<div class="manifest-grid">';
+  h += `<div class="manifest-stat"><div class="num">${dirCount}</div><div class="lbl">Directories</div></div>`;
+  h += `<div class="manifest-stat"><div class="num">${fileCount}</div><div class="lbl">Files</div></div>`;
+  h += `<div class="manifest-stat"><div class="num">${sqlCount}</div><div class="lbl">SQL Tables</div></div>`;
+  h += `<div class="manifest-stat"><div class="num">${tokCount}</div><div class="lbl">Tokens</div></div>`;
+  h += `<div class="manifest-stat"><div class="num">${sigCount}</div><div class="lbl">Signals</div></div>`;
+  h += `<div class="manifest-stat"><div class="num">${m.scripts.length}</div><div class="lbl">Scripts</div></div>`;
+  h += `<div class="manifest-stat"><div class="num">${m.httpEndpoints.length}</div><div class="lbl">HTTP APIs</div></div>`;
+  h += `<div class="manifest-stat"><div class="num">${m.kafkaTopics.length}</div><div class="lbl">Kafka Topics</div></div>`;
+  h += '</div>';
+
+  // Directories
+  if (dirCount) {
+    const rows = Object.entries(m.directories).map(([p, d]) => [escapeHTML(p), d.type, d.processors.map(escapeHTML).join(', ')]);
+    h += '<h4 style="margin:12px 0 4px">Directories</h4>' + tableHTML(['Path', 'Type', 'Processors'], rows);
+  }
+  // SQL Tables
+  if (sqlCount) {
+    const rows = Object.entries(m.sqlTables).map(([n, t]) => [
+      escapeHTML(n),
+      t.readers.length ? t.readers.map(escapeHTML).join(', ') : '<em>none</em>',
+      t.writers.length ? t.writers.map(escapeHTML).join(', ') : '<em>none</em>'
+    ]);
+    h += '<h4 style="margin:12px 0 4px">SQL Tables</h4>' + tableHTML(['Table', 'Readers', 'Writers'], rows);
+  }
+  // Signals & Tokens
+  if (sigCount || tokCount) {
+    const rows = [];
+    Object.entries(m.signals).forEach(([n, s]) => rows.push([escapeHTML(n), 'Signal', s.senders.map(escapeHTML).join(', '), s.waiters.map(escapeHTML).join(', '), s.target]));
+    Object.entries(m.tokens).forEach(([n, t]) => rows.push([escapeHTML(n), 'Token', t.acquirers.map(escapeHTML).join(', '), t.releasers.map(escapeHTML).join(', '), '—']));
+    h += '<h4 style="margin:12px 0 4px">Tokens &amp; Signals</h4>' + tableHTML(['Name', 'Type', 'Producers', 'Consumers', 'Target'], rows);
+  }
+  // Scripts
+  if (m.scripts.length) {
+    const rows = m.scripts.map(s => [escapeHTML(s.path), escapeHTML(s.args), escapeHTML(s.processor)]);
+    h += '<h4 style="margin:12px 0 4px">Scripts</h4>' + tableHTML(['Path', 'Arguments', 'Processor'], rows);
+  }
+  // HTTP Endpoints
+  if (m.httpEndpoints.length) {
+    const rows = m.httpEndpoints.map(e => [escapeHTML(e.url), e.method, escapeHTML(e.processor)]);
+    h += '<h4 style="margin:12px 0 4px">HTTP Endpoints</h4>' + tableHTML(['URL', 'Method', 'Processor'], rows);
+  }
+  // Kafka Topics
+  if (m.kafkaTopics.length) {
+    const rows = m.kafkaTopics.map(k => [escapeHTML(k.topic), k.direction, escapeHTML(k.brokers), escapeHTML(k.processor)]);
+    h += '<h4 style="margin:12px 0 4px">Kafka Topics</h4>' + tableHTML(['Topic', 'Direction', 'Brokers', 'Processor'], rows);
+  }
+  // DB Connections
+  if (m.dbConnections.length) {
+    const rows = m.dbConnections.map(d => [escapeHTML(d.name), escapeHTML(d.url || '—'), escapeHTML(d.processor)]);
+    h += '<h4 style="margin:12px 0 4px">Database Connections</h4>' + tableHTML(['Service', 'URL', 'Processor'], rows);
+  }
+  // Warnings
+  if (m.warnings.length) {
+    h += '<div style="margin-top:12px">' + m.warnings.map(w => `<div class="alert alert-warn" style="margin:4px 0;padding:6px 12px;font-size:0.82rem">${escapeHTML(w)}</div>`).join('') + '</div>';
+  }
+  // Disconnected processors
+  if (m.disconnected.length) {
+    const rows = m.disconnected.map(p => [escapeHTML(p.name), escapeHTML(p.type), escapeHTML(p.group || '—'), escapeHTML(p.state || '—')]);
+    h += '<h4 style="margin:12px 0 4px;color:var(--red)">Disconnected Processors</h4>' + tableHTML(['Name', 'Type', 'Group', 'State'], rows);
+  }
+  return h;
 }
 
 // ================================================================
@@ -4483,6 +4729,10 @@ function parseInput() {
       const stRows = nf.sqlTables.map(t => [t, t.startsWith('$')?'variable':'table']);
       h += expanderHTML(`<strong>SQL Table References</strong> (${nf.sqlTables.length})`, tableHTML(['Table Reference','Type'], stRows));
     }
+    // Build and display Resource Manifest
+    const manifest = buildResourceManifest(nf);
+    STATE.manifest = manifest;
+    h += expanderHTML(`<strong>Resource Manifest</strong> (${manifest.totalResources} resources)`, renderManifestHTML(manifest), true);
   }
   // Dependency graph-specific details
   if (parsed._dependency) {
@@ -4641,7 +4891,7 @@ function generateData() {
   const tables = STATE.tables;
   // Build VirtualEnv if NiFi flow is loaded
   if (STATE.parsed && STATE.parsed._nifi) {
-    const venvResult = buildInitialVirtualEnv(STATE.parsed._nifi, tables);
+    const venvResult = buildInitialVirtualEnv(STATE.parsed._nifi, tables, STATE.manifest);
     // Clone for both engines
     const nifiEnv = venvResult.env;
     const dbxJson = JSON.stringify({ filesystem: nifiEnv.filesystem, sqlTables: nifiEnv.sqlTables, tokens: nifiEnv.tokens, signals: nifiEnv.signals, counters: nifiEnv.counters });
@@ -4683,7 +4933,11 @@ function generateData() {
     h += `<div class="venv-stat"><div class="venv-stat-num">${ss.sqlTables}</div><div class="venv-stat-label">SQL Tables</div></div>`;
     h += `<div class="venv-stat"><div class="venv-stat-num">${ss.tokens}</div><div class="venv-stat-label">Tokens</div></div>`;
     h += `<div class="venv-stat"><div class="venv-stat-num">${ss.signals}</div><div class="venv-stat-label">Signals</div></div>`;
+    if (ss.scripts) h += `<div class="venv-stat"><div class="venv-stat-num">${ss.scripts}</div><div class="venv-stat-label">Scripts</div></div>`;
+    if (ss.httpEndpoints) h += `<div class="venv-stat"><div class="venv-stat-num">${ss.httpEndpoints}</div><div class="venv-stat-label">HTTP APIs</div></div>`;
+    if (ss.kafkaTopics) h += `<div class="venv-stat"><div class="venv-stat-num">${ss.kafkaTopics}</div><div class="venv-stat-label">Kafka Topics</div></div>`;
     h += '</div>';
+    if (ss.manifestTotal) h += `<div style="font-size:0.82rem;color:var(--text2);margin:4px 0">Manifest coverage: <strong>${ss.manifestSeeded}</strong> resources seeded of <strong>${ss.manifestTotal}</strong> identified</div>`;
     h += expanderHTML('<strong>Virtual Environment Resources</strong> (files, tables, tokens, signals)', renderVenvTree(nEnv), false);
   }
   h += `<div class="alert alert-success">Generated <strong>${totalRows.toLocaleString()} rows</strong> across <strong>${Object.keys(tables).length} tables</strong>${STATE.virtualEnv ? ` + <strong>${STATE.virtualEnv.seedStats.files} files</strong>, <strong>${STATE.virtualEnv.seedStats.sqlTables} SQL tables</strong>, <strong>${STATE.virtualEnv.seedStats.tokens} tokens</strong> in VirtualEnv` : ''} — proceed to Step 4</div>`;
@@ -5520,7 +5774,7 @@ function generateSyntheticFileContent(columns, rowCount, format) {
   return header + '\n' + lines.join('\n');
 }
 
-function buildInitialVirtualEnv(nifiData, tables) {
+function buildInitialVirtualEnv(nifiData, tables, manifest) {
   const env = new VirtualEnv();
   const procs = nifiData.processors;
   const conns = nifiData.connections;
@@ -5676,12 +5930,55 @@ function buildInitialVirtualEnv(nifiData, tables) {
     }
   });
 
+  // Manifest-based seeding: fill any gaps the per-processor scan missed
+  if (manifest) {
+    // Seed directories from manifest that weren't already created
+    Object.entries(manifest.directories).forEach(([dir, info]) => {
+      if (info.type === 'input' && !Object.keys(env.filesystem).some(f => f.startsWith(dir))) {
+        const content = generateSyntheticFileContent(defaultCols, 10, 'csv');
+        for (let i = 1; i <= 3; i++) env.writeFile('SEED', `${dir}/data_${String(i).padStart(3,'0')}.csv`, content, 'csv');
+      }
+    });
+    // Seed SQL tables from manifest not yet in env
+    Object.keys(manifest.sqlTables).forEach(tn => {
+      if (!env.sqlTables[tn]) {
+        const cols = {}; defaultCols.forEach(c => { cols[c] = []; for (let i=0;i<15;i++) cols[c].push(generateSyntheticValue(c,i,'string')); });
+        env.createTable('SEED', tn, Object.fromEntries(defaultCols.map(c=>[c, typeof cols[c][0] === 'number' ? 'int' : 'string'])));
+        env.insertRows('SEED', tn, cols);
+      }
+    });
+    // Seed scripts from manifest
+    manifest.scripts.forEach(s => {
+      if (s.path && !env.fileExists(s.path)) {
+        env.writeFile('SEED', s.path, `#!/bin/bash\n# Synthetic script: ${s.path}\necho "Executing ${s.processor}"\n${s.args || ''}`, 'script');
+      }
+    });
+    // Seed HTTP response caches from manifest
+    manifest.httpEndpoints.forEach(ep => {
+      const path = `/tmp/http_responses/${ep.processor.replace(/\s+/g,'_')}.json`;
+      if (!env.fileExists(path)) {
+        env.writeFile('SEED', path, JSON.stringify({status:200,body:{result:'ok',endpoint:ep.url},timestamp:new Date().toISOString()}), 'json');
+      }
+    });
+    // Seed Kafka topic queues
+    manifest.kafkaTopics.forEach(kt => {
+      if (kt.direction === 'consume') {
+        const queueId = `kafka_${kt.topic.replace(/[^a-zA-Z0-9]/g,'_')}`;
+        for (let i = 0; i < 5; i++) {
+          env.enqueue('SEED', queueId, { attributes: { 'kafka.topic': kt.topic, 'kafka.partition': '0', 'kafka.offset': String(i) }, content: JSON.stringify({ event_id: i, timestamp: new Date().toISOString(), data: 'synthetic_' + i }) });
+        }
+      }
+    });
+  }
+
   // Clear SEED entries from log (they're infrastructure, not simulation)
   const seedLogCount = env.log.length;
   env.log = [];
   env.tick = 0;
 
-  return { env, seedStats: { files: Object.keys(env.filesystem).length, sqlTables: Object.keys(env.sqlTables).length, tokens: Object.keys(env.tokens).length, signals: Object.keys(env.signals).length, seedActions: seedLogCount } };
+  const manifestTotal = manifest ? manifest.totalResources : 0;
+  const manifestSeeded = Object.keys(env.filesystem).length + Object.keys(env.sqlTables).length + Object.keys(env.tokens).length + Object.keys(env.signals).length;
+  return { env, seedStats: { files: Object.keys(env.filesystem).length, sqlTables: Object.keys(env.sqlTables).length, tokens: Object.keys(env.tokens).length, signals: Object.keys(env.signals).length, seedActions: seedLogCount, scripts: manifest ? manifest.scripts.length : 0, httpEndpoints: manifest ? manifest.httpEndpoints.length : 0, kafkaTopics: manifest ? manifest.kafkaTopics.length : 0, directories: Object.keys(manifest ? manifest.directories : {}).length, manifestTotal, manifestSeeded } };
 }
 
 function renderVenvTree(env) {
@@ -5720,6 +6017,105 @@ function renderVenvTree(env) {
     h += '<div style="margin-top:8px"><span class="dir">Signals</span></div>';
     Object.entries(env.signals).forEach(([name, s]) => {
       h += `<div style="padding-left:16px"><span class="file">${name}</span> <span class="venv-badge">${s.count}/${s.target} ${s.released ? 'released' : 'waiting'}</span></div>`;
+    });
+  }
+  h += '</div>';
+  return h;
+}
+
+function renderOperationsLog(env, label) {
+  const log = env.log || [];
+  if (!log.length) return `<em style="color:var(--text2)">No actions recorded for ${label}</em>`;
+  // Summary counts
+  const counts = {};
+  log.forEach(e => { counts[e.action] = (counts[e.action] || 0) + 1; });
+  const total = log.length;
+  let h = `<div style="font-size:0.78rem;color:var(--text2);margin-bottom:8px"><strong>${total}</strong> actions: `;
+  h += Object.entries(counts).sort((a,b) => b[1]-a[1]).map(([a,c]) => {
+    const cls = a.startsWith('FILE') ? 'file' : a.startsWith('SQL') ? 'sql' : a.startsWith('TOKEN') ? 'token' : a.startsWith('SIGNAL') ? 'signal' : a.startsWith('COUNTER') ? 'counter' : 'queue';
+    return `<span class="ops-action ${cls}">${a}</span> ${c}`;
+  }).join(' &bull; ');
+  h += '</div>';
+  // Timeline (capped at 500 rows for performance)
+  h += '<div class="ops-log">';
+  h += '<div class="ops-log-row header"><span>Tick</span><span>Processor</span><span>Action</span><span>Target</span><span>Details</span></div>';
+  const shown = log.slice(0, 500);
+  shown.forEach(e => {
+    const cls = e.action.startsWith('FILE') ? 'file' : e.action.startsWith('SQL') ? 'sql' : e.action.startsWith('TOKEN') ? 'token' : e.action.startsWith('SIGNAL') ? 'signal' : e.action.startsWith('COUNTER') ? 'counter' : 'queue';
+    let detail = '';
+    if (e.action === 'FILE_WRITE' && e.after) detail = (e.after.size || 0) + 'B';
+    else if (e.action === 'FILE_READ' && e.after) detail = typeof e.after === 'string' ? e.after.length + 'B' : '';
+    else if (e.action === 'SQL_INSERT' && e.after) detail = (e.after.rowCount || 0) + ' rows';
+    else if (e.action === 'SQL_QUERY' && e.after) detail = (e.after.rowCount || 0) + ' rows';
+    else if (e.action === 'SQL_CREATE') detail = 'created';
+    else if (e.action === 'COUNTER_INC' && e.after !== undefined) detail = String(e.after);
+    h += `<div class="ops-log-row"><span>${e.tick}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHTML(e.processor)}">${escapeHTML(e.processor)}</span><span class="ops-action ${cls}">${e.action}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHTML(e.target)}">${escapeHTML(e.target)}</span><span>${detail}</span></div>`;
+  });
+  if (log.length > 500) h += `<div style="padding:8px;text-align:center;color:var(--text2);font-size:0.78rem">...and ${log.length - 500} more actions</div>`;
+  h += '</div>';
+  return h;
+}
+
+function renderResourceUsage(manifest, nifiEnv, dbxEnv) {
+  if (!manifest) return '';
+  const touchedFiles = new Set(), touchedTables = new Set(), touchedTokens = new Set(), touchedSignals = new Set();
+  [nifiEnv, dbxEnv].forEach(env => {
+    if (!env) return;
+    (env.log || []).forEach(e => {
+      if (e.action.startsWith('FILE_')) touchedFiles.add(e.target);
+      else if (e.action.startsWith('SQL_')) touchedTables.add(e.target);
+      else if (e.action.startsWith('TOKEN_')) touchedTokens.add(e.target);
+      else if (e.action.startsWith('SIGNAL_')) touchedSignals.add(e.target);
+    });
+  });
+
+  const allFiles = nifiEnv ? Object.keys(nifiEnv.filesystem) : [];
+  const allTables = nifiEnv ? Object.keys(nifiEnv.sqlTables) : [];
+  const allTokens = nifiEnv ? Object.keys(nifiEnv.tokens) : [];
+  const allSignals = nifiEnv ? Object.keys(nifiEnv.signals) : [];
+
+  const usedFiles = allFiles.filter(f => touchedFiles.has(f));
+  const orphanedFiles = allFiles.filter(f => !touchedFiles.has(f));
+  const usedTables = allTables.filter(t => touchedTables.has(t));
+  const orphanedTables = allTables.filter(t => !touchedTables.has(t));
+  const usedTokens = allTokens.filter(t => touchedTokens.has(t));
+  const orphanedTokens = allTokens.filter(t => !touchedTokens.has(t));
+  const usedSignals = allSignals.filter(s => touchedSignals.has(s));
+  const orphanedSignals = allSignals.filter(s => !touchedSignals.has(s));
+
+  // Detect conflicts: multiple processors writing same target
+  const writeTargets = {};
+  if (nifiEnv) nifiEnv.log.filter(e => e.action === 'FILE_WRITE' || e.action === 'SQL_INSERT').forEach(e => {
+    if (!writeTargets[e.target]) writeTargets[e.target] = new Set();
+    writeTargets[e.target].add(e.processor);
+  });
+  const conflicts = Object.entries(writeTargets).filter(([, procs]) => procs.size > 1).map(([target, procs]) => ({ target, processors: [...procs] }));
+
+  let h = '<div style="font-size:0.82rem">';
+  const bar = (label, used, total, orphaned) => {
+    const pct = total > 0 ? Math.round(used / total * 100) : 100;
+    return `<div style="margin:6px 0"><strong>${label}:</strong> ${used} of ${total} used (${pct}%)` +
+      (orphaned > 0 ? ` <span style="color:var(--yellow)">— ${orphaned} orphaned</span>` : ' <span style="color:#21C354">all used</span>') + '</div>';
+  };
+  h += bar('Files', usedFiles.length, allFiles.length, orphanedFiles.length);
+  h += bar('SQL Tables', usedTables.length, allTables.length, orphanedTables.length);
+  h += bar('Tokens', usedTokens.length, allTokens.length, orphanedTokens.length);
+  h += bar('Signals', usedSignals.length, allSignals.length, orphanedSignals.length);
+
+  // List orphans
+  if (orphanedFiles.length) {
+    h += '<details style="margin:6px 0"><summary style="cursor:pointer;font-size:0.78rem;color:var(--yellow)">Orphaned Files (' + orphanedFiles.length + ')</summary>';
+    h += '<div style="font-size:0.75rem;font-family:var(--mono);padding:4px 12px">' + orphanedFiles.map(f => `<span class="resource-dot orphaned"></span>${escapeHTML(f)}`).join('<br>') + '</div></details>';
+  }
+  if (orphanedTables.length) {
+    h += '<details style="margin:6px 0"><summary style="cursor:pointer;font-size:0.78rem;color:var(--yellow)">Orphaned Tables (' + orphanedTables.length + ')</summary>';
+    h += '<div style="font-size:0.75rem;font-family:var(--mono);padding:4px 12px">' + orphanedTables.map(t => `<span class="resource-dot orphaned"></span>${escapeHTML(t)}`).join('<br>') + '</div></details>';
+  }
+  // Conflicts
+  if (conflicts.length) {
+    h += '<div style="margin-top:8px"><strong style="color:var(--red)">Resource Conflicts (' + conflicts.length + ')</strong></div>';
+    conflicts.forEach(c => {
+      h += `<div style="font-size:0.78rem;padding:2px 0"><span class="resource-dot missing"></span><strong>${escapeHTML(c.target)}</strong> — written by: ${c.processors.map(escapeHTML).join(', ')}</div>`;
     });
   }
   h += '</div>';
@@ -6590,9 +6986,9 @@ async function runDualSimulation() {
   let nifiEnv = null, dbxEnv = null;
   if (hasVenv) {
     await prog(3, 'Building VirtualEnv instances...');
-    const seed = buildInitialVirtualEnv(nifi, tables);
+    const seed = buildInitialVirtualEnv(nifi, tables, STATE.manifest);
     nifiEnv = seed.env;
-    const seed2 = buildInitialVirtualEnv(nifi, tables);
+    const seed2 = buildInitialVirtualEnv(nifi, tables, STATE.manifest);
     dbxEnv = seed2.env;
   }
   // Phase 1: NiFi
@@ -6692,6 +7088,12 @@ async function runDualSimulation() {
       body += '</div>';
       return body;
     })(), false);
+    // Operations Log — NiFi
+    h += expanderHTML(`<strong>Operations Log — NiFi Engine</strong> (${nifiEnv.log.length} actions)`, renderOperationsLog(nifiEnv, 'NiFi'), false);
+    // Operations Log — Databricks
+    h += expanderHTML(`<strong>Operations Log — Databricks Engine</strong> (${dbxEnv.log.length} actions)`, renderOperationsLog(dbxEnv, 'Databricks'), false);
+    // Resource Usage
+    h += expanderHTML('<strong>Resource Usage</strong> — seeded vs accessed', renderResourceUsage(STATE.manifest, nifiEnv, dbxEnv), false);
   }
   // Per-processor comparison grouped by process group
   h += '<hr class="divider">';
@@ -6925,7 +7327,87 @@ function buildFinalReportJSON() {
       })),
       zero_data_processors: sim.perProc.filter(p => p.nifiRows === 0 && p.dbxRows === 0).map(p => ({
         name: p.name, type: p.type, group: p.group
-      }))
+      })),
+      // --- Enhanced gap categories (manifest + simulation-driven) ---
+      missing_resources: (() => {
+        if (!STATE.manifest) return [];
+        const m = STATE.manifest, missing = [];
+        const nEnv = sim._nifiEnv;
+        if (nEnv) {
+          Object.entries(m.directories).forEach(([dir, info]) => {
+            if (info.type === 'input' && !Object.keys(nEnv.filesystem).some(f => f.startsWith(dir)))
+              missing.push({ resource: dir, type: 'directory', direction: 'input', processors: info.processors.join(', ') });
+          });
+          Object.keys(m.sqlTables).forEach(tn => {
+            if (!nEnv.sqlTables[tn]) missing.push({ resource: tn, type: 'sql_table', direction: (m.sqlTables[tn].readers.length ? 'read' : 'write'), processors: [...m.sqlTables[tn].readers, ...m.sqlTables[tn].writers].join(', ') });
+          });
+        }
+        return missing;
+      })(),
+      resource_conflicts: (() => {
+        const conflicts = [];
+        const nEnv = sim._nifiEnv;
+        if (nEnv) {
+          const writers = {};
+          nEnv.log.filter(e => ['FILE_WRITE','SQL_INSERT','SQL_CREATE'].includes(e.action)).forEach(e => {
+            const k = e.target || e.path || 'unknown';
+            if (!writers[k]) writers[k] = new Set();
+            writers[k].add(e.processor);
+          });
+          Object.entries(writers).forEach(([target, procs]) => {
+            if (procs.size > 1) conflicts.push({ target, type: target.includes('.') && !target.includes('/') ? 'sql_table' : 'file', writers: [...procs] });
+          });
+        }
+        return conflicts;
+      })(),
+      orphaned_resources: (() => {
+        if (!STATE.manifest) return [];
+        const orphaned = [];
+        const nEnv = sim._nifiEnv;
+        if (nEnv) {
+          const touched = new Set();
+          nEnv.log.forEach(e => { if (e.target) touched.add(e.target); if (e.path) touched.add(e.path); });
+          Object.keys(nEnv.filesystem).forEach(f => {
+            if (!touched.has(f) && f.includes('/data_')) orphaned.push({ resource: f, type: 'file' });
+          });
+          Object.keys(nEnv.sqlTables).forEach(t => {
+            if (!touched.has(t)) orphaned.push({ resource: t, type: 'sql_table' });
+          });
+        }
+        return orphaned;
+      })(),
+      unresolved_expressions: (() => {
+        if (!STATE.manifest) return [];
+        return STATE.manifest.parameters.filter(p => !p.resolved).map(p => ({
+          expression: p.expr, processor: p.processor
+        }));
+      })(),
+      disconnected_processors: (() => {
+        if (!STATE.manifest) return [];
+        return STATE.manifest.disconnectedProcessors || [];
+      })(),
+      failed_operations: (() => {
+        const failed = [];
+        const nEnv = sim._nifiEnv, dEnv = sim._dbxEnv;
+        if (nEnv) nEnv.log.filter(e => e.status === 'error' || e.error).forEach(e => failed.push({ engine: 'nifi', processor: e.processor, action: e.action, target: e.target || e.path, error: e.error || 'operation failed' }));
+        if (dEnv) dEnv.log.filter(e => e.status === 'error' || e.error).forEach(e => failed.push({ engine: 'dbx', processor: e.processor, action: e.action, target: e.target || e.path, error: e.error || 'operation failed' }));
+        return failed;
+      })(),
+      schema_mismatches: (() => {
+        const mismatches = [];
+        const nEnv = sim._nifiEnv;
+        if (nEnv && STATE.parsed && STATE.parsed._nifi) {
+          const nifi = STATE.parsed._nifi;
+          const connMap = {};
+          (nifi.connections || []).forEach(c => { connMap[c.destination] = c.source; });
+          sim.perProc.forEach(p => {
+            if (p.verdict === 'DIFFERS' && p.schemaMatch < 100) {
+              mismatches.push({ processor: p.name, type: p.type, group: p.group, schema_match: p.schemaMatch, details: p.details || 'Column mismatch between source output and sink input' });
+            }
+          });
+        }
+        return mismatches;
+      })()
     },
     // Section 5: Errors
     errors: {
@@ -6949,6 +7431,36 @@ function buildFinalReportJSON() {
       if (sim.stateFidelityPct && sim.stateFidelityPct < 80) recs.push({severity:'medium', area:'state', message:`State fidelity is ${sim.stateFidelityPct}% — file/SQL/token operations differ between engines`});
       const actionDiffers = sim.perProc.filter(p => p.actionVerdict === 'DIFFERS');
       if (actionDiffers.length) recs.push({severity:'high', area:'actions', message:`${actionDiffers.length} processors have different action patterns — review file I/O and SQL operations`, types:[...new Set(actionDiffers.map(p=>p.type))]});
+      // Resource & manifest-driven recommendations
+      if (STATE.manifest) {
+        const m = STATE.manifest;
+        const unresolvedCount = m.parameters.filter(p => !p.resolved).length;
+        if (unresolvedCount) recs.push({severity:'high', area:'parameters', message:`${unresolvedCount} unresolved \${} expressions — configure these parameters before deployment`});
+        const disconnected = m.disconnectedProcessors || [];
+        if (disconnected.length) recs.push({severity:'medium', area:'connectivity', message:`${disconnected.length} processors have no connections — they will never execute, verify intent`});
+        const nEnv = sim._nifiEnv;
+        if (nEnv) {
+          // Orphaned resources
+          const touched = new Set();
+          nEnv.log.forEach(e => { if (e.target) touched.add(e.target); if (e.path) touched.add(e.path); });
+          const orphanedFiles = Object.keys(nEnv.filesystem).filter(f => !touched.has(f) && f.includes('/data_')).length;
+          const orphanedTables = Object.keys(nEnv.sqlTables).filter(t => !touched.has(t)).length;
+          const totalOrphaned = orphanedFiles + orphanedTables;
+          if (totalOrphaned) recs.push({severity:'low', area:'resources', message:`${totalOrphaned} seeded resources were never accessed — they may be unnecessary, verify`});
+          // Conflicts
+          const writers = {};
+          nEnv.log.filter(e => ['FILE_WRITE','SQL_INSERT','SQL_CREATE'].includes(e.action)).forEach(e => {
+            const k = e.target || e.path || 'unknown';
+            if (!writers[k]) writers[k] = new Set();
+            writers[k].add(e.processor);
+          });
+          const conflictCount = Object.values(writers).filter(s => s.size > 1).length;
+          if (conflictCount) recs.push({severity:'medium', area:'conflicts', message:`${conflictCount} resources have multiple writers — add locking or sequence these processors`});
+          // Failed ops
+          const failedOps = nEnv.log.filter(e => e.status === 'error' || e.error).length;
+          if (failedOps) recs.push({severity:'high', area:'operations', message:`${failedOps} operations failed during NiFi simulation — review processor configurations`});
+        }
+      }
       return recs;
     })(),
     // Section 7: VirtualEnv analysis
@@ -7040,6 +7552,20 @@ async function generateFinalReport() {
       ['Data Mismatches', `<span style="color:${gaps.data_mismatches.length ? '#EF4444':'#21C354'}">${gaps.data_mismatches.length}</span>`],
       ['Zero Data', `<span style="color:${gaps.zero_data_processors.length ? '#808495':'#21C354'}">${gaps.zero_data_processors.length}</span>`]
     ]);
+    // Enhanced gap metrics row
+    const enhancedGapCount = (gaps.missing_resources||[]).length + (gaps.resource_conflicts||[]).length + (gaps.orphaned_resources||[]).length + (gaps.unresolved_expressions||[]).length + (gaps.disconnected_processors||[]).length + (gaps.failed_operations||[]).length + (gaps.schema_mismatches||[]).length;
+    if (enhancedGapCount > 0) {
+      h += '<div style="margin:8px 0 4px;font-size:0.78rem;color:var(--text2);font-weight:600">Resource & Connectivity Gaps</div>';
+      h += metricsHTML([
+        ['Missing Resources', `<span style="color:${(gaps.missing_resources||[]).length ? '#EF4444':'#21C354'}">${(gaps.missing_resources||[]).length}</span>`],
+        ['Conflicts', `<span style="color:${(gaps.resource_conflicts||[]).length ? '#EAB308':'#21C354'}">${(gaps.resource_conflicts||[]).length}</span>`],
+        ['Orphaned', `<span style="color:${(gaps.orphaned_resources||[]).length ? '#FACA15':'#21C354'}">${(gaps.orphaned_resources||[]).length}</span>`],
+        ['Unresolved Expr', `<span style="color:${(gaps.unresolved_expressions||[]).length ? '#EF4444':'#21C354'}">${(gaps.unresolved_expressions||[]).length}</span>`],
+        ['Disconnected', `<span style="color:${(gaps.disconnected_processors||[]).length ? '#EAB308':'#21C354'}">${(gaps.disconnected_processors||[]).length}</span>`],
+        ['Failed Ops', `<span style="color:${(gaps.failed_operations||[]).length ? '#EF4444':'#21C354'}">${(gaps.failed_operations||[]).length}</span>`],
+        ['Schema Gaps', `<span style="color:${(gaps.schema_mismatches||[]).length ? '#EF4444':'#21C354'}">${(gaps.schema_mismatches||[]).length}</span>`]
+      ]);
+    }
     if (gaps.unmapped_processors.length) {
       h += expanderHTML(`Unmapped Processors (${gaps.unmapped_processors.length})`,
         '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Name</th><th>Type</th><th>Group</th><th>Role</th></tr></thead><tbody>'
@@ -7050,6 +7576,49 @@ async function generateFinalReport() {
       h += expanderHTML(`Data Mismatches (${gaps.data_mismatches.length})`,
         '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Name</th><th>Type</th><th>Group</th><th>Conf</th><th>Rows%</th><th>Schema%</th><th>Fidelity%</th><th>Details</th></tr></thead><tbody>'
         + gaps.data_mismatches.map(p => `<tr><td>${p.name}</td><td>${p.type}</td><td>${p.group}</td><td>${Math.round(p.confidence*100)}%</td><td>${p.row_match}%</td><td>${p.schema_match}%</td><td>${p.data_fidelity}%</td><td style="font-size:0.72rem">${p.details}</td></tr>`).join('')
+        + '</tbody></table></div>', false);
+    }
+    // Enhanced gap expanders
+    if ((gaps.missing_resources||[]).length) {
+      h += expanderHTML(`Missing Resources (${gaps.missing_resources.length})`,
+        '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Resource</th><th>Type</th><th>Direction</th><th>Processors</th></tr></thead><tbody>'
+        + gaps.missing_resources.map(r => `<tr><td><span class="resource-dot missing"></span>${escapeHTML(r.resource)}</td><td>${r.type}</td><td>${r.direction}</td><td>${escapeHTML(r.processors)}</td></tr>`).join('')
+        + '</tbody></table></div>', false);
+    }
+    if ((gaps.resource_conflicts||[]).length) {
+      h += expanderHTML(`Resource Conflicts (${gaps.resource_conflicts.length})`,
+        '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Target</th><th>Type</th><th>Conflicting Writers</th></tr></thead><tbody>'
+        + gaps.resource_conflicts.map(c => `<tr><td><span class="resource-dot missing"></span>${escapeHTML(c.target)}</td><td>${c.type}</td><td>${escapeHTML(c.writers.join(', '))}</td></tr>`).join('')
+        + '</tbody></table></div>', false);
+    }
+    if ((gaps.orphaned_resources||[]).length) {
+      h += expanderHTML(`Orphaned Resources (${gaps.orphaned_resources.length})`,
+        '<div style="font-size:0.78rem">'
+        + gaps.orphaned_resources.map(r => `<div style="margin:2px 0"><span class="resource-dot orphaned"></span>${escapeHTML(r.resource)} <span style="color:var(--text2)">(${r.type})</span></div>`).join('')
+        + '</div>', false);
+    }
+    if ((gaps.unresolved_expressions||[]).length) {
+      h += expanderHTML(`Unresolved Expressions (${gaps.unresolved_expressions.length})`,
+        '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Expression</th><th>Processor</th></tr></thead><tbody>'
+        + gaps.unresolved_expressions.map(e => `<tr><td><code style="color:#EF4444">${escapeHTML(e.expression)}</code></td><td>${escapeHTML(e.processor)}</td></tr>`).join('')
+        + '</tbody></table></div>', false);
+    }
+    if ((gaps.disconnected_processors||[]).length) {
+      h += expanderHTML(`Disconnected Processors (${gaps.disconnected_processors.length})`,
+        '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Processor</th><th>Type</th><th>Issue</th></tr></thead><tbody>'
+        + gaps.disconnected_processors.map(d => `<tr><td>${escapeHTML(d.name)}</td><td>${escapeHTML(d.type)}</td><td>${d.noInbound && d.noOutbound ? 'No connections' : d.noInbound ? 'No inbound' : 'No outbound'}</td></tr>`).join('')
+        + '</tbody></table></div>', false);
+    }
+    if ((gaps.failed_operations||[]).length) {
+      h += expanderHTML(`Failed Operations (${gaps.failed_operations.length})`,
+        '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Engine</th><th>Processor</th><th>Action</th><th>Target</th><th>Error</th></tr></thead><tbody>'
+        + gaps.failed_operations.map(f => `<tr><td>${f.engine.toUpperCase()}</td><td>${escapeHTML(f.processor)}</td><td>${f.action}</td><td>${escapeHTML(f.target||'')}</td><td style="color:#EF4444;font-size:0.72rem">${escapeHTML(f.error)}</td></tr>`).join('')
+        + '</tbody></table></div>', false);
+    }
+    if ((gaps.schema_mismatches||[]).length) {
+      h += expanderHTML(`Schema Mismatches (${gaps.schema_mismatches.length})`,
+        '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Processor</th><th>Type</th><th>Group</th><th>Schema%</th><th>Details</th></tr></thead><tbody>'
+        + gaps.schema_mismatches.map(s => `<tr><td>${escapeHTML(s.processor)}</td><td>${escapeHTML(s.type)}</td><td>${escapeHTML(s.group)}</td><td>${s.schema_match}%</td><td style="font-size:0.72rem">${escapeHTML(s.details)}</td></tr>`).join('')
         + '</tbody></table></div>', false);
     }
     await prog(70, 'Compiling error log...');
@@ -7139,7 +7708,14 @@ function downloadFinalReport(type) {
         unmapped: r.gaps.unmapped_processors.length,
         low_confidence: r.gaps.low_confidence.length,
         data_mismatches: r.gaps.data_mismatches.length,
-        zero_data: r.gaps.zero_data_processors.length
+        zero_data: r.gaps.zero_data_processors.length,
+        missing_resources: (r.gaps.missing_resources||[]).length,
+        resource_conflicts: (r.gaps.resource_conflicts||[]).length,
+        orphaned_resources: (r.gaps.orphaned_resources||[]).length,
+        unresolved_expressions: (r.gaps.unresolved_expressions||[]).length,
+        disconnected_processors: (r.gaps.disconnected_processors||[]).length,
+        failed_operations: (r.gaps.failed_operations||[]).length,
+        schema_mismatches: (r.gaps.schema_mismatches||[]).length
       },
       recommendations: r.recommendations
     };
