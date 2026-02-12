@@ -2557,21 +2557,37 @@ function renderConnections(container, connections, nodeEls) {
   svg.style.zIndex = '1';
   svg.setAttribute('viewBox', `0 0 ${container.scrollWidth} ${container.scrollHeight}`);
 
-  // Arrow marker
+  // Defs: arrow markers (default + highlighted variants) and glow filter
   const defs = document.createElementNS('http://www.w3.org/2000/svg','defs');
-  const marker = document.createElementNS('http://www.w3.org/2000/svg','marker');
-  marker.setAttribute('id','arrow');
-  marker.setAttribute('viewBox','0 0 10 8');
-  marker.setAttribute('refX','10');
-  marker.setAttribute('refY','4');
-  marker.setAttribute('markerWidth','8');
-  marker.setAttribute('markerHeight','6');
-  marker.setAttribute('orient','auto');
-  const arrowPath = document.createElementNS('http://www.w3.org/2000/svg','path');
-  arrowPath.setAttribute('d','M0,0 L10,4 L0,8 Z');
-  arrowPath.setAttribute('fill','#4B5563');
-  marker.appendChild(arrowPath);
-  defs.appendChild(marker);
+  // Glow filter for highlighted paths
+  const filter = document.createElementNS('http://www.w3.org/2000/svg','filter');
+  filter.setAttribute('id','glow');
+  filter.setAttribute('x','-50%'); filter.setAttribute('y','-50%');
+  filter.setAttribute('width','200%'); filter.setAttribute('height','200%');
+  const blur = document.createElementNS('http://www.w3.org/2000/svg','feGaussianBlur');
+  blur.setAttribute('stdDeviation','3'); blur.setAttribute('result','blur');
+  filter.appendChild(blur);
+  const merge = document.createElementNS('http://www.w3.org/2000/svg','feMerge');
+  const mn1 = document.createElementNS('http://www.w3.org/2000/svg','feMergeNode');
+  mn1.setAttribute('in','blur');
+  const mn2 = document.createElementNS('http://www.w3.org/2000/svg','feMergeNode');
+  mn2.setAttribute('in','SourceGraphic');
+  merge.appendChild(mn1); merge.appendChild(mn2);
+  filter.appendChild(merge);
+  defs.appendChild(filter);
+  // Arrow markers for each color
+  const arrowColors = {'default':'#4B5563','blue':'#3B82F6','purple':'#6366F1','red':'#EF4444','amber':'#F59E0B','green':'#21C354','white':'#FAFAFA'};
+  Object.entries(arrowColors).forEach(([name, color]) => {
+    const marker = document.createElementNS('http://www.w3.org/2000/svg','marker');
+    marker.setAttribute('id', 'arrow-' + name);
+    marker.setAttribute('viewBox','0 0 10 8');
+    marker.setAttribute('refX','10'); marker.setAttribute('refY','4');
+    marker.setAttribute('markerWidth','8'); marker.setAttribute('markerHeight','6');
+    marker.setAttribute('orient','auto');
+    const ap = document.createElementNS('http://www.w3.org/2000/svg','path');
+    ap.setAttribute('d','M0,0 L10,4 L0,8 Z'); ap.setAttribute('fill', color);
+    marker.appendChild(ap); defs.appendChild(marker);
+  });
   svg.appendChild(defs);
 
   const cRect = container.getBoundingClientRect();
@@ -2595,14 +2611,19 @@ function renderConnections(container, connections, nodeEls) {
 
     const path = document.createElementNS('http://www.w3.org/2000/svg','path');
     path.setAttribute('d', `M${fromX},${fromY} C${fromX+cpx},${fromY+cp} ${toX-cpx},${toY-cp} ${toX},${toY}`);
-    path.setAttribute('stroke', conn.color || '#4B5563');
-    path.setAttribute('stroke-width', conn.width || 1.5);
+    const strokeColor = conn.color || '#4B5563';
+    path.setAttribute('stroke', strokeColor);
+    path.setAttribute('stroke-width', String(conn.width || 1.5));
     path.setAttribute('fill', 'none');
-    path.setAttribute('marker-end', 'url(#arrow)');
-    path.setAttribute('opacity', '0.6');
-    if (conn.dash) path.setAttribute('stroke-dasharray', '6,4');
+    // Pick arrow marker by closest color
+    const arrowId = strokeColor.includes('EF44') ? 'arrow-red' : strokeColor.includes('F59E') || strokeColor.includes('F5') ? 'arrow-amber' : strokeColor.includes('6366') ? 'arrow-purple' : strokeColor.includes('3B82') ? 'arrow-blue' : strokeColor.includes('21C3') ? 'arrow-green' : 'arrow-default';
+    path.setAttribute('marker-end', `url(#${arrowId})`);
+    path.setAttribute('opacity', '0.35');
     path.dataset.from = conn.from;
     path.dataset.to = conn.to;
+    path.dataset.origColor = strokeColor;
+    path.dataset.origWidth = String(conn.width || 1.5);
+    if (conn.dash) path.setAttribute('stroke-dasharray', '6,4');
     svg.appendChild(path);
   });
 
@@ -2611,35 +2632,80 @@ function renderConnections(container, connections, nodeEls) {
 }
 
 function highlightConnected(nodeId, nodes, connections, nodeEls, container) {
-  const connected = new Set([nodeId]);
-  connections.forEach(c => {
-    if (c.from === nodeId) connected.add(c.to);
-    if (c.to === nodeId) connected.add(c.from);
-  });
+  // ── Trace the FULL path in both directions (upstream + downstream) ──
+  const pathNodes = new Set([nodeId]);
+  const pathEdges = new Set();  // "from|to" keys of edges in the path
+
+  // BFS downstream: follow all connections FROM this node recursively
+  function traceDown(id) {
+    connections.forEach((c, i) => {
+      const key = c.from + '|' + c.to;
+      if (c.from === id && !pathEdges.has(key)) {
+        pathEdges.add(key);
+        pathNodes.add(c.to);
+        traceDown(c.to);
+      }
+    });
+  }
+  // BFS upstream: follow all connections TO this node recursively
+  function traceUp(id) {
+    connections.forEach((c, i) => {
+      const key = c.from + '|' + c.to;
+      if (c.to === id && !pathEdges.has(key)) {
+        pathEdges.add(key);
+        pathNodes.add(c.from);
+        traceUp(c.from);
+      }
+    });
+  }
+  traceDown(nodeId);
+  traceUp(nodeId);
+
+  // Dim all nodes, highlight path nodes
   Object.entries(nodeEls).forEach(([id, el]) => {
-    if (connected.has(id)) { el.classList.add('highlighted'); el.classList.remove('dimmed'); }
-    else { el.classList.add('dimmed'); el.classList.remove('highlighted'); }
+    if (pathNodes.has(id)) {
+      el.classList.add('highlighted'); el.classList.remove('dimmed');
+      if (id === nodeId) el.classList.add('selected');
+    } else {
+      el.classList.add('dimmed'); el.classList.remove('highlighted', 'selected');
+    }
   });
-  // Highlight SVG paths
+
+  // Highlight SVG paths — glow effect on path edges, dim everything else
   const svg = container.querySelector('svg.tier-svg');
   if (svg) {
     svg.querySelectorAll('path[data-from]').forEach(p => {
-      if (p.dataset.from === nodeId || p.dataset.to === nodeId) {
-        p.setAttribute('opacity','1'); p.setAttribute('stroke-width', String(parseFloat(p.getAttribute('stroke-width'))+1));
-      } else { p.setAttribute('opacity','0.15'); }
+      const edgeKey = p.dataset.from + '|' + p.dataset.to;
+      if (pathEdges.has(edgeKey)) {
+        // Full path highlight: bright, thick, glowing
+        p.setAttribute('opacity', '1');
+        p.setAttribute('stroke', '#FAFAFA');
+        p.setAttribute('stroke-width', '3');
+        p.setAttribute('filter', 'url(#glow)');
+        p.setAttribute('marker-end', 'url(#arrow-white)');
+        p.style.transition = 'all 0.2s ease';
+      } else {
+        p.setAttribute('opacity', '0.08');
+        p.removeAttribute('filter');
+      }
     });
   }
 }
 
 function clearHighlight(nodeEls, container) {
-  Object.values(nodeEls).forEach(el => { el.classList.remove('highlighted','dimmed'); });
+  Object.values(nodeEls).forEach(el => { el.classList.remove('highlighted', 'dimmed', 'selected'); });
   const svg = container.querySelector('svg.tier-svg');
   if (svg) {
     svg.querySelectorAll('path[data-from]').forEach(p => {
-      p.setAttribute('opacity','0.6');
-      // Reset width
-      const w = parseFloat(p.getAttribute('stroke-width'));
-      if (w > 2) p.setAttribute('stroke-width', String(w-1));
+      p.setAttribute('opacity', '0.35');
+      p.setAttribute('stroke', p.dataset.origColor || '#4B5563');
+      p.setAttribute('stroke-width', p.dataset.origWidth || '1.5');
+      p.removeAttribute('filter');
+      // Restore original arrow marker
+      const c = p.dataset.origColor || '';
+      const arrowId = c.includes('EF44') ? 'arrow-red' : c.includes('F59E') || c.includes('F5') ? 'arrow-amber' : c.includes('6366') ? 'arrow-purple' : c.includes('3B82') ? 'arrow-blue' : c.includes('21C3') ? 'arrow-green' : 'arrow-default';
+      p.setAttribute('marker-end', `url(#${arrowId})`);
+      p.style.transition = '';
     });
   }
 }
