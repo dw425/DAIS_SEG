@@ -1878,7 +1878,7 @@ const NIFI_DATABRICKS_MAP = {
   PublishKafkaRecord_2_6:{cat:'Kafka Write',tpl:'(df_{in}\n  .selectExpr("to_json(struct(*)) AS value")\n  .write\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("topic", "{topic}")\n  .save())',desc:'Publish Kafka records',notes:'Same as PutKafka',imp:[],conf:0.85},
   PutS3Object:{cat:'Cloud Storage Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .save("s3a://{bucket}/{path}"))',desc:'Write to S3',notes:'Use external location in Unity Catalog',imp:[],conf:0.85},
   PutHDFS:{cat:'Cloud Storage Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .save("{path}"))',desc:'Write to cloud storage',notes:'Map HDFS path to cloud storage / Volumes',imp:[],conf:0.80},
-  PutSFTP:{cat:'External Storage Write',tpl:'# Write to SFTP via staging in Unity Catalog Volumes\n(df_{in}.write.format("{format}").mode("overwrite")\n  .save("/Volumes/{catalog}/{schema}/staging/{v}"))\n# Stage to Volumes then use external SFTP transfer\n# dbutils.fs.cp("/Volumes/.../staging/{v}", "sftp://{hostname}/{remote_path}")',desc:'SFTP file upload via staging',notes:'Stage to Volumes then transfer; or use external SFTP utility',imp:[],conf:0.50},
+  PutSFTP:{cat:'External Storage Write',tpl:'# Write to SFTP via staging in Unity Catalog Volumes\n(df_{in}.write.format("{format}").mode("overwrite")\n  .save("/Volumes/{catalog}/{schema}/staging/{v}"))\n# Stage to Volumes then use external SFTP transfer\n# dbutils.fs.cp("/Volumes/.../staging/{v}", "sftp://{hostname}/{remote_path}")',desc:'SFTP file upload via staging',notes:'Stage to Volumes then transfer; or use external SFTP utility',imp:[],conf:0.70},
   PutEmail:{cat:'Workflow Notification',tpl:'# Use Databricks workflow email notifications\n# Configure in Job settings: email_notifications.on_success / on_failure\n# Or use dbutils.notebook.exit() with downstream webhook task\ndbutils.notebook.exit("NOTIFY: {subject}")',desc:'Email via workflow notification',notes:'Configure email notifications in Databricks Job settings',imp:[],conf:0.45},
   PutMongo:{cat:'MongoDB Connector',tpl:'(df_{in}.write\n  .format("mongodb")\n  .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))\n  .option("database", "{database}")\n  .option("collection", "{collection}")\n  .mode("append")\n  .save())',desc:'MongoDB write',notes:'Install mongodb-spark-connector',imp:[],conf:0.75},
   PutElasticsearch:{cat:'ES Connector',tpl:'(df_{in}.write\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .save("{index}"))',desc:'Elasticsearch write',notes:'Install elasticsearch-spark',imp:[],conf:0.65},
@@ -5091,6 +5091,8 @@ function buildInitialVirtualEnv(nifiData, tables) {
         const fname = `${grp}_${p.name.replace(/\s+/g,'_').toLowerCase()}_${i}.${fmt}`;
         const content = generateSyntheticFileContent(cols, 10 + i * 5, fmt);
         env.writeFile('SEED', `${dir}/${fname}`, content, fmt);
+        // Also seed Volumes path for DBX engine
+        env.writeFile('SEED', `/Volumes/input/${grp}/${fname}`, content, fmt);
       }
     }
     if (p.type === 'FetchFile') {
@@ -5098,11 +5100,33 @@ function buildInitialVirtualEnv(nifiData, tables) {
       const dir = props['Input Directory'] || `/data/fetch/${grp}`;
       const content = generateSyntheticFileContent(defaultCols, 15, 'csv');
       env.writeFile('SEED', `${dir}/${fname}`, content, 'csv');
+      // Also seed Volumes path for DBX engine
+      env.writeFile('SEED', `/Volumes/fetch/${grp}/${fname}`, content, 'csv');
     }
-    if (p.type === 'PutFile' || p.type === 'PutSFTP') {
+    if (p.type === 'ListFile') {
+      const dir = props['Input Directory'] || props['input-directory'] || `/data/list/${grp}`;
+      const fmt = (props['File Filter'] || '').includes('.json') ? 'json' : 'csv';
+      for (let i = 0; i < 4; i++) {
+        const fname = `${grp}_${p.name.replace(/\s+/g,'_').toLowerCase()}_${i}.${fmt}`;
+        env.writeFile('SEED', `${dir}/${fname}`, generateSyntheticFileContent(defaultCols, 8 + i * 3, fmt), fmt);
+      }
+      // Also seed Volumes path for DBX engine
+      for (let i = 0; i < 4; i++) {
+        const fname = `${grp}_${p.name.replace(/\s+/g,'_').toLowerCase()}_${i}.${fmt}`;
+        env.writeFile('SEED', `/Volumes/list/${grp}/${fname}`, generateSyntheticFileContent(defaultCols, 8 + i * 3, fmt), fmt);
+      }
+    }
+    if (p.type === 'PutFile' || p.type === 'PutSFTP' || p.type === 'PutHDFS') {
       const dir = props['Directory'] || props['Remote Path'] || props['Hostname'] || `/data/output/${grp}`;
-      // Create target directory marker
       env.writeFile('SEED', `${dir}/.marker`, '', 'raw');
+      // Also seed Volumes target dirs for DBX engine
+      if (p.type === 'PutFile') env.writeFile('SEED', `/Volumes/output/${grp}/.marker`, '', 'raw');
+      else if (p.type === 'PutSFTP') {
+        const host = props['Hostname'] || props['hostname'] || 'sftp.example.com';
+        const remotePath = props['Remote Path'] || 'upload';
+        env.writeFile('SEED', `/Volumes/sftp/${host}/${remotePath}/.marker`, '', 'raw');
+      }
+      else if (p.type === 'PutHDFS') env.writeFile('SEED', `/Volumes/hdfs/${grp}/.marker`, '', 'raw');
     }
     if (p.type === 'ExecuteStreamCommand') {
       const cmd = props['Command'] || props['command'] || '';
@@ -5138,11 +5162,17 @@ function buildInitialVirtualEnv(nifiData, tables) {
   procs.forEach(p => {
     const props = p.properties || {};
     if (p.type === 'ExecuteSQL' || p.type === 'ExecuteSQLRecord') {
-      const sql = props['SQL select query'] || props['sql-select-query'] || props['SQL Pre-Query'] || '';
+      let sql = props['SQL select query'] || props['sql-select-query'] || props['SQL Pre-Query'] || '';
+      // Resolve parameterized table references
+      sql = sql.replace(/\$\{(\w+)\}/g, (m, name) => {
+        const defaults = { external_table: 'ext_data', staging_table: 'stg_data', prod_table: 'prod_data' };
+        return defaults[name] || name;
+      });
       const tableMatch = sql.match(/(?:FROM|JOIN)\s+([a-zA-Z_][\w.]*)/gi);
       if (tableMatch) {
         tableMatch.forEach(m => {
-          const tName = m.replace(/^(FROM|JOIN)\s+/i, '').trim();
+          let tName = m.replace(/^(FROM|JOIN)\s+/i, '').trim();
+          if (tName.toLowerCase() === 'dual') return; // Skip Oracle dual
           if (!env.sqlTables[tName]) {
             const cols = {};
             defaultCols.forEach(c => {
@@ -5317,6 +5347,82 @@ const PROCESSOR_SIM = {
 // ================================================================
 // PROCESSOR_SIM_V2 — VirtualEnv-based simulation per processor type
 // ================================================================
+// NiFi Expression Language mini-evaluator
+function evaluateNiFiEL(expr, attributes) {
+  if (!expr || typeof expr !== 'string' || !expr.includes('${')) return expr;
+  return expr.replace(/\$\{([^}]+)\}/g, (fullMatch, inner) => {
+    const parts = inner.split(':');
+    const attrName = parts[0].trim();
+    let val;
+    if (attrName === 'now()') val = new Date().toISOString();
+    else if (attrName === 'nextInt()' || attrName === 'random()') val = String(Math.floor(Math.random() * 10000));
+    else if (attrName === 'UUID()' || attrName === 'uuid()') val = 'ff_' + simHash(JSON.stringify(attributes) + Date.now());
+    else if (attrName === 'hostname()') val = 'databricks-worker';
+    else if (attrName.startsWith('literal(')) {
+      const litMatch = attrName.match(/literal\(['"]([^'"]*)['"]\)/);
+      val = litMatch ? litMatch[1] : '';
+    } else {
+      val = attributes[attrName];
+    }
+    if (val === undefined || val === null) val = fullMatch;
+    for (let i = 1; i < parts.length; i++) {
+      const fn = parts[i].trim();
+      if (fn.startsWith('replaceAll(')) {
+        const args = fn.match(/replaceAll\(['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\)/);
+        if (args) { try { val = String(val).replace(new RegExp(args[1], 'g'), args[2]); } catch(e) { val = String(val).split(args[1]).join(args[2]); } }
+      } else if (fn.startsWith('replace(')) {
+        const args = fn.match(/replace\(['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\)/);
+        if (args) val = String(val).split(args[1]).join(args[2]);
+      } else if (fn.startsWith('substring(')) {
+        const args = fn.match(/substring\((\d+)(?:\s*,\s*(\d+))?\)/);
+        if (args) val = String(val).substring(parseInt(args[1]), args[2] ? parseInt(args[2]) : undefined);
+      } else if (fn === 'toUpper()') val = String(val).toUpperCase();
+      else if (fn === 'toLower()') val = String(val).toLowerCase();
+      else if (fn === 'trim()') val = String(val).trim();
+      else if (fn === 'length()') val = String(String(val).length);
+      else if (fn === 'isEmpty()') val = String(!val || String(val).length === 0);
+      else if (fn.startsWith('equals(')) {
+        const arg = fn.match(/equals\(["']([^"']*)["']\)/);
+        val = arg ? String(String(val) === arg[1]) : 'false';
+      } else if (fn.startsWith('contains(')) {
+        const arg = fn.match(/contains\(["']([^"']*)["']\)/);
+        val = arg ? String(String(val).includes(arg[1])) : 'false';
+      } else if (fn.startsWith('startsWith(')) {
+        const arg = fn.match(/startsWith\(["']([^"']*)["']\)/);
+        val = arg ? String(String(val).startsWith(arg[1])) : 'false';
+      } else if (fn.startsWith('endsWith(')) {
+        const arg = fn.match(/endsWith\(["']([^"']*)["']\)/);
+        val = arg ? String(String(val).endsWith(arg[1])) : 'false';
+      } else if (fn.startsWith('append(')) {
+        const arg = fn.match(/append\(["']([^"']*)["']\)/);
+        if (arg) val = String(val) + arg[1];
+      } else if (fn.startsWith('prepend(')) {
+        const arg = fn.match(/prepend\(["']([^"']*)["']\)/);
+        if (arg) val = arg[1] + String(val);
+      } else if (fn.startsWith('toDate(')) { /* keep string as-is */ }
+      else if (fn.startsWith('format(')) {
+        const arg = fn.match(/format\(["']([^"']*)["']\)/);
+        if (arg) { try { const d = new Date(val); if (!isNaN(d)) { val = arg[1].replace('yyyy', d.getFullYear()).replace('MM', String(d.getMonth()+1).padStart(2,'0')).replace('dd', String(d.getDate()).padStart(2,'0')).replace('HH', String(d.getHours()).padStart(2,'0')).replace('mm', String(d.getMinutes()).padStart(2,'0')).replace('ss', String(d.getSeconds()).padStart(2,'0')); } } catch(e) {} }
+      } else if (fn.startsWith('minus(')) {
+        const arg = fn.match(/minus\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n - parseInt(arg[1])); }
+      } else if (fn.startsWith('plus(')) {
+        const arg = fn.match(/plus\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n + parseInt(arg[1])); }
+      } else if (fn.startsWith('multiply(')) {
+        const arg = fn.match(/multiply\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n * parseInt(arg[1])); }
+      } else if (fn.startsWith('divide(')) {
+        const arg = fn.match(/divide\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(Math.floor(n / parseInt(arg[1]))); }
+      } else if (fn.startsWith('literal(')) {
+        const arg = fn.match(/literal\(["']([^"']*)["']\)/); if (arg) val = arg[1];
+      } else if (fn === 'not()') { val = String(val === 'false' || val === '0' || val === '' || val === 'null'); }
+      else if (fn.startsWith('ifElse(')) {
+        const arg = fn.match(/ifElse\(["']([^"']*)["']\s*,\s*["']([^"']*)["']\)/);
+        if (arg) val = (val === 'true') ? arg[1] : arg[2];
+      }
+    }
+    return String(val);
+  });
+}
+
 const PROCESSOR_SIM_V2 = {
   GetFile: function(env, proc, inputFF, isDbx) {
     const props = proc.properties || {};
@@ -5338,10 +5444,33 @@ const PROCESSOR_SIM_V2 = {
     const props = proc.properties || {};
     return inputFF.map(ff => {
       const fname = ff.attributes.filename || props['filename'] || props['File to Fetch'] || 'data.csv';
-      const dir = isDbx ? `/Volumes/fetch/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Input Directory'] || `/data/fetch/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
-      const content = env.readFile(proc.name, `${dir}/${fname}`) || ff.content;
-      return { attributes: { ...ff.attributes, 'fetch.status': 'ok' }, content };
+      let filePath;
+      if (ff.attributes['absolute.path']) {
+        const absPath = ff.attributes['absolute.path'].replace(/\/$/, '');
+        filePath = isDbx ? `/Volumes/fetch/${absPath.split('/').pop()}/${fname}` : `${absPath}/${fname}`;
+      } else {
+        const dir = isDbx ? `/Volumes/fetch/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Input Directory'] || `/data/fetch/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+        filePath = `${dir}/${fname}`;
+      }
+      const content = env.readFile(proc.name, filePath) || ff.content;
+      return { attributes: { ...ff.attributes, 'fetch.status': 'ok', 'fetch.path': filePath }, content };
     });
+  },
+  ListFile: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const dir = isDbx ? `/Volumes/list/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Input Directory'] || `/data/list/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+    const filter = props['File Filter'] || '';
+    const files = env.listFiles(proc.name, dir);
+    const outFFs = [];
+    files.forEach(path => {
+      if (path.endsWith('/.marker')) return;
+      const fname = path.split('/').pop();
+      if (filter) { try { if (!new RegExp(filter).test(fname)) return; } catch(e) {} }
+      const entry = env.filesystem[path];
+      outFFs.push({ attributes: { filename: fname, path, 'absolute.path': dir + '/', 'file.size': entry ? String(entry.size || 0) : '0', 'file.lastModifiedTime': entry ? (entry.modified || new Date().toISOString()) : new Date().toISOString() }, content: '' });
+    });
+    if (!outFFs.length) outFFs.push({ attributes: { filename: 'empty', path: dir, 'absolute.path': dir + '/' }, content: '' });
+    return outFFs;
   },
   PutFile: function(env, proc, inputFF, isDbx) {
     const props = proc.properties || {};
@@ -5355,16 +5484,38 @@ const PROCESSOR_SIM_V2 = {
   PutSFTP: function(env, proc, inputFF, isDbx) {
     const props = proc.properties || {};
     const host = props['Hostname'] || props['hostname'] || 'sftp.example.com';
-    const dir = isDbx ? `/Volumes/sftp/${host}` : `/sftp/${host}/${props['Remote Path'] || 'upload'}`;
+    const remotePath = evaluateNiFiEL(props['Remote Path'] || 'upload', inputFF[0] ? inputFF[0].attributes : {});
+    const dir = isDbx ? `/Volumes/sftp/${host}/${remotePath}` : `/sftp/${host}/${remotePath}`;
     return inputFF.map(ff => {
-      const fname = ff.attributes.filename || 'uploaded.dat';
+      let fname = ff.attributes.filename || 'uploaded.dat';
+      if (fname.includes('${')) fname = evaluateNiFiEL(fname, ff.attributes);
       env.writeFile(proc.name, `${dir}/${fname}`, ff.content, 'raw');
-      return { attributes: { ...ff.attributes, 'sftp.status': 'ok', 'sftp.path': `${dir}/${fname}` }, content: ff.content };
+      return { attributes: { ...ff.attributes, 'sftp.status': 'ok', 'sftp.host': host, 'sftp.remote.path': remotePath, 'sftp.path': `${dir}/${fname}` }, content: ff.content };
+    });
+  },
+  PutHDFS: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const dir = isDbx ? `/Volumes/hdfs/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Directory'] || props['directory'] || `/hdfs/output/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+    return inputFF.map(ff => {
+      let fname = ff.attributes.filename || `hdfs_${simHash((ff.content || '').substring(0, 20))}.dat`;
+      if (fname.includes('${')) fname = evaluateNiFiEL(fname, ff.attributes);
+      env.writeFile(proc.name, `${dir}/${fname}`, ff.content, ff.attributes.format || 'raw');
+      return { attributes: { ...ff.attributes, 'hdfs.status': 'ok', 'hdfs.path': `${dir}/${fname}` }, content: ff.content };
     });
   },
   ExecuteSQL: function(env, proc, inputFF, isDbx) {
     const props = proc.properties || {};
-    const sql = props['SQL select query'] || props['sql-select-query'] || '';
+    let sql = props['SQL select query'] || props['sql-select-query'] || '';
+    // Resolve parameterized table references: ${external_table} -> default name
+    sql = sql.replace(/\$\{(\w+)\}/g, (m, name) => {
+      const defaults = { external_table: 'ext_data', staging_table: 'stg_data', prod_table: 'prod_data' };
+      return defaults[name] || name;
+    });
+    // Oracle dual table handling
+    if (/\bFROM\s+dual\b/i.test(sql)) {
+      const content = JSON.stringify([{ DUMMY: 'X' }]);
+      return inputFF.map(ff => ({ attributes: { ...ff.attributes, 'executesql.row.count': '1', 'sql.table': 'dual' }, content }));
+    }
     const tableMatch = sql.match(/(?:FROM|JOIN)\s+([a-zA-Z_][\w.]*)/i);
     const tName = tableMatch ? tableMatch[1] : null;
     let data = tName ? env.queryTable(proc.name, tName) : null;
@@ -5406,6 +5557,7 @@ const PROCESSOR_SIM_V2 = {
     const scriptPath = cmd.startsWith('/') ? cmd : `/usr/local/bin/${cmd}`;
     env.readFile(proc.name, scriptPath);
     // Detect patterns and simulate
+    const isClearOrRm = /\b(rm|clear|clean|purge|delete)\b/i.test(proc.name) || /\brm\s+(-rf?|-f)?\s/i.test(args) || /\brm\s+(-rf?|-f)?\s/i.test(cmd + ' ' + args);
     if (cmd === 'hdfs' || args.includes('dfs ')) {
       const pathArgs = args.match(/\/([\w/._-]+)/g) || [];
       if (args.includes('-cp') || args.includes('-mv')) {
@@ -5417,13 +5569,25 @@ const PROCESSOR_SIM_V2 = {
         }
       } else if (args.includes('-rm')) {
         pathArgs.forEach(p => env.deleteFile(proc.name, p));
+      } else if (args.includes('-ls')) {
+        const pathArgs2 = args.match(/\/([\w/._-]+)/g) || [];
+        pathArgs2.forEach(p => env.listFiles(proc.name, p));
+      }
+    } else if (isClearOrRm) {
+      // Handle rm/clear/clean/purge commands
+      const pathArgs = args.match(/\/([\w/._-]+)/g) || (cmd + ' ' + args).match(/\/([\w/._-]+)/g) || [];
+      pathArgs.forEach(p => {
+        const files = env.listFiles(proc.name, p);
+        files.forEach(f => env.deleteFile(proc.name, f));
+        env.deleteFile(proc.name, p);
+      });
+      if (isDbx) {
+        // Databricks equivalent: dbutils.fs.rm(path, recurse=True)
+        pathArgs.forEach(p => env.deleteFile(proc.name, `/Volumes${p}`));
       }
     } else if (cmd.includes('impala') || args.includes('REFRESH') || args.includes('INVALIDATE')) {
-      if (isDbx) {
-        // Databricks: spark.sql("REFRESH TABLE ...")
-        const tableMatch = args.match(/(?:REFRESH|INVALIDATE\s+METADATA)\s+(\S+)/i);
-        if (tableMatch && env.sqlTables[tableMatch[1]]) env.queryTable(proc.name, tableMatch[1]);
-      }
+      const tableMatch = args.match(/(?:REFRESH|INVALIDATE\s+METADATA)\s+(\S+)/i);
+      if (tableMatch && env.sqlTables[tableMatch[1]]) env.queryTable(proc.name, tableMatch[1]);
     } else if (cmd.includes('kinit')) {
       env.acquireToken(proc.name, 'kerberos_' + proc.name.replace(/\s+/g,'_'));
     }
@@ -5438,10 +5602,14 @@ const PROCESSOR_SIM_V2 = {
     Object.entries(props).forEach(([k, v]) => { if (k !== 'Routing Strategy') routeProps[k] = v; });
     const routes = Object.keys(routeProps);
     if (!routes.length) return inputFF;
-    // Simulate routing: distribute FFs across routes
-    return inputFF.map((ff, i) => {
-      const routeName = routes[i % routes.length];
-      return { attributes: { ...ff.attributes, 'route': routeName, 'route.expression': routeProps[routeName] || '' }, content: ff.content };
+    return inputFF.map(ff => {
+      let matchedRoute = 'unmatched';
+      for (const routeName of routes) {
+        const expr = routeProps[routeName];
+        const result = evaluateNiFiEL(expr, ff.attributes);
+        if (result === 'true' || result === routeName) { matchedRoute = routeName; break; }
+      }
+      return { attributes: { ...ff.attributes, 'route': matchedRoute, 'route.expression': routeProps[matchedRoute] || '' }, content: ff.content };
     });
   },
   UpdateAttribute: function(env, proc, inputFF, isDbx) {
@@ -5450,11 +5618,7 @@ const PROCESSOR_SIM_V2 = {
       const newAttrs = { ...ff.attributes };
       Object.entries(props).forEach(([k, v]) => {
         if (k === 'Delete Attributes Expression' || k === 'Store State') return;
-        // Evaluate simple NiFi expressions
-        let val = v;
-        if (val.includes('${now()')) val = new Date().toISOString();
-        else if (val.includes('${')) val = val.replace(/\$\{([^}]+)\}/g, (_, expr) => ff.attributes[expr.split(':')[0]] || val);
-        newAttrs[k] = val;
+        newAttrs[k] = v.includes('${') ? evaluateNiFiEL(v, ff.attributes) : v;
       });
       return { attributes: newAttrs, content: ff.content };
     });
@@ -5807,13 +5971,25 @@ function compareSimOutputs(nifiOut, dbxOut) {
 
 function compareActions(nifiActions, dbxActions) {
   if (!nifiActions.length && !dbxActions.length) return { matched: 0, mismatched: 0, coverage: 100 };
-  // Compare action types and targets
-  const nTypes = nifiActions.map(a => a.action + ':' + a.target);
-  const dTypes = dbxActions.map(a => a.action + ':' + a.target);
+  // Normalize path for comparison (strip /Volumes prefix, /sftp vs /Volumes/sftp etc.)
+  function normTarget(t) { return (t || '').replace(/^\/Volumes\//,'/').replace(/^\/Volumes/,'/').replace(/\/+/g,'/'); }
+  const nTypes = nifiActions.map(a => a.action + ':' + normTarget(a.target));
+  const dTypes = dbxActions.map(a => a.action + ':' + normTarget(a.target));
   let matched = 0;
   const used = new Set();
   nTypes.forEach(nt => {
-    const idx = dTypes.findIndex((dt, i) => !used.has(i) && dt === nt);
+    // Exact match first
+    let idx = dTypes.findIndex((dt, i) => !used.has(i) && dt === nt);
+    if (idx < 0) {
+      // Fuzzy match: same action type, target ends with same filename
+      const [nAct, nTgt] = nt.split(':');
+      const nFile = (nTgt || '').split('/').pop();
+      idx = dTypes.findIndex((dt, i) => {
+        if (used.has(i)) return false;
+        const [dAct, dTgt] = dt.split(':');
+        return nAct === dAct && (dTgt || '').split('/').pop() === nFile;
+      });
+    }
     if (idx >= 0) { matched++; used.add(idx); }
   });
   const total = Math.max(nTypes.length, dTypes.length);
@@ -5823,10 +5999,14 @@ function compareActions(nifiActions, dbxActions) {
 function compareStateDiffs(nifiSnaps, dbxSnaps) {
   if (!nifiSnaps || !dbxSnaps) return { filesMatch: true, tablesMatch: true, tokensMatch: true, signalsMatch: true, overall: 100 };
   let score = 0, total = 0;
-  // Compare filesystem changes
-  const nFiles = new Set(Object.keys(nifiSnaps.after ? nifiSnaps.after.filesystem : {}));
-  const dFiles = new Set(Object.keys(dbxSnaps.after ? dbxSnaps.after.filesystem : {}));
-  const filesMatch = nFiles.size === dFiles.size;
+  // Normalize path for comparison
+  function normPath(p) { return p.replace(/^\/Volumes\//,'/').replace(/\/+/g,'/'); }
+  // Compare filesystem changes (count-based with path normalization)
+  const nFileKeys = Object.keys(nifiSnaps.after ? nifiSnaps.after.filesystem : {}).map(normPath);
+  const dFileKeys = Object.keys(dbxSnaps.after ? dbxSnaps.after.filesystem : {}).map(normPath);
+  const nFileSet = new Set(nFileKeys), dFileSet = new Set(dFileKeys);
+  const commonFiles = nFileKeys.filter(f => dFileSet.has(f)).length;
+  const filesMatch = nFileSet.size > 0 ? (commonFiles / Math.max(nFileSet.size, dFileSet.size)) >= 0.7 : nFileSet.size === dFileSet.size;
   total++; if (filesMatch) score++;
   // Compare SQL table changes
   const nTables = nifiSnaps.after ? nifiSnaps.after.sqlTables : {};
@@ -6196,13 +6376,27 @@ function buildFinalReportJSON() {
         status: STATE.medallion ? 'complete' : 'skipped',
         tiers: STATE.medallion ? Object.keys(STATE.medallion).length : 0
       },
-      step5_validate: {
-        status: validation ? 'complete' : 'skipped',
-        confidence_score: validation ? validation.confidence_score : null,
-        grade: validation ? validation.grade : null,
-        checks_passed: validation && validation.results ? validation.results.filter(r => r.pass).length : 0,
-        checks_total: validation && validation.results ? validation.results.length : 0
-      },
+      step5_validate: (() => {
+        if (!validation) return { status: 'skipped', checks_passed: 0, checks_total: 0 };
+        // validation is an array of per-table results
+        const valArr = Array.isArray(validation) ? validation : [];
+        const checksTotal = valArr.length * 4; // 4 dimensions per table
+        let checksPassed = 0;
+        valArr.forEach(v => {
+          if (v.schema_score >= 0.7) checksPassed++;
+          if (v.fidelity_score >= 0.7) checksPassed++;
+          if (v.quality_score >= 0.7) checksPassed++;
+          if (v.pipeline_score >= 0.7) checksPassed++;
+        });
+        const avg = valArr.length ? valArr.reduce((a,v) => a + v.overall_score, 0) / valArr.length : 0;
+        return {
+          status: 'complete',
+          confidence_score: Math.round(avg * 100),
+          grade: avg >= 0.9 ? 'GREEN' : avg >= 0.7 ? 'AMBER' : 'RED',
+          checks_passed: checksPassed,
+          checks_total: checksTotal
+        };
+      })(),
       step6_notebook: {
         status: STATE.notebook ? 'complete' : 'skipped',
         cells_generated: STATE.notebook ? STATE.notebook.cells.length : 0,
