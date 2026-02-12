@@ -1703,7 +1703,7 @@ const NIFI_ROLE_MAP = {
   UpdateAttribute:'transform',JoltTransformJSON:'transform',ReplaceText:'transform',
   ConvertRecord:'transform',SplitRecord:'transform',MergeContent:'transform',MergeRecord:'transform',
   ExecuteScript:'transform',ExecuteStreamCommand:'transform',ConvertJSONToSQL:'transform',
-  TransformXml:'transform',SplitJson:'transform',SplitXml:'transform',SplitText:'transform',
+  TransformXml:'transform',SplitJson:'transform',SplitXml:'transform',SplitText:'transform',SplitContent:'transform',
   EvaluateJsonPath:'transform',ExtractText:'transform',CompressContent:'transform',
   EncryptContent:'transform',HashContent:'transform',Base64EncodeContent:'transform',
   ConvertCharacterSet:'transform',FlattenJson:'transform',ConvertAvroToJSON:'transform',
@@ -1764,6 +1764,7 @@ const NIFI_DATABRICKS_MAP = {
   ListFile:{cat:'Cloud Storage',tpl:'_files = dbutils.fs.ls("/Volumes/{catalog}/{schema}/{path}")\ndf_{v} = spark.createDataFrame(_files)',desc:'List files in directory',notes:'Use Volumes or external location',imp:[],conf:0.80},
   GetMongo:{cat:'MongoDB Connector',tpl:'df_{v} = (spark.read\n  .format("mongodb")\n  .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))\n  .option("database", "{database}")\n  .option("collection", "{collection}")\n  .load())',desc:'MongoDB read',notes:'Install mongodb-spark-connector library',imp:[],conf:0.75},
   GetElasticsearch:{cat:'ES Connector',tpl:'df_{v} = (spark.read\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .option("es.resource", "{index}")\n  .load())',desc:'Elasticsearch read',notes:'Install elasticsearch-spark library',imp:[],conf:0.65},
+  FetchFile:{cat:'Volumes Read',tpl:'# Fetch file content by path attribute\n_path = "/Volumes/{catalog}/{schema}/landing/{filename}"\ndf_{v} = spark.read.format("{format}").load(_path)',desc:'Read file by path from Unity Catalog Volumes',notes:'Map NiFi filename attribute to Volumes path',imp:[],conf:0.80},
   // TRANSFORMS
   ConvertRecord:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.selectExpr("*")  # Convert record format\n# Adjust column types/names as needed',desc:'Record format conversion',notes:'Spark handles format conversion natively',imp:[],conf:0.80},
   ConvertJSONToSQL:{cat:'Spark SQL',tpl:'df_{in}.createOrReplaceTempView("tmp_{v}")\ndf_{v} = spark.sql("SELECT * FROM tmp_{v}")',desc:'JSON to SQL conversion',notes:'Parse JSON and query with SQL',imp:[],conf:0.75},
@@ -1777,6 +1778,7 @@ const NIFI_DATABRICKS_MAP = {
   ExtractText:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("{field}", regexp_extract(col("{col}"), "{pattern}", {group}))',desc:'Regex text extraction',notes:'Translate NiFi regex groups to Spark',imp:[],conf:0.80},
   SplitJson:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("items", explode(from_json(col("value"), ArrayType(StringType()))))',desc:'Split JSON array',notes:'Define element schema',imp:[],conf:0.75},
   SplitText:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("lines", explode(split(col("value"), "\\\\n")))',desc:'Split text by delimiter',notes:'Adjust delimiter as needed',imp:[],conf:0.80},
+  SplitContent:{cat:'DataFrame API',tpl:'# Split content by byte boundary or delimiter\ndf_{v} = df_{in}.withColumn("parts", split(col("value"), "{byte_sequence}"))\ndf_{v} = df_{v}.withColumn("part", explode(col("parts"))).drop("parts")',desc:'Split content by delimiter/boundary',notes:'Adjust byte_sequence pattern for content splitting',imp:[],conf:0.75},
   CompressContent:{cat:'Native',tpl:'# Delta Lake handles compression natively (snappy/zstd)\n# No explicit compression step needed\ndf_{v} = df_{in}',desc:'Compression',notes:'Delta Lake auto-compresses',imp:[],conf:0.95},
   EncryptContent:{cat:'Security',tpl:'# Use Databricks column-level encryption or workspace-level encryption\n# See: docs.databricks.com/security/column-level-encryption\ndf_{v} = df_{in}  # TODO: Apply aes_encrypt() on sensitive columns',desc:'Encryption',notes:'Use workspace-level encryption or aes_encrypt()',imp:[],conf:0.40},
   HashContent:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("{col}_hash", sha2(col("{col}").cast("string"), 256))',desc:'SHA-256 hashing',notes:'Apply to specific columns',imp:[],conf:0.90},
@@ -1808,6 +1810,7 @@ const NIFI_DATABRICKS_MAP = {
   PublishKafkaRecord_2_6:{cat:'Kafka Write',tpl:'(df_{in}\n  .selectExpr("to_json(struct(*)) AS value")\n  .write\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("topic", "{topic}")\n  .save())',desc:'Publish Kafka records',notes:'Same as PutKafka',imp:[],conf:0.85},
   PutS3Object:{cat:'Cloud Storage Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .save("s3a://{bucket}/{path}"))',desc:'Write to S3',notes:'Use external location in Unity Catalog',imp:[],conf:0.85},
   PutHDFS:{cat:'Cloud Storage Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .save("{path}"))',desc:'Write to cloud storage',notes:'Map HDFS path to cloud storage / Volumes',imp:[],conf:0.80},
+  PutSFTP:{cat:'External Storage Write',tpl:'# Write to SFTP via staging in Unity Catalog Volumes\n(df_{in}.write.format("{format}").mode("overwrite")\n  .save("/Volumes/{catalog}/{schema}/staging/{v}"))\n# Stage to Volumes then use external SFTP transfer\n# dbutils.fs.cp("/Volumes/.../staging/{v}", "sftp://{hostname}/{remote_path}")',desc:'SFTP file upload via staging',notes:'Stage to Volumes then transfer; or use external SFTP utility',imp:[],conf:0.50},
   PutEmail:{cat:'Workflow Notification',tpl:'# Use Databricks workflow email notifications\n# Configure in Job settings: email_notifications.on_success / on_failure\n# Or use dbutils.notebook.exit() with downstream webhook task\ndbutils.notebook.exit("NOTIFY: {subject}")',desc:'Email via workflow notification',notes:'Configure email notifications in Databricks Job settings',imp:[],conf:0.45},
   PutMongo:{cat:'MongoDB Connector',tpl:'(df_{in}.write\n  .format("mongodb")\n  .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))\n  .option("database", "{database}")\n  .option("collection", "{collection}")\n  .mode("append")\n  .save())',desc:'MongoDB write',notes:'Install mongodb-spark-connector',imp:[],conf:0.75},
   PutElasticsearch:{cat:'ES Connector',tpl:'(df_{in}.write\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .save("{index}"))',desc:'Elasticsearch write',notes:'Install elasticsearch-spark',imp:[],conf:0.65},
@@ -1829,7 +1832,6 @@ function sanitizeVarName(name) {
 function mapNiFiToDatabricks(nifi) {
   const processors = nifi.processors || [];
   const conns = nifi.connections || [];
-  // Build connection graph: processor name -> {inputs:[], outputs:[]}
   const connGraph = {};
   conns.forEach(c => {
     if (!connGraph[c.destinationName]) connGraph[c.destinationName] = {inputs:[],outputs:[]};
@@ -1846,14 +1848,64 @@ function mapNiFiToDatabricks(nifi) {
     if (mapEntry) {
       let code = mapEntry.tpl.replace(/\{v\}/g, varName).replace(/\{in\}/g, inputVar)
         .replace(/\{in1\}/g, inputVar).replace(/\{in2\}/g, inputProcs[1] ? sanitizeVarName(inputProcs[1]) : 'input2');
-      // Substitute from processor properties
-      Object.entries(p.properties || {}).forEach(([k, val]) => {
+      const props = p.properties || {};
+      // Generic property substitution
+      Object.entries(props).forEach(([k, val]) => {
         const key = k.replace(/\s+/g, '_').toLowerCase();
         code = code.replace(new RegExp('\\{' + key + '\\}', 'gi'), val);
       });
+      // ── Smart code generation for high-frequency processor types ──
+      let conf = mapEntry.conf;
+      if (p.type === 'RouteOnAttribute') {
+        const routeEntries = Object.entries(props).filter(([k]) => k !== 'Routing Strategy');
+        if (routeEntries.length) {
+          const lines = ['# Route based on NiFi attribute conditions'];
+          routeEntries.forEach(([routeName, expr]) => {
+            const safe = routeName.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+            lines.push(`# Route "${routeName}": ${expr}`);
+            lines.push(`df_${varName}_${safe} = df_${inputVar}.filter(col("${routeName}").isNotNull())  # Translate: ${expr}`);
+          });
+          lines.push(`df_${varName}_unmatched = df_${inputVar}  # Unmatched rows`);
+          code = lines.join('\n');
+          conf = 0.85;
+        }
+      }
+      if (p.type === 'ExecuteStreamCommand') {
+        const cmd = props['Command'] || props['command'] || '';
+        const args = props['Command Arguments'] || props['command_arguments'] || '';
+        const full = (cmd + ' ' + args).trim();
+        if (/hdfs\s+dfs|hadoop\s+fs/i.test(full)) {
+          const op = /-cp\b/.test(full)?'cp':/-mv\b/.test(full)?'mv':/-mkdir/.test(full)?'mkdirs':/-rm/.test(full)?'rm':/-ls/.test(full)?'ls':'head';
+          code = `# HDFS operation → dbutils.fs.${op}()\n# Original: ${full.substring(0,120)}\ndbutils.fs.${op}("/Volumes/<catalog>/<schema>/<path>")`;
+          conf = 0.80;
+        } else if (/kinit/i.test(full)) {
+          code = `# Kerberos kinit → Not needed in Databricks\n# Original: ${full.substring(0,120)}\n# Unity Catalog handles authentication natively\nprint("[INFO] Kerberos auth handled by Unity Catalog")`;
+          conf = 0.95;
+        } else if (/impala/i.test(full)) {
+          const sq = full.match(/-q\s+["'](.+?)["']/i);
+          code = `# Impala → Spark SQL\n# Original: ${full.substring(0,120)}\nspark.sql("${sq?sq[1].replace(/"/g,'\\"'):'REFRESH TABLE <table>'}")`;
+          conf = 0.85;
+        } else if (full) {
+          code = `# Shell command → %sh magic cell\n# Original: ${full.substring(0,120)}\n# Use %sh in a separate cell or dbutils.notebook.run()\nprint("[CMD] ${full.replace(/"/g,'\\"').substring(0,80)}")`;
+          conf = 0.50;
+        }
+      }
+      if (p.type === 'UpdateAttribute') {
+        const stdKeys = new Set(['Delete Attributes Expression','Store State','Stateful Variables Initial Value','canonical-value-lookup-cache-size']);
+        const attrEntries = Object.entries(props).filter(([k]) => !stdKeys.has(k));
+        if (attrEntries.length) {
+          const lines = ['# Set DataFrame columns from NiFi attributes', `df_${varName} = df_${inputVar}`];
+          attrEntries.forEach(([attr, expr]) => {
+            const cn = attr.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+            lines.push(`  .withColumn("${cn}", lit("${expr.replace(/"/g,'\\"')}"))  # ${attr}`);
+          });
+          code = lines.join('\n');
+          conf = 0.85;
+        }
+      }
       code = code.replace(/\{(\w+)\}/g, '<$1>');
       return { name: p.name, type: p.type, group: p.group, role, mapped: true,
-        confidence: mapEntry.conf, category: mapEntry.cat, code, desc: mapEntry.desc,
+        confidence: conf, category: mapEntry.cat, code, desc: mapEntry.desc,
         notes: mapEntry.notes, imports: mapEntry.imp || [], state: p.state };
     }
     return { name: p.name, type: p.type, group: p.group, role, mapped: false,
