@@ -174,16 +174,28 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 .tier-sub-band .tier-nodes { gap: 8px; }
 .tier-sub-band .tier-node { min-width: 100px; max-width: 160px; padding: 6px 10px; }
 .tier-sub-band .tier-node .node-name { font-size: 0.75rem; }
-/* Multi-select path tracing */
+/* Progressive route tracing */
 .tier-node.path-selected { border-color: #FACA15; box-shadow: 0 0 0 3px rgba(250,202,21,0.4); z-index: 10; }
+.tier-node.path-selected::before { content: '\2713'; position: absolute; top: -8px; left: -8px;
+  width: 18px; height: 18px; border-radius: 50%; background: #FACA15; color: #000;
+  font-size: 0.65rem; font-weight: 700; display: flex; align-items: center; justify-content: center; z-index: 5; }
 .tier-node.path-member { border-color: #FACA15; background: rgba(250,202,21,0.08); }
-.tier-node.path-dimmed { opacity: 0.15; }
+.tier-node.path-dimmed { opacity: 0.12; }
 .path-trace-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
   padding: 10px 20px; font-size: 0.85rem; color: var(--text); z-index: 1000;
   display: none; align-items: center; gap: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
 .path-trace-toast .toast-hint { color: var(--text2); font-size: 0.75rem; }
 .path-trace-toast .toast-clear { cursor: pointer; color: var(--primary); font-weight: 600; font-size: 0.8rem; }
+/* Sidebar active filter */
+.density-row { cursor: pointer; padding: 2px 4px; border-radius: 4px; transition: background 0.15s; }
+.density-row:hover { background: rgba(255,255,255,0.06); }
+.density-row.filter-active { background: rgba(250,202,21,0.15); border: 1px solid rgba(250,202,21,0.4); }
+.density-row.filter-dimmed { opacity: 0.3; }
+.sidebar-filter-hint { font-size: 0.6rem; color: var(--text2); margin-bottom: 6px; font-style: italic; }
+.sidebar-clear-btn { font-size: 0.65rem; color: var(--primary); cursor: pointer; margin-top: 6px;
+  display: none; text-align: center; padding: 4px; border-radius: 4px; }
+.sidebar-clear-btn:hover { background: rgba(255,75,75,0.1); }
 </style>
 </head>
 <body>
@@ -2503,18 +2515,25 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
       // Hover: highlight connected (suppressed during multi-select)
       el.addEventListener('mouseenter', () => { if (!_ms.active) highlightConnected(node.id, nodes, connections, nodeEls, container); });
       el.addEventListener('mouseleave', () => { if (!_ms.active) clearHighlight(nodeEls, container); });
-      // Click: expand/multi-select/detail
+      // Click: route tracing + expand + detail
       el.addEventListener('click', (e) => {
-        if (e.shiftKey && _ms.selected.length > 0) {
-          handleMultiSelectAdd(node.id, _ms, nodes, connections, nodeEls, container);
+        e.stopPropagation();
+        if (_ms.active && !_ms.selected.includes(node.id)) {
+          // Route tracing: add this node to the route
+          addToRouteTrace(node.id, _ms, connections, nodeEls, container);
           showNodeDetail(node, detailEl, diagramType);
-        } else if (node.type === 'process_group' && node.expandable && !e.shiftKey) {
-          toggleGroupExpand(node, el, band, tierData, nodeEls, container, detailEl, diagramType);
-          if (!_ms.active) { startMultiSelect(node.id, _ms, nodeEls, container); }
+        } else if (_ms.active && _ms.selected.includes(node.id)) {
+          // Clicking an already-selected node: expand it (if process group)
+          if (node.type === 'process_group' && node.expandable) {
+            toggleGroupExpand(node, el, band, tierData, nodeEls, container, detailEl, diagramType);
+          }
           showNodeDetail(node, detailEl, diagramType);
         } else {
-          if (_ms.active) clearMultiSelect(_ms, nodeEls, container);
-          startMultiSelect(node.id, _ms, nodeEls, container);
+          // First click: start route trace + expand if process group
+          startRouteTrace(node.id, _ms, connections, nodeEls, container);
+          if (node.type === 'process_group' && node.expandable) {
+            toggleGroupExpand(node, el, band, tierData, nodeEls, container, detailEl, diagramType);
+          }
           showNodeDetail(node, detailEl, diagramType);
         }
       });
@@ -2532,35 +2551,54 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
     renderConnections(container, connections, nodeEls);
   });
 
-  // Escape clears multi-select; click empty space clears
+  // Escape clears route trace; click empty space clears
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && _ms.active) clearMultiSelect(_ms, nodeEls, container);
+    if (e.key === 'Escape' && _ms.active) clearRouteTrace(_ms, nodeEls, container);
   });
   container.addEventListener('click', (e) => {
     if ((e.target === container || e.target.classList.contains('tier-band') || e.target.classList.contains('tier-band-label')) && _ms.active) {
-      clearMultiSelect(_ms, nodeEls, container);
+      clearRouteTrace(_ms, nodeEls, container);
     }
   });
 
-  // Connection density sidebar
+  // Connection density sidebar — now an active filter
   const sidebarEl = document.getElementById('tierDensitySidebar');
   const barsEl = document.getElementById('densityBars');
+  const _sidebarFilter = { activeTypes: new Set() };
   if (sidebarEl && barsEl && densityData && densityData.length) {
     sidebarEl.classList.remove('hidden');
     const sidebarTitle = sidebarEl.querySelector('h4');
-    if (sidebarTitle) sidebarTitle.textContent = diagramType === 'nifi_flow' ? 'Processor Types' : 'Connection Density';
+    if (sidebarTitle) sidebarTitle.textContent = diagramType === 'nifi_flow' ? 'Filter by Type' : 'Connection Density';
     barsEl.innerHTML = '';
+    // Add hint for NiFi
+    if (diagramType === 'nifi_flow') {
+      const hint = document.createElement('div');
+      hint.className = 'sidebar-filter-hint';
+      hint.textContent = 'Click to filter diagram';
+      barsEl.appendChild(hint);
+    }
     const maxTotal = Math.max(...densityData.map(d => d.total));
+    // Pre-build type→group mapping for NiFi filter
+    const typeToGroups = {};
+    if (diagramType === 'nifi_flow') {
+      nodes.forEach(n => {
+        if (n.type === 'process_group' && n.detail && n.detail.typeCount) {
+          Object.keys(n.detail.typeCount).forEach(t => {
+            if (!typeToGroups[t]) typeToGroups[t] = new Set();
+            typeToGroups[t].add(n.id);
+          });
+        }
+      });
+    }
     densityData.forEach(d => {
       const row = document.createElement('div');
       row.className = 'density-row';
+      row.dataset.typeName = d.name;
       if (d.role) {
-        // NiFi: single bar colored by role
         const roleColors = { source:'#3B82F6', sink:'#21C354', route:'#EAB308', transform:'#A855F7', process:'#6366F1', utility:'#808495' };
         const barW = Math.max(4, (d.total / maxTotal) * 80);
         row.innerHTML = `<span class="density-bar" style="width:${barW}px;background:${roleColors[d.role]||'#808495'}" title="${d.total}x"></span><span class="density-label" title="${d.name}">${d.name} (${d.total})</span>`;
       } else {
-        // Dependency graph: multi-bar for writer/reader/lookup
         const wPct = Math.max(2, (d.writers / maxTotal) * 60);
         const rPct = Math.max(0, (d.readers / maxTotal) * 60);
         const lPct = Math.max(0, (d.lookups / maxTotal) * 60);
@@ -2569,8 +2607,37 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
         if (d.lookups) barsHTML += `<span class="density-bar" style="width:${lPct}px;background:#F59E0B" title="${d.lookups} lookup(s)"></span>`;
         row.innerHTML = barsHTML + `<span class="density-label" title="${d.name}">${d.name}</span>`;
       }
+      // Click handler for filter
+      if (diagramType === 'nifi_flow') {
+        row.addEventListener('click', () => {
+          if (_ms.active) clearRouteTrace(_ms, nodeEls, container);
+          const typeName = d.name;
+          if (_sidebarFilter.activeTypes.has(typeName)) {
+            _sidebarFilter.activeTypes.delete(typeName);
+            row.classList.remove('filter-active');
+          } else {
+            _sidebarFilter.activeTypes.add(typeName);
+            row.classList.add('filter-active');
+          }
+          applySidebarFilter(_sidebarFilter, typeToGroups, nodes, connections, nodeEls, container, barsEl);
+        });
+      }
       barsEl.appendChild(row);
     });
+    // Clear filter button
+    if (diagramType === 'nifi_flow') {
+      const clearBtn = document.createElement('div');
+      clearBtn.className = 'sidebar-clear-btn';
+      clearBtn.id = 'sidebarClearBtn';
+      clearBtn.textContent = '\u2715 Clear filter';
+      clearBtn.addEventListener('click', () => {
+        _sidebarFilter.activeTypes.clear();
+        barsEl.querySelectorAll('.density-row').forEach(r => r.classList.remove('filter-active','filter-dimmed'));
+        clearSidebarFilter(nodeEls, container);
+        clearBtn.style.display = 'none';
+      });
+      barsEl.appendChild(clearBtn);
+    }
   } else if (sidebarEl) {
     sidebarEl.classList.add('hidden');
   }
@@ -2606,7 +2673,7 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
         '<span><span class="leg-line" style="background:#6366F1"></span> Process</span>',
         '<span><span class="leg-line" style="background:#21C354"></span> Sink</span>',
         '<span><span class="leg-line" style="background:#EF4444;border-top:2px dashed #EF4444"></span> Cycle Edge</span>',
-        '<span style="color:var(--text2);font-size:0.7rem">Click node, then Shift+click another to trace path</span>',
+        '<span style="color:var(--text2);font-size:0.7rem">Click nodes to trace route · Esc to clear</span>',
       ].join('');
     } else if (diagramType === 'sql_tables') {
       legendEl.innerHTML = [
@@ -2858,43 +2925,96 @@ function toggleGroupExpand(node, el, parentBand, tierData, nodeEls, container, d
   requestAnimationFrame(() => renderConnections(container, tierData.connections, nodeEls));
 }
 
-// ── Multi-select path tracing ──
-function startMultiSelect(nodeId, ms, nodeEls, container) {
+// ── Progressive route tracing ──
+// BFS all reachable nodes (both directions) from a starting node
+function bfsReachable(nodeId, connections) {
+  const reachNodes = new Set([nodeId]);
+  const reachEdges = new Set();
+  const queue = [nodeId];
+  // Downstream
+  const visited = new Set([nodeId]);
+  while (queue.length) {
+    const cur = queue.shift();
+    connections.forEach(c => {
+      if (c.from === cur && !visited.has(c.to)) {
+        visited.add(c.to); reachNodes.add(c.to); reachEdges.add(c.from + '|' + c.to); queue.push(c.to);
+      }
+    });
+  }
+  // Upstream
+  const queue2 = [nodeId];
+  const visited2 = new Set([nodeId]);
+  while (queue2.length) {
+    const cur = queue2.shift();
+    connections.forEach(c => {
+      if (c.to === cur && !visited2.has(c.from)) {
+        visited2.add(c.from); reachNodes.add(c.from); reachEdges.add(c.from + '|' + c.to); queue2.push(c.from);
+      }
+    });
+  }
+  return { reachNodes, reachEdges };
+}
+
+function startRouteTrace(nodeId, ms, connections, nodeEls, container) {
   ms.selected = [nodeId];
-  ms.pathNodes = new Set([nodeId]);
-  ms.pathEdgeKeys = new Set();
   ms.active = true;
-  Object.entries(nodeEls).forEach(([id, el]) => {
-    el.classList.remove('path-selected','path-member','path-dimmed','highlighted','dimmed','selected');
-    if (id === nodeId) el.classList.add('path-selected');
-  });
+  // First click: show all reachable from this node, dim everything else
+  const { reachNodes, reachEdges } = bfsReachable(nodeId, connections);
+  ms.pathNodes = reachNodes;
+  ms.pathEdgeKeys = reachEdges;
+  applyRouteVisuals(ms, nodeEls, container);
   showPathToast(ms);
 }
 
-function handleMultiSelectAdd(nodeId, ms, nodes, connections, nodeEls, container) {
+function addToRouteTrace(nodeId, ms, connections, nodeEls, container) {
   if (ms.selected.includes(nodeId)) return;
-  const lastSel = ms.selected[ms.selected.length - 1];
   ms.selected.push(nodeId);
-  // Try directed path last→new
-  let result = bfsShortestPath(connections, lastSel, nodeId);
-  if (!result.found) result = bfsShortestPath(connections, nodeId, lastSel);
-  if (!result.found) {
-    // Undirected fallback
-    const biConns = connections.flatMap(c => [c, {from:c.to, to:c.from, label:c.label, type:c.type, color:c.color, width:c.width}]);
-    result = bfsShortestPath(biConns, lastSel, nodeId);
+  if (ms.selected.length === 2) {
+    // Two nodes: find the specific path between them
+    const a = ms.selected[0], b = ms.selected[1];
+    let result = bfsShortestPath(connections, a, b);
+    if (!result.found) result = bfsShortestPath(connections, b, a);
+    if (!result.found) {
+      const bi = connections.flatMap(c => [c, {from:c.to,to:c.from,label:c.label,type:c.type,color:c.color,width:c.width}]);
+      result = bfsShortestPath(bi, a, b);
+    }
+    if (result.found) {
+      ms.pathNodes = new Set(result.pathNodes);
+      ms.pathEdgeKeys = new Set(result.pathEdgeKeys);
+    } else {
+      // No path — keep both selected, show nothing between
+      ms.pathNodes = new Set(ms.selected);
+      ms.pathEdgeKeys = new Set();
+      flashNoPath();
+    }
+  } else {
+    // 3+ nodes: extend from last-but-one to new node via existing path
+    const prev = ms.selected[ms.selected.length - 2];
+    let result = bfsShortestPath(connections, prev, nodeId);
+    if (!result.found) result = bfsShortestPath(connections, nodeId, prev);
+    if (!result.found) {
+      const bi = connections.flatMap(c => [c, {from:c.to,to:c.from,label:c.label,type:c.type,color:c.color,width:c.width}]);
+      result = bfsShortestPath(bi, prev, nodeId);
+    }
+    if (result.found) {
+      result.pathNodes.forEach(n => ms.pathNodes.add(n));
+      result.pathEdgeKeys.forEach(k => ms.pathEdgeKeys.add(k));
+    } else {
+      ms.pathNodes.add(nodeId);
+      flashNoPath();
+    }
   }
-  if (result.found) {
-    result.pathNodes.forEach(n => ms.pathNodes.add(n));
-    result.pathEdgeKeys.forEach(k => ms.pathEdgeKeys.add(k));
-  }
-  // Apply visual state
+  applyRouteVisuals(ms, nodeEls, container);
+  showPathToast(ms);
+}
+
+function applyRouteVisuals(ms, nodeEls, container) {
   Object.entries(nodeEls).forEach(([id, el]) => {
     el.classList.remove('path-selected','path-member','path-dimmed','highlighted','dimmed','selected');
     if (ms.selected.includes(id)) el.classList.add('path-selected');
     else if (ms.pathNodes.has(id)) el.classList.add('path-member');
     else el.classList.add('path-dimmed');
   });
-  // Highlight SVG edges
   const svg = container.querySelector('svg.tier-svg');
   if (svg) {
     svg.querySelectorAll('path[data-from]').forEach(p => {
@@ -2908,27 +3028,15 @@ function handleMultiSelectAdd(nodeId, ms, nodes, connections, nodeEls, container
         p.setAttribute('marker-end','url(#arrow-white)');
         p.style.transition = 'all 0.2s ease';
       } else {
-        p.setAttribute('opacity','0.05');
+        p.setAttribute('opacity','0.04');
         p.removeAttribute('filter');
         p.style.transition = 'all 0.2s ease';
       }
     });
   }
-  showPathToast(ms);
-  if (!result.found) {
-    const toast = document.getElementById('pathTraceToast');
-    if (toast) {
-      const noPath = document.createElement('span');
-      noPath.style.color = 'var(--red)';
-      noPath.style.marginLeft = '8px';
-      noPath.textContent = 'No path found';
-      toast.appendChild(noPath);
-      setTimeout(() => { if (noPath.parentNode) noPath.remove(); }, 2500);
-    }
-  }
 }
 
-function clearMultiSelect(ms, nodeEls, container) {
+function clearRouteTrace(ms, nodeEls, container) {
   ms.selected = [];
   ms.pathNodes = new Set();
   ms.pathEdgeKeys = new Set();
@@ -2960,9 +3068,11 @@ function showPathToast(ms) {
   }
   const count = ms.selected.length;
   const pathLen = ms.pathNodes.size;
-  toast.innerHTML = `<span>${count} node${count>1?'s':''} selected${pathLen > count ? ' \u2014 ' + pathLen + ' in path' : ''}</span>` +
-    `<span class="toast-hint">Shift+click to trace path</span>` +
-    `<span class="toast-clear" id="pathTraceToastClear">Esc to clear</span>`;
+  let msg = count === 1 ? '1 node selected — click another to trace route'
+    : `${count} nodes selected — ${pathLen} in path`;
+  toast.innerHTML = `<span>${msg}</span>` +
+    `<span class="toast-hint">Click nodes to build route</span>` +
+    `<span class="toast-clear" id="pathTraceToastClear">\u2715 Clear</span>`;
   toast.style.display = 'flex';
   document.getElementById('pathTraceToastClear').onclick = () => { toast.style.display = 'none'; };
 }
@@ -2970,6 +3080,86 @@ function showPathToast(ms) {
 function hidePathToast() {
   const toast = document.getElementById('pathTraceToast');
   if (toast) toast.style.display = 'none';
+}
+
+function flashNoPath() {
+  const toast = document.getElementById('pathTraceToast');
+  if (toast) {
+    const noPath = document.createElement('span');
+    noPath.style.cssText = 'color:var(--red);margin-left:8px';
+    noPath.textContent = 'No direct path';
+    toast.appendChild(noPath);
+    setTimeout(() => { if (noPath.parentNode) noPath.remove(); }, 2500);
+  }
+}
+
+// ── Sidebar filter ──
+function applySidebarFilter(sf, typeToGroups, nodes, connections, nodeEls, container, barsEl) {
+  const clearBtn = document.getElementById('sidebarClearBtn');
+  if (!sf.activeTypes.size) {
+    clearSidebarFilter(nodeEls, container);
+    barsEl.querySelectorAll('.density-row').forEach(r => r.classList.remove('filter-dimmed'));
+    if (clearBtn) clearBtn.style.display = 'none';
+    return;
+  }
+  if (clearBtn) clearBtn.style.display = 'block';
+  // Find all groups that contain ANY of the selected types
+  const matchingGroups = new Set();
+  sf.activeTypes.forEach(t => {
+    if (typeToGroups[t]) typeToGroups[t].forEach(g => matchingGroups.add(g));
+  });
+  // Find connections between matching groups
+  const matchingEdges = new Set();
+  connections.forEach(c => {
+    if (matchingGroups.has(c.from) && matchingGroups.has(c.to)) {
+      matchingEdges.add(c.from + '|' + c.to);
+    }
+  });
+  // Apply visuals to nodes
+  Object.entries(nodeEls).forEach(([id, el]) => {
+    el.classList.remove('path-selected','path-member','path-dimmed','highlighted','dimmed','selected');
+    if (matchingGroups.has(id)) {
+      el.classList.add('path-member');
+    } else {
+      el.classList.add('path-dimmed');
+    }
+  });
+  // Apply visuals to SVG edges
+  const svg = container.querySelector('svg.tier-svg');
+  if (svg) {
+    svg.querySelectorAll('path[data-from]').forEach(p => {
+      const fwd = p.dataset.from + '|' + p.dataset.to;
+      if (matchingEdges.has(fwd)) {
+        p.setAttribute('opacity','0.8');
+        p.setAttribute('stroke', p.dataset.origColor || '#4B5563');
+        p.setAttribute('stroke-width', p.dataset.origWidth || '1.5');
+      } else {
+        p.setAttribute('opacity','0.04');
+      }
+    });
+  }
+  // Dim non-active sidebar rows
+  barsEl.querySelectorAll('.density-row').forEach(r => {
+    if (sf.activeTypes.has(r.dataset.typeName)) r.classList.remove('filter-dimmed');
+    else r.classList.add('filter-dimmed');
+  });
+}
+
+function clearSidebarFilter(nodeEls, container) {
+  Object.values(nodeEls).forEach(el => { el.classList.remove('path-selected','path-member','path-dimmed'); });
+  const svg = container.querySelector('svg.tier-svg');
+  if (svg) {
+    svg.querySelectorAll('path[data-from]').forEach(p => {
+      p.setAttribute('opacity','0.35');
+      p.setAttribute('stroke', p.dataset.origColor || '#4B5563');
+      p.setAttribute('stroke-width', p.dataset.origWidth || '1.5');
+      p.removeAttribute('filter');
+      const c = p.dataset.origColor || '';
+      const arrowId = c.includes('EF44') ? 'arrow-red' : c.includes('F59E')||c.includes('F5') ? 'arrow-amber' : c.includes('6366') ? 'arrow-purple' : c.includes('3B82') ? 'arrow-blue' : c.includes('21C3') ? 'arrow-green' : 'arrow-default';
+      p.setAttribute('marker-end', `url(#${arrowId})`);
+      p.style.transition = '';
+    });
+  }
 }
 
 function showNodeDetail(node, detailEl, diagramType) {
