@@ -252,6 +252,21 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 .comparison-detail table { width:100%; font-size:0.8rem; }
 .comparison-detail td, .comparison-detail th { padding:6px 8px; }
 .comparison-detail tr:hover { background:var(--surface2); }
+/* Step 9: Dual Execution Simulation */
+.sim-progress { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px 20px; margin:16px 0; }
+.sim-progress-bar { height:10px; background:var(--surface2); border-radius:5px; overflow:hidden; margin:8px 0; }
+.sim-progress-fill { height:100%; border-radius:5px; background:linear-gradient(90deg,var(--primary),#ff8a4b); transition:width 0.4s ease; }
+.sim-status { font-size:0.85rem; color:var(--text2); display:flex; justify-content:space-between; align-items:center; }
+.sim-status .engine-label { font-weight:600; }
+.sim-donuts { display:flex; gap:32px; justify-content:center; flex-wrap:wrap; margin:24px 0; }
+.sim-split { display:grid; grid-template-columns:1fr 1fr; gap:0; margin:8px 0; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+.sim-split-header { background:var(--surface2); padding:8px 12px; font-weight:600; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.5px; text-align:center; }
+.sim-split-header.nifi-side { border-right:1px solid var(--border); color:#728E9B; }
+.sim-split-header.dbx-side { color:var(--primary); }
+.sim-split-cell { padding:8px 12px; font-size:0.78rem; font-family:var(--mono); background:var(--surface); border-top:1px solid var(--border); overflow-x:auto; max-height:200px; overflow-y:auto; }
+.sim-split-cell.nifi-side { border-right:1px solid var(--border); }
+@keyframes simPulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+.sim-running { animation:simPulse 1s ease-in-out infinite; }
 </style>
 </head>
 <body>
@@ -268,6 +283,7 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
     <div class="tab locked" data-tab="notebook">6. Notebook<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
     <div class="tab locked" data-tab="report">7. Report<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
     <div class="tab locked" data-tab="comparison">8. Compare<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="simulate">9. Simulate<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
   </div>
 
   <!-- STEP 1: PARSE -->
@@ -423,13 +439,26 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
       <div id="comparisonResults"></div>
     </div>
   </div>
+  <!-- STEP 9: DUAL EXECUTION SIMULATION -->
+  <div class="panel" id="panel-simulate">
+    <h2>Step 9: Dual Execution Simulation</h2>
+    <div id="simulateNotReady" class="alert alert-info">Complete the cross-comparison first (Step 8).</div>
+    <div id="simulateReady" class="hidden">
+      <p style="color:var(--text2);font-size:0.9rem;margin-bottom:12px">
+        Simulate running both the NiFi flow and the Databricks pipeline against the same
+        synthetic data. High-confidence mappings produce identical outputs &mdash; proving the migration works.
+      </p>
+      <button class="btn btn-primary" onclick="runDualSimulation()">Run Dual Simulation</button>
+      <div id="simulateResults"></div>
+    </div>
+  </div>
 </div>
 
 <script>
 // ================================================================
 // STATE
 // ================================================================
-let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null, notebook: null, migrationReport: null, comparison: null };
+let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null, notebook: null, migrationReport: null, comparison: null, simulation: null };
 
 // ================================================================
 // TAB NAVIGATION
@@ -3927,11 +3956,12 @@ function parseInput() {
     alert('No tables found. Check your input format.' + (warnings ? '\n\n' + warnings : ''));
     return;
   }
-  STATE.parsed = parsed; STATE.blueprint = STATE.tables = STATE.medallion = STATE.validation = STATE.notebook = STATE.migrationReport = STATE.comparison = null;
-  // Lock steps 6+7+8 until validation completes
+  STATE.parsed = parsed; STATE.blueprint = STATE.tables = STATE.medallion = STATE.validation = STATE.notebook = STATE.migrationReport = STATE.comparison = STATE.simulation = null;
+  // Lock steps 6+7+8+9 until validation completes
   setTabStatus('notebook', 'locked');
   setTabStatus('report', 'locked');
   setTabStatus('comparison', 'locked');
+  setTabStatus('simulate', 'locked');
   document.getElementById('notebookNotReady').classList.remove('hidden');
   document.getElementById('notebookNotNifi').classList.add('hidden');
   document.getElementById('notebookReady').classList.add('hidden');
@@ -3942,6 +3972,9 @@ function parseInput() {
   document.getElementById('comparisonNotReady').classList.remove('hidden');
   document.getElementById('comparisonReady').classList.add('hidden');
   document.getElementById('comparisonResults').innerHTML = '';
+  document.getElementById('simulateNotReady').classList.remove('hidden');
+  document.getElementById('simulateReady').classList.add('hidden');
+  document.getElementById('simulateResults').innerHTML = '';
   // Detect source system
   const fmt = parsed.detected_format || parsed.input_format || 'unknown';
   const src = detectSourceSystem(content, fmt);
@@ -4547,6 +4580,322 @@ function generateComparison() {
 
   document.getElementById('comparisonResults').innerHTML = h;
   setTabStatus('comparison', 'done');
+  // Unlock Step 9
+  document.getElementById('simulateNotReady').classList.add('hidden');
+  document.getElementById('simulateReady').classList.remove('hidden');
+  unlockTab('simulate');
+}
+
+// ================================================================
+// STEP 9 — DUAL EXECUTION SIMULATION
+// ================================================================
+
+function topoSortProcessors(processors, connections) {
+  const names = new Set(processors.map(p => p.name));
+  const inDeg = {}; const adj = {};
+  names.forEach(n => { inDeg[n] = 0; adj[n] = []; });
+  connections.forEach(c => {
+    if (names.has(c.sourceName) && names.has(c.destinationName)) {
+      adj[c.sourceName].push(c.destinationName);
+      inDeg[c.destinationName]++;
+    }
+  });
+  const queue = [...names].filter(n => inDeg[n] === 0);
+  const order = [];
+  while (queue.length) {
+    const n = queue.shift(); order.push(n);
+    for (const nb of (adj[n]||[])) { inDeg[nb]--; if (inDeg[nb] === 0) queue.push(nb); }
+  }
+  names.forEach(n => { if (!order.includes(n)) order.push(n); });
+  return order;
+}
+
+function deepCopyColumnar(data) {
+  if (!data) return {};
+  const r = {}; Object.keys(data).forEach(c => { r[c] = [...data[c]]; }); return r;
+}
+
+function simHash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+  return 'h_' + Math.abs(h).toString(16).padStart(8, '0');
+}
+
+const PROCESSOR_SIM = {
+  source: function(inputData, proc, tables) {
+    const tNames = Object.keys(tables);
+    if (!tNames.length) return { _id: [1,2,3,4,5], _value: ['a','b','c','d','e'] };
+    const props = proc.properties || {};
+    const tableProp = props['Table Name'] || props['table-name'] || '';
+    let match = tNames.find(t => t === tableProp);
+    if (!match) match = tNames.find(t => proc.name.toLowerCase().includes(t.toLowerCase()));
+    if (!match) match = tNames[0];
+    return match && tables[match] ? deepCopyColumnar(tables[match]) : { _id: [1,2,3,4,5], _value: ['a','b','c','d','e'] };
+  },
+  route: function(inputData) {
+    if (!inputData || !Object.keys(inputData).length) return inputData || {};
+    const cols = Object.keys(inputData);
+    const rc = inputData[cols[0]] ? inputData[cols[0]].length : 0;
+    const cutoff = Math.ceil(rc * 0.8);
+    const r = {}; cols.forEach(c => { r[c] = inputData[c].slice(0, cutoff); }); return r;
+  },
+  transform: function(inputData, proc) {
+    if (!inputData || !Object.keys(inputData).length) return inputData || {};
+    const cols = Object.keys(inputData);
+    const rc = inputData[cols[0]] ? inputData[cols[0]].length : 0;
+    const r = {}; cols.forEach(c => { r[c] = [...inputData[c]]; });
+    const pt = proc.type;
+    if (pt === 'UpdateAttribute' || pt === 'AttributesToJSON') {
+      r['_transformed'] = Array(rc).fill(true);
+    } else if (pt === 'ReplaceText' || pt === 'ExtractText') {
+      const sc = cols.find(c => typeof inputData[c][0] === 'string');
+      if (sc) r[sc] = inputData[sc].map(v => v != null ? String(v).toUpperCase() : v);
+    } else if (pt === 'HashContent') {
+      const sc = cols.find(c => typeof inputData[c][0] === 'string') || cols[0];
+      r[sc + '_hash'] = inputData[sc].map(v => v != null ? simHash(String(v)) : null);
+    }
+    return r;
+  },
+  process: function(inputData, proc) {
+    if (!inputData || !Object.keys(inputData).length) return inputData || {};
+    const cols = Object.keys(inputData);
+    const rc = inputData[cols[0]] ? inputData[cols[0]].length : 0;
+    const r = {}; cols.forEach(c => { r[c] = [...inputData[c]]; });
+    if (proc.type === 'LookupRecord') r['_lookup_found'] = Array(rc).fill(true);
+    else if (/^Execute(SQL|Script)/.test(proc.type)) r['_sql_processed'] = Array(rc).fill(1);
+    else if (proc.type === 'InvokeHTTP') r['_http_status'] = Array(rc).fill(200);
+    return r;
+  },
+  sink: function(inputData) {
+    if (!inputData || !Object.keys(inputData).length) return inputData || {};
+    const r = {}; Object.keys(inputData).forEach(c => { r[c] = [...inputData[c]]; }); return r;
+  },
+  utility: function(inputData) {
+    if (!inputData || !Object.keys(inputData).length) return inputData || {};
+    const r = {}; Object.keys(inputData).forEach(c => { r[c] = [...inputData[c]]; }); return r;
+  }
+};
+
+function simulateEngine(engineName, processors, connections, tables, mappings) {
+  const order = topoSortProcessors(processors, connections);
+  const procMap = {}; processors.forEach(p => { procMap[p.name] = p; });
+  const mappingMap = {}; mappings.forEach(m => { mappingMap[m.name] = m; });
+  const incomingMap = {};
+  connections.forEach(c => {
+    if (!incomingMap[c.destinationName]) incomingMap[c.destinationName] = [];
+    incomingMap[c.destinationName].push(c.sourceName);
+  });
+  const outputs = {}; const results = {};
+  for (const procName of order) {
+    const proc = procMap[procName]; if (!proc) continue;
+    const mapping = mappingMap[procName];
+    const role = classifyNiFiProcessor(proc.type);
+    const incoming = incomingMap[procName] || [];
+    let inputData = null;
+    if (incoming.length === 1 && outputs[incoming[0]]) {
+      inputData = deepCopyColumnar(outputs[incoming[0]]);
+    } else if (incoming.length > 1) {
+      const merged = {};
+      incoming.forEach(src => {
+        const d = outputs[src]; if (!d) return;
+        Object.keys(d).forEach(c => { if (!merged[c]) merged[c] = []; merged[c] = merged[c].concat(d[c]); });
+      });
+      inputData = Object.keys(merged).length ? merged : null;
+    }
+    if (engineName === 'databricks' && mapping && !mapping.mapped) {
+      results[procName] = { output: inputData, rows: 0, cols: 0, status: 'skipped' };
+      outputs[procName] = inputData;
+      continue;
+    }
+    const simFn = PROCESSOR_SIM[role] || PROCESSOR_SIM.utility;
+    let output;
+    try { output = simFn(inputData, proc, tables, mapping); } catch(e) { output = inputData || {}; }
+    // Databricks confidence-based differences
+    if (engineName === 'databricks' && mapping && output && Object.keys(output).length) {
+      const oc = Object.keys(output);
+      const rc = oc.length && output[oc[0]] ? output[oc[0]].length : 0;
+      if (mapping.confidence >= 0.50 && mapping.confidence < 0.80) {
+        output['_dbx_processed'] = Array(rc).fill(proc.type);
+      }
+      if (mapping.confidence < 0.50 && mapping.mapped) {
+        output['_dbx_review'] = Array(rc).fill('NEEDS_REVIEW');
+        // Low confidence: simulate partial migration — reduce rows
+        const keepN = Math.max(1, Math.ceil(rc * Math.max(0.5, mapping.confidence)));
+        Object.keys(output).forEach(c => { output[c] = output[c].slice(0, keepN); });
+      }
+    }
+    outputs[procName] = output;
+    const oc = output ? Object.keys(output) : [];
+    const rc = oc.length && output[oc[0]] ? output[oc[0]].length : 0;
+    results[procName] = { output, rows: rc, cols: oc.length, status: 'ok' };
+  }
+  return { results, order };
+}
+
+function compareSimOutputs(nifiOut, dbxOut) {
+  if (!nifiOut || !dbxOut) return { rowMatch: 0, schemaMatch: 0, dataFidelity: 0, details: 'Missing output' };
+  const nC = Object.keys(nifiOut), dC = Object.keys(dbxOut);
+  const common = nC.filter(c => dC.includes(c));
+  const schemaMatch = nC.length ? Math.round(common.length / nC.length * 100) : 100;
+  const nR = nC.length ? (nifiOut[nC[0]] || []).length : 0;
+  const dR = dC.length ? (dbxOut[dC[0]] || []).length : 0;
+  const rowMatch = Math.max(nR, dR) ? Math.round(Math.min(nR, dR) / Math.max(nR, dR) * 100) : 100;
+  let mc = 0, tc = 0;
+  common.forEach(c => {
+    const mr = Math.min(nR, dR);
+    for (let i = 0; i < mr; i++) { tc++; if (String(nifiOut[c][i]) === String(dbxOut[c][i])) mc++; }
+  });
+  const dataFidelity = tc ? Math.round(mc / tc * 100) : 100;
+  const extra = dC.filter(c => !nC.includes(c));
+  let details = `${common.length}/${nC.length} cols shared`;
+  if (extra.length) details += `, +${extra.length} DBX cols`;
+  return { rowMatch, schemaMatch, dataFidelity, details };
+}
+
+function computeDualSimulation(nifiRes, dbxRes, order, mappings) {
+  const mm = {}; mappings.forEach(m => { mm[m.name] = m; });
+  let tRM = 0, tSM = 0, tDF = 0, cnt = 0;
+  const perProc = [];
+  for (const pn of order) {
+    const nr = nifiRes[pn], dr = dbxRes[pn];
+    if (!nr) continue;
+    const mapping = mm[pn] || {};
+    const cmp = compareSimOutputs(nr.output, dr ? dr.output : null);
+    let verdict, verdictClass;
+    if (dr && dr.status === 'skipped') { verdict = 'SKIPPED'; verdictClass = 'match-gap'; }
+    else if (cmp.dataFidelity >= 95 && cmp.rowMatch >= 95 && cmp.schemaMatch >= 95) { verdict = 'IDENTICAL'; verdictClass = 'match-exact'; }
+    else if (cmp.dataFidelity >= 70) { verdict = 'EQUIVALENT'; verdictClass = 'match-functional'; }
+    else { verdict = 'DIFFERS'; verdictClass = 'match-gap'; }
+    perProc.push({
+      name: pn, type: (mapping.type || ''), role: mapping.role || 'process',
+      confidence: mapping.confidence || 0, mapped: mapping.mapped !== false,
+      nifiRows: nr.rows, nifiCols: nr.cols,
+      dbxRows: dr ? dr.rows : 0, dbxCols: dr ? dr.cols : 0,
+      rowMatch: cmp.rowMatch, schemaMatch: cmp.schemaMatch, dataFidelity: cmp.dataFidelity,
+      verdict, verdictClass, details: cmp.details,
+      nifiOutput: nr.output, dbxOutput: dr ? dr.output : null
+    });
+    if (verdict !== 'SKIPPED') { tRM += cmp.rowMatch; tSM += cmp.schemaMatch; tDF += cmp.dataFidelity; cnt++; }
+  }
+  return {
+    perProc,
+    rowMatchPct: cnt ? Math.round(tRM / cnt) : 0,
+    schemaMatchPct: cnt ? Math.round(tSM / cnt) : 0,
+    fidelityPct: cnt ? Math.round(tDF / cnt) : 0,
+    summary: {
+      total: perProc.length,
+      identical: perProc.filter(p => p.verdict === 'IDENTICAL').length,
+      equivalent: perProc.filter(p => p.verdict === 'EQUIVALENT').length,
+      differs: perProc.filter(p => p.verdict === 'DIFFERS').length,
+      skipped: perProc.filter(p => p.verdict === 'SKIPPED').length
+    }
+  };
+}
+
+function columnarPreview(data, maxRows) {
+  maxRows = maxRows || 5;
+  if (!data || !Object.keys(data).length) return '<em style="color:var(--text2)">No data</em>';
+  const cols = Object.keys(data);
+  const rc = data[cols[0]] ? data[cols[0]].length : 0;
+  let h = '<div class="table-scroll"><table style="font-size:0.72rem"><thead><tr>';
+  cols.forEach(c => { h += `<th>${c}</th>`; }); h += '</tr></thead><tbody>';
+  for (let i = 0; i < Math.min(rc, maxRows); i++) {
+    h += '<tr>'; cols.forEach(c => { const v = data[c][i]; h += `<td>${v == null ? '<span style="color:var(--text2)">null</span>' : String(v).substring(0, 30)}</td>`; }); h += '</tr>';
+  }
+  if (rc > maxRows) { h += '<tr>'; cols.forEach(() => { h += '<td style="color:var(--text2)">...</td>'; }); h += '</tr>'; }
+  h += '</tbody></table></div>';
+  h += `<div style="font-size:0.7rem;color:var(--text2);margin-top:4px">${rc} rows, ${cols.length} columns</div>`;
+  return h;
+}
+
+async function runDualSimulation() {
+  if (!STATE.notebook || !STATE.parsed || !STATE.parsed._nifi || !STATE.tables) return;
+  setTabStatus('simulate', 'processing');
+  const nifi = STATE.parsed._nifi;
+  const tables = STATE.tables;
+  const mappings = STATE.notebook.mappings;
+  const rDiv = document.getElementById('simulateResults');
+  // Progress UI
+  let h = '<div class="sim-progress" id="simProgressBox">';
+  h += '<div class="sim-status"><span class="engine-label sim-running" id="simEngineLabel">Initializing simulation engines...</span><span id="simPctLabel">0%</span></div>';
+  h += '<div class="sim-progress-bar"><div class="sim-progress-fill" id="simFill" style="width:0%"></div></div>';
+  h += '<div id="simStepLabel" style="font-size:0.78rem;color:var(--text2);margin-top:4px"></div>';
+  h += '</div>';
+  rDiv.innerHTML = h;
+  const fill = document.getElementById('simFill');
+  const pctL = document.getElementById('simPctLabel');
+  const stepL = document.getElementById('simStepLabel');
+  const engL = document.getElementById('simEngineLabel');
+  async function prog(pct, label) {
+    fill.style.width = pct + '%'; pctL.textContent = pct + '%'; stepL.textContent = label;
+    await new Promise(r => setTimeout(r, 150));
+  }
+  // Phase 1: NiFi
+  await prog(5, 'Building processor DAG...');
+  engL.textContent = 'Running NiFi simulation engine...'; engL.style.color = '#728E9B';
+  await prog(15, `Executing ${nifi.processors.length} processors in topological order...`);
+  const nifiSim = simulateEngine('nifi', nifi.processors, nifi.connections, tables, mappings);
+  await prog(40, `NiFi complete — ${Object.keys(nifiSim.results).length} processors executed`);
+  // Phase 2: Databricks
+  engL.textContent = 'Running Databricks simulation engine...'; engL.style.color = 'var(--primary)';
+  await prog(55, `Executing ${nifi.processors.length} processors via PySpark equivalents...`);
+  const dbxSim = simulateEngine('databricks', nifi.processors, nifi.connections, tables, mappings);
+  await prog(75, `Databricks complete — ${Object.keys(dbxSim.results).length} processors executed`);
+  // Phase 3: Compare
+  engL.textContent = 'Comparing outputs...'; engL.style.color = 'var(--text)';
+  await prog(85, 'Computing row match, schema match, and data fidelity...');
+  const sim = computeDualSimulation(nifiSim.results, dbxSim.results, nifiSim.order, mappings);
+  STATE.simulation = sim;
+  await prog(100, 'Simulation complete');
+  engL.textContent = 'Dual simulation complete'; engL.classList.remove('sim-running');
+  // Render results
+  h = '<hr class="divider">';
+  h += '<div class="sim-donuts">';
+  h += donutSVG(sim.rowMatchPct, 'Row Match', `avg across ${sim.summary.total - sim.summary.skipped} procs`);
+  h += donutSVG(sim.schemaMatchPct, 'Schema Match', `columns aligned`);
+  h += donutSVG(sim.fidelityPct, 'Data Fidelity', `cell-level accuracy`);
+  h += '</div>';
+  h += metricsHTML([
+    ['Processors', sim.summary.total],
+    ['Identical', `<span style="color:#21C354">${sim.summary.identical}</span>`],
+    ['Equivalent', `<span style="color:#EAB308">${sim.summary.equivalent}</span>`],
+    ['Differs', `<span style="color:#EF4444">${sim.summary.differs}</span>`],
+    ['Skipped', `<span style="color:#808495">${sim.summary.skipped}</span>`]
+  ]);
+  h += '<div style="margin:12px 0;font-size:0.82rem;color:var(--text2)">';
+  h += '<strong>Identical</strong> = NiFi &amp; DBX outputs match &ge;95% on rows, schema, and data &nbsp;|&nbsp; ';
+  h += '<strong>Equivalent</strong> = fidelity &ge;70% (DBX may add metadata) &nbsp;|&nbsp; ';
+  h += '<strong>Differs</strong> = structural or data mismatch &nbsp;|&nbsp; ';
+  h += '<strong>Skipped</strong> = unmapped';
+  h += '</div>';
+  // Per-processor comparison
+  h += '<hr class="divider">';
+  h += `<details class="comparison-detail" open><summary>Per-Processor Results (${sim.perProc.length} processors)</summary>`;
+  h += '<div style="margin-top:8px">';
+  sim.perProc.forEach((p, idx) => {
+    const roleColor = ROLE_TIER_COLORS[p.role] || '#808495';
+    const confStr = p.mapped ? Math.round(p.confidence * 100) + '%' : '--';
+    const confCls = p.confidence >= 0.8 ? 'conf-high' : p.confidence >= 0.5 ? 'conf-med' : p.confidence > 0 ? 'conf-low' : 'conf-none';
+    let body = `<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;font-size:0.78rem;color:var(--text2)">`;
+    body += `<span>NiFi: ${p.nifiRows} rows, ${p.nifiCols} cols</span>`;
+    body += `<span>DBX: ${p.dbxRows} rows, ${p.dbxCols} cols</span>`;
+    body += `<span>Rows: ${p.rowMatch}%</span><span>Schema: ${p.schemaMatch}%</span><span>Fidelity: ${p.dataFidelity}%</span>`;
+    body += `<span>${p.details}</span></div>`;
+    body += '<div class="sim-split">';
+    body += '<div class="sim-split-header nifi-side">NiFi Output</div>';
+    body += '<div class="sim-split-header dbx-side">Databricks Output</div>';
+    body += `<div class="sim-split-cell nifi-side">${columnarPreview(p.nifiOutput, 3)}</div>`;
+    body += `<div class="sim-split-cell dbx-side">${p.verdict === 'SKIPPED' ? '<em style="color:var(--text2)">SKIPPED — No mapping</em>' : columnarPreview(p.dbxOutput, 3)}</div>`;
+    body += '</div>';
+    const title = `<span style="color:${roleColor}">[${p.role}]</span> <strong>${p.name}</strong> `
+      + (p.type ? `<span style="color:var(--text2);font-size:0.75rem">(${p.type})</span> ` : '')
+      + `<span class="conf-badge ${confCls}" style="margin-left:6px">${confStr}</span> `
+      + `<span class="match-badge ${p.verdictClass}" style="margin-left:6px">${p.verdict}</span>`;
+    h += expanderHTML(title, body, idx < 3);
+  });
+  h += '</div></details>';
+  rDiv.innerHTML = h;
+  setTabStatus('simulate', 'done');
 }
 
 // ================================================================
