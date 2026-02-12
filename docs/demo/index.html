@@ -5133,8 +5133,8 @@ function buildFinalReportJSON() {
         status: validation ? 'complete' : 'skipped',
         confidence_score: validation ? validation.confidence_score : null,
         grade: validation ? validation.grade : null,
-        checks_passed: validation ? validation.results.filter(r => r.pass).length : 0,
-        checks_total: validation ? validation.results.length : 0
+        checks_passed: validation && validation.results ? validation.results.filter(r => r.pass).length : 0,
+        checks_total: validation && validation.results ? validation.results.length : 0
       },
       step6_notebook: {
         status: STATE.notebook ? 'complete' : 'skipped',
