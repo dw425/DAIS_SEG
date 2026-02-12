@@ -5146,8 +5146,9 @@ function buildFinalReportJSON() {
       },
       step8_compare: {
         status: comparison ? 'complete' : 'skipped',
-        mapping_coverage: comparison ? comparison.mappingCoverage : null,
-        avg_confidence: comparison ? comparison.avgConfidence : null
+        exact_match_pct: comparison && comparison.exact ? comparison.exact.pct : null,
+        functional_match_pct: comparison && comparison.functional ? comparison.functional.pct : null,
+        actions_converted_pct: comparison && comparison.actions ? comparison.actions.pct : null
       },
       step9_simulate: {
         status: 'complete',
@@ -5224,14 +5225,30 @@ function buildFinalReportJSON() {
   return report;
 }
 
-function generateFinalReport() {
+async function generateFinalReport() {
   if (!STATE.simulation || !STATE.parsed || !STATE.parsed._nifi) return;
   setTabStatus('reportFinal', 'processing');
   const rDiv = document.getElementById('reportFinalResults');
-  rDiv.innerHTML = '<div class="sim-progress"><div class="sim-status"><span class="engine-label sim-running">Generating report...</span></div></div>';
-  setTimeout(() => {
+  // Progress bar UI
+  rDiv.innerHTML = '<div class="sim-progress" id="rptProgressBox">'
+    + '<div class="sim-status"><span class="engine-label sim-running" id="rptEngineLabel">Initializing report...</span><span id="rptPctLabel">0%</span></div>'
+    + '<div class="sim-progress-bar"><div class="sim-progress-fill" id="rptFill" style="width:0%"></div></div>'
+    + '<div id="rptStepLabel" style="font-size:0.78rem;color:var(--text2);margin-top:4px"></div>'
+    + '</div>';
+  const fill = document.getElementById('rptFill');
+  const pctL = document.getElementById('rptPctLabel');
+  const stepL = document.getElementById('rptStepLabel');
+  const engL = document.getElementById('rptEngineLabel');
+  async function prog(pct, label) {
+    fill.style.width = pct + '%'; pctL.textContent = pct + '%'; stepL.textContent = label;
+    if (engL.textContent === 'Initializing report...') engL.textContent = 'Generating final report...';
+    await new Promise(r => setTimeout(r, 60));
+  }
+  try {
+    await prog(5, 'Collecting pipeline metadata...');
     const report = buildFinalReportJSON();
     STATE.finalReport = report;
+    await prog(20, 'Building summary donuts...');
     const sim = STATE.simulation;
     const gaps = report.gaps;
     const recs = report.recommendations;
@@ -5244,6 +5261,7 @@ function generateFinalReport() {
     const mappedPct = sim.summary.total ? Math.round((sim.summary.total - sim.summary.skipped) / sim.summary.total * 100) : 0;
     h += donutSVG(mappedPct, 'Mapped', `${sim.summary.total - sim.summary.skipped}/${sim.summary.total}`);
     h += '</div>';
+    await prog(30, 'Rendering pipeline metrics...');
     // Pipeline summary
     h += metricsHTML([
       ['Processors', report.input.total_processors],
@@ -5252,6 +5270,7 @@ function generateFinalReport() {
       ['Steps', '10/10'],
       ['Verdict', sim.fidelityPct >= 90 ? '<span style="color:#21C354">PASS</span>' : sim.fidelityPct >= 70 ? '<span style="color:#EAB308">REVIEW</span>' : '<span style="color:#EF4444">FAIL</span>']
     ]);
+    await prog(40, 'Generating recommendations...');
     // Recommendations
     if (recs.length) {
       h += '<hr class="divider">';
@@ -5265,6 +5284,7 @@ function generateFinalReport() {
         h += '</div>';
       });
     }
+    await prog(55, 'Analyzing gaps...');
     // Gap Analysis
     h += '<hr class="divider">';
     h += '<h3 style="margin:12px 0 8px">Gap Analysis</h3>';
@@ -5274,7 +5294,6 @@ function generateFinalReport() {
       ['Data Mismatches', `<span style="color:${gaps.data_mismatches.length ? '#EF4444':'#21C354'}">${gaps.data_mismatches.length}</span>`],
       ['Zero Data', `<span style="color:${gaps.zero_data_processors.length ? '#808495':'#21C354'}">${gaps.zero_data_processors.length}</span>`]
     ]);
-    // Unmapped detail
     if (gaps.unmapped_processors.length) {
       h += expanderHTML(`Unmapped Processors (${gaps.unmapped_processors.length})`,
         '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Name</th><th>Type</th><th>Group</th><th>Role</th></tr></thead><tbody>'
@@ -5287,6 +5306,7 @@ function generateFinalReport() {
         + gaps.data_mismatches.map(p => `<tr><td>${p.name}</td><td>${p.type}</td><td>${p.group}</td><td>${Math.round(p.confidence*100)}%</td><td>${p.row_match}%</td><td>${p.schema_match}%</td><td>${p.data_fidelity}%</td><td style="font-size:0.72rem">${p.details}</td></tr>`).join('')
         + '</tbody></table></div>', false);
     }
+    await prog(70, 'Compiling error log...');
     // Errors
     const totalErrors = (report.errors.nifi_engine.length + report.errors.dbx_engine.length);
     if (totalErrors) {
@@ -5297,6 +5317,7 @@ function generateFinalReport() {
         + report.errors.dbx_engine.map(e => `<div style="margin:2px 0;color:var(--primary)">[DBX] #${e.processor_index} ${e.name}: ${e.error}</div>`).join('')
         + '</div>', false);
     }
+    await prog(80, 'Building processor type coverage...');
     // Processor type coverage
     h += '<hr class="divider">';
     const typeDist = report.input.processor_type_distribution;
@@ -5307,6 +5328,7 @@ function generateFinalReport() {
         return `<tr><td>${t.type}</td><td>${t.count}</td><td>${t.role}</td><td style="color:${hasMapped?'#21C354':'#EF4444'}">${hasMapped?'Yes':'No'}</td></tr>`;
       }).join('')
       + '</tbody></table></div>', false);
+    await prog(90, 'Building process group summary...');
     // Per-group summary
     h += expanderHTML(`Process Group Summary (${report.input.process_groups.length} groups)`,
       '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Group</th><th>Parent</th><th>Processors</th><th>Identical</th><th>Equiv</th><th>Differs</th><th>Skipped</th></tr></thead><tbody>'
@@ -5319,6 +5341,7 @@ function generateFinalReport() {
           + `<td style="color:#808495">${gProcs.filter(p=>p.verdict==='SKIPPED').length}</td></tr>`;
       }).join('')
       + '</tbody></table></div>', false);
+    await prog(95, 'Preparing downloads...');
     // Download buttons
     h += '<hr class="divider">';
     h += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin:16px 0">';
@@ -5327,9 +5350,15 @@ function generateFinalReport() {
     h += '<button class="btn" onclick="downloadFinalReport(\'gaps\')">Download Gap Analysis (JSON)</button>';
     h += '</div>';
     h += '<div style="font-size:0.75rem;color:var(--text2);margin-top:4px">Full report includes all per-processor simulation data for external analysis</div>';
+    await prog(100, 'Report complete');
+    engL.textContent = 'Final report generated'; engL.classList.remove('sim-running');
+    await new Promise(r => setTimeout(r, 300));
     rDiv.innerHTML = h;
     setTabStatus('reportFinal', 'done');
-  }, 200);
+  } catch(e) {
+    rDiv.innerHTML = '<div class="alert" style="border-left:3px solid #EF4444;padding:12px;margin:12px 0"><strong>Report generation error:</strong> ' + e.message + '<br><pre style="font-size:0.72rem;margin-top:8px;white-space:pre-wrap">' + (e.stack || '') + '</pre></div>';
+    setTabStatus('reportFinal', 'ready');
+  }
 }
 
 function downloadFinalReport(type) {
