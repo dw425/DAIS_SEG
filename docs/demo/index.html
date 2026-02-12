@@ -268,6 +268,13 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 @keyframes simPulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 .sim-running { animation:simPulse 1s ease-in-out infinite; }
 /* VirtualEnv */
+.sample-card { display:flex; gap:10px; align-items:center; padding:10px 14px; border:1px solid var(--border); border-radius:8px; cursor:pointer; transition:all 0.15s; background:var(--bg1); }
+.sample-card:hover { border-color:var(--accent); background:rgba(255,107,53,0.05); transform:translateY(-1px); box-shadow:0 2px 8px rgba(0,0,0,0.1); }
+.sample-icon { font-size:1.5rem; flex-shrink:0; width:32px; text-align:center; }
+.sample-info { display:flex; flex-direction:column; gap:1px; min-width:0; }
+.sample-info strong { font-size:0.85rem; color:var(--text1); }
+.sample-info span { font-size:0.75rem; color:var(--text2); }
+.sample-tags { font-size:0.7rem !important; color:var(--accent) !important; opacity:0.8; }
 .venv-tree { font-family:var(--mono); font-size:0.82rem; line-height:1.7; padding:8px 0; }
 .venv-tree .dir { color:var(--text2); font-weight:600; }
 .venv-tree .file { color:var(--accent); }
@@ -358,10 +365,44 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
     </div>
     <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-primary" onclick="parseInput()">Parse Input</button>
-      <span style="color:var(--text2);font-size:0.82rem;margin:0 4px">or try a sample:</span>
-      <button class="btn btn-secondary" onclick="loadSampleFlow('etl')" style="font-size:0.82rem">ETL Pipeline</button>
-      <button class="btn btn-secondary" onclick="loadSampleFlow('streaming')" style="font-size:0.82rem">Streaming Flow</button>
-      <button class="btn btn-secondary" onclick="loadSampleFlow('full')" style="font-size:0.82rem">Full Migration</button>
+    </div>
+    <div style="margin-top:20px;border:1px solid var(--border);border-radius:12px;padding:16px;background:var(--bg2)">
+      <h3 style="margin:0 0 4px 0;font-size:0.95rem">Sample Files — Click to Load &amp; Run</h3>
+      <p style="color:var(--text2);font-size:0.8rem;margin:0 0 12px 0">Pre-built samples that demonstrate the full pipeline. Each one auto-parses and runs all steps.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px">
+        <div class="sample-card" onclick="loadSampleFlow('etl')">
+          <div class="sample-icon">&#128640;</div>
+          <div class="sample-info"><strong>ETL Pipeline</strong><span>NiFi XML &bull; 9 processors</span><span class="sample-tags">GetFile, SQL, Route, PutFile</span></div>
+        </div>
+        <div class="sample-card" onclick="loadSampleFlow('streaming')">
+          <div class="sample-icon">&#9889;</div>
+          <div class="sample-info"><strong>Streaming IoT</strong><span>NiFi XML &bull; 10 processors</span><span class="sample-tags">Kafka, JSON, Merge, HDFS</span></div>
+        </div>
+        <div class="sample-card" onclick="loadSampleFlow('full')">
+          <div class="sample-icon">&#127981;</div>
+          <div class="sample-info"><strong>Manufacturing Migration</strong><span>NiFi XML &bull; 17 processors</span><span class="sample-tags">ListFile, SFTP, Wait/Notify, SQL</span></div>
+        </div>
+        <div class="sample-card" onclick="loadSampleFile('samples/ecommerce_schema.sql','ecommerce_schema.sql')">
+          <div class="sample-icon">&#128722;</div>
+          <div class="sample-info"><strong>E-Commerce Warehouse</strong><span>SQL DDL &bull; 8 tables</span><span class="sample-tags">PostgreSQL, FKs, constraints</span></div>
+        </div>
+        <div class="sample-card" onclick="loadSampleFile('samples/healthcare_warehouse.sql','healthcare_warehouse.sql')">
+          <div class="sample-icon">&#127973;</div>
+          <div class="sample-info"><strong>Healthcare Analytics</strong><span>Oracle DDL &bull; 7 tables</span><span class="sample-tags">Oracle, HL7, lab results</span></div>
+        </div>
+        <div class="sample-card" onclick="loadSampleFile('samples/financial_dbt.yml','financial_dbt.yml')">
+          <div class="sample-icon">&#128176;</div>
+          <div class="sample-info"><strong>Financial Services</strong><span>dbt YAML &bull; 5 models</span><span class="sample-tags">AML, risk events, balances</span></div>
+        </div>
+        <div class="sample-card" onclick="loadSampleFile('samples/supply_chain_pyspark.py','supply_chain_pyspark.py')">
+          <div class="sample-icon">&#128666;</div>
+          <div class="sample-info"><strong>Supply Chain</strong><span>PySpark &bull; 8 schemas</span><span class="sample-tags">StructType, inventory, shipments</span></div>
+        </div>
+        <div class="sample-card" onclick="loadSampleFile('samples/telco_informatica.csv','telco_informatica.csv')">
+          <div class="sample-icon">&#128225;</div>
+          <div class="sample-info"><strong>Telecom Network</strong><span>CSV Metadata &bull; 6 tables</span><span class="sample-tags">Informatica-style, CDR, towers</span></div>
+        </div>
+      </div>
     </div>
     <div id="parseResults"></div>
   </div>
@@ -839,8 +880,27 @@ function loadSampleFlow(flowType) {
   document.getElementById('fileName').textContent = 'Sample: ' + (labels[flowType] || flowType);
   document.getElementById('fileName').classList.remove('hidden');
   document.getElementById('pasteInput').value = '';
-  // Auto-parse
   parseInput();
+}
+
+async function loadSampleFile(path, filename) {
+  const el = document.getElementById('fileName');
+  el.textContent = 'Loading: ' + filename + '...';
+  el.classList.remove('hidden');
+  try {
+    const resp = await fetch(path);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const text = await resp.text();
+    uploadedContent = text;
+    uploadedName = filename;
+    el.textContent = 'Sample: ' + filename;
+    document.getElementById('pasteInput').value = '';
+    parseInput();
+  } catch(e) {
+    el.textContent = 'Failed to load ' + filename + ' — ' + e.message;
+    el.style.color = 'var(--red)';
+    setTimeout(() => { el.style.color = ''; }, 3000);
+  }
 }
 
 // ================================================================

@@ -1,0 +1,61 @@
+TABLE_NAME,COLUMN_NAME,DATA_TYPE,NULLABLE,IS_PK,FK_TABLE,FK_COLUMN,DESCRIPTION
+subscribers,subscriber_id,BIGINT,N,Y,,,Unique subscriber identifier
+subscribers,msisdn,VARCHAR(15),N,,,,Mobile number (E.164 format)
+subscribers,imsi,VARCHAR(15),N,,,,International mobile subscriber identity
+subscribers,first_name,VARCHAR(100),N,,,,First name
+subscribers,last_name,VARCHAR(100),N,,,,Last name
+subscribers,email,VARCHAR(200),Y,,,,Email address
+subscribers,plan_id,BIGINT,N,,plans,plan_id,Current rate plan
+subscribers,activation_date,DATE,N,,,,Service activation date
+subscribers,status,VARCHAR(20),N,,,,Account status (active/suspended/terminated)
+subscribers,credit_class,VARCHAR(5),Y,,,,Credit classification
+subscribers,preferred_language,VARCHAR(10),Y,,,,ISO 639-1 language code
+subscribers,sim_type,VARCHAR(10),Y,,,,eSIM or physical SIM
+plans,plan_id,BIGINT,N,Y,,,Rate plan identifier
+plans,plan_name,VARCHAR(100),N,,,,Marketing plan name
+plans,plan_type,VARCHAR(30),N,,,,prepaid/postpaid/hybrid
+plans,monthly_fee,DECIMAL(8.2),N,,,,Monthly recurring charge
+plans,data_limit_gb,DECIMAL(8.2),Y,,,,Data allowance in GB (NULL = unlimited)
+plans,voice_minutes,INT,Y,,,,Voice minutes (NULL = unlimited)
+plans,sms_limit,INT,Y,,,,SMS messages (NULL = unlimited)
+plans,contract_months,INT,Y,,,,Minimum contract length
+plans,is_active,BOOLEAN,N,,,,Currently offered to new subscribers
+usage_records,record_id,BIGINT,N,Y,,,Usage record identifier
+usage_records,subscriber_id,BIGINT,N,,subscribers,subscriber_id,Subscriber reference
+usage_records,usage_date,TIMESTAMP,N,,,,Event timestamp
+usage_records,usage_type,VARCHAR(20),N,,,,data/voice/sms/mms/roaming
+usage_records,duration_seconds,INT,Y,,,,Call duration
+usage_records,data_bytes,BIGINT,Y,,,,Data volume in bytes
+usage_records,originating_number,VARCHAR(15),Y,,,,Calling party number
+usage_records,terminating_number,VARCHAR(15),Y,,,,Called party number
+usage_records,cell_tower_id,VARCHAR(20),Y,,,,Serving cell tower
+usage_records,roaming_country,VARCHAR(3),Y,,,,ISO country code if roaming
+usage_records,charge_amount,DECIMAL(10.4),Y,,,,Rated charge amount
+billing_records,bill_id,BIGINT,N,Y,,,Billing record identifier
+billing_records,subscriber_id,BIGINT,N,,subscribers,subscriber_id,Subscriber reference
+billing_records,billing_period_start,DATE,N,,,,Billing cycle start
+billing_records,billing_period_end,DATE,N,,,,Billing cycle end
+billing_records,plan_charges,DECIMAL(10.2),N,,,,Monthly plan fee
+billing_records,usage_charges,DECIMAL(10.2),N,,,,Overage and usage charges
+billing_records,taxes,DECIMAL(10.2),N,,,,Tax amount
+billing_records,total_amount,DECIMAL(10.2),N,,,,Total bill amount
+billing_records,payment_status,VARCHAR(20),N,,,,paid/unpaid/partial/overdue
+billing_records,payment_date,DATE,Y,,,,Date payment received
+billing_records,payment_method,VARCHAR(30),Y,,,,auto_pay/credit_card/bank_transfer
+network_events,event_id,BIGINT,N,Y,,,Network event identifier
+network_events,cell_tower_id,VARCHAR(20),N,,cell_towers,tower_id,Cell tower reference
+network_events,event_time,TIMESTAMP,N,,,,Event timestamp
+network_events,event_type,VARCHAR(30),N,,,,handover/drop/attach/detach/congestion
+network_events,severity,VARCHAR(10),Y,,,,info/warning/critical
+network_events,affected_subscribers,INT,Y,,,,Number of impacted users
+network_events,duration_minutes,INT,Y,,,,Event duration
+network_events,resolution,VARCHAR(200),Y,,,,Resolution description
+cell_towers,tower_id,VARCHAR(20),N,Y,,,Cell tower identifier
+cell_towers,tower_name,VARCHAR(100),N,,,,Tower site name
+cell_towers,latitude,DECIMAL(10.7),N,,,,GPS latitude
+cell_towers,longitude,DECIMAL(11.7),N,,,,GPS longitude
+cell_towers,technology,VARCHAR(10),N,,,,4G/5G/5G-SA
+cell_towers,sector_count,INT,N,,,,Number of sectors
+cell_towers,max_capacity,INT,Y,,,,Maximum concurrent connections
+cell_towers,region,VARCHAR(50),Y,,,,Geographic region
+cell_towers,status,VARCHAR(20),N,,,,operational/maintenance/offline

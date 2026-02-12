@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<flowController encoding-version="1.4">
+  <rootGroup><name>Streaming_IoT_Pipeline</name>
+    <processGroup><name>IoT Ingestion</name>
+      <processor><id>s1</id><name>Consume Kafka Events</name><class>org.apache.nifi.processors.kafka.pubsub.ConsumeKafka_2_6</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>100 ms</schedulingPeriod><state>RUNNING</state>
+        <property><name>Kafka Brokers</name><value>kafka-broker-1:9092,kafka-broker-2:9092</value></property>
+        <property><name>Topic Name(s)</name><value>iot.sensor.readings</value></property>
+        <property><name>Group ID</name><value>nifi-iot-consumer</value></property>
+      </processor>
+      <processor><id>s2</id><name>Parse JSON Payload</name><class>org.apache.nifi.processors.standard.EvaluateJsonPath</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+        <property><name>Destination</name><value>flowfile-attribute</value></property>
+        <property><name>sensor_id</name><value>$.sensor_id</value></property>
+        <property><name>temperature</name><value>$.readings.temperature</value></property>
+        <property><name>humidity</name><value>$.readings.humidity</value></property>
+        <property><name>timestamp</name><value>$.event_time</value></property>
+      </processor>
+      <processor><id>s3</id><name>Route by Threshold</name><class>org.apache.nifi.processors.standard.RouteOnAttribute</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+        <property><name>Routing Strategy</name><value>Route to Property name</value></property>
+        <property><name>alert</name><value>${temperature:gt(100):or(${humidity:gt(95)})}</value></property>
+        <property><name>normal</name><value>${temperature:le(100):and(${humidity:le(95)})}</value></property>
+      </processor>
+      <connection><id>sc1</id><source><id>s1</id><type>PROCESSOR</type></source><destination><id>s2</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+      <connection><id>sc2</id><source><id>s2</id><type>PROCESSOR</type></source><destination><id>s3</id><type>PROCESSOR</type></destination><relationship>matched</relationship></connection>
+    </processGroup>
+    <processGroup><name>Alert Processing</name>
+      <processor><id>s4</id><name>Enrich Alert Data</name><class>org.apache.nifi.processors.standard.LookupAttribute</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+        <property><name>Lookup Service</name><value>DeviceRegistry</value></property>
+        <property><name>device.name</name><value>${sensor_id}</value></property>
+      </processor>
+      <processor><id>s5</id><name>Format Alert Notification</name><class>org.apache.nifi.processors.standard.ReplaceText</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+        <property><name>Replacement Value</name><value>{"alert":"THRESHOLD_EXCEEDED","sensor":"${sensor_id}","temp":"${temperature}","humidity":"${humidity}","device":"${device.name}","time":"${timestamp}"}</value></property>
+        <property><name>Replacement Strategy</name><value>Always Replace</value></property>
+      </processor>
+      <processor><id>s6</id><name>Send Alert to API</name><class>org.apache.nifi.processors.standard.InvokeHTTP</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+        <property><name>Remote URL</name><value>https://alerts.example.com/api/v2/notify</value></property>
+        <property><name>HTTP Method</name><value>POST</value></property>
+        <property><name>Content-Type</name><value>application/json</value></property>
+      </processor>
+      <connection><id>sc3</id><source><id>s4</id><type>PROCESSOR</type></source><destination><id>s5</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+      <connection><id>sc4</id><source><id>s5</id><type>PROCESSOR</type></source><destination><id>s6</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+    </processGroup>
+    <processGroup><name>Data Storage</name>
+      <processor><id>s7</id><name>Batch Readings</name><class>org.apache.nifi.processors.standard.MergeContent</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+        <property><name>Merge Strategy</name><value>Bin-Packing Algorithm</value></property>
+        <property><name>Minimum Number of Entries</name><value>100</value></property>
+        <property><name>Maximum Number of Entries</name><value>1000</value></property>
+        <property><name>Max Bin Age</name><value>30 sec</value></property>
+      </processor>
+      <processor><id>s8</id><name>Convert to Parquet</name><class>org.apache.nifi.processors.standard.ConvertRecord</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+        <property><name>Record Reader</name><value>JsonTreeReader</value></property>
+        <property><name>Record Writer</name><value>ParquetRecordSetWriter</value></property>
+      </processor>
+      <processor><id>s9</id><name>Write to Delta Lake</name><class>org.apache.nifi.processors.standard.PutHDFS</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+        <property><name>Directory</name><value>/data/iot/sensor_readings/${now():format('yyyy/MM/dd')}</value></property>
+        <property><name>Conflict Resolution Strategy</name><value>replace</value></property>
+      </processor>
+      <processor><id>s10</id><name>Insert to Timeseries DB</name><class>org.apache.nifi.processors.standard.PutDatabaseRecord</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+        <property><name>Database Connection Pooling Service</name><value>TimeseriesDBCP</value></property>
+        <property><name>Table Name</name><value>iot.sensor_readings</value></property>
+        <property><name>Statement Type</name><value>INSERT</value></property>
+      </processor>
+      <connection><id>sc5</id><source><id>s7</id><type>PROCESSOR</type></source><destination><id>s8</id><type>PROCESSOR</type></destination><relationship>merged</relationship></connection>
+      <connection><id>sc6</id><source><id>s8</id><type>PROCESSOR</type></source><destination><id>s9</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+      <connection><id>sc7</id><source><id>s8</id><type>PROCESSOR</type></source><destination><id>s10</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+    </processGroup>
+    <connection><id>sc_g1</id><source><id>s3</id><type>PROCESSOR</type></source><destination><id>s4</id><type>PROCESSOR</type></destination><relationship>alert</relationship></connection>
+    <connection><id>sc_g2</id><source><id>s3</id><type>PROCESSOR</type></source><destination><id>s7</id><type>PROCESSOR</type></destination><relationship>normal</relationship></connection>
+    <connection><id>sc_g3</id><source><id>s3</id><type>PROCESSOR</type></source><destination><id>s7</id><type>PROCESSOR</type></destination><relationship>alert</relationship></connection>
+  </rootGroup>
+</flowController>

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<flowController encoding-version="1.4">
+  <rootGroup><name>ETL_Demo_Pipeline</name>
+    <processor><id>p1</id><name>Read Source CSV</name><class>org.apache.nifi.processors.standard.GetFile</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>5 min</schedulingPeriod><state>RUNNING</state>
+      <property><name>Input Directory</name><value>/data/input/sales</value></property>
+      <property><name>File Filter</name><value>[^\.].*\.csv</value></property>
+      <autoTerminatedRelationship>failure</autoTerminatedRelationship>
+    </processor>
+    <processor><id>p2</id><name>Validate Schema</name><class>org.apache.nifi.processors.standard.ValidateRecord</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+      <property><name>Record Reader</name><value>CSVReader</value></property>
+      <property><name>Record Writer</name><value>CSVWriter</value></property>
+    </processor>
+    <processor><id>p3</id><name>Route by Region</name><class>org.apache.nifi.processors.standard.RouteOnAttribute</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+      <property><name>Routing Strategy</name><value>Route to Property name</value></property>
+      <property><name>us_east</name><value>${region:equals("US-East")}</value></property>
+      <property><name>us_west</name><value>${region:equals("US-West")}</value></property>
+      <property><name>europe</name><value>${region:equals("EU")}</value></property>
+    </processor>
+    <processor><id>p4</id><name>Transform Sales Data</name><class>org.apache.nifi.processors.standard.ReplaceText</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+      <property><name>Search Value</name><value>"amount":"(\d+)"</value></property>
+      <property><name>Replacement Value</name><value>"amount_cents":"${1}00"</value></property>
+      <property><name>Replacement Strategy</name><value>Regex Replace</value></property>
+    </processor>
+    <processor><id>p5</id><name>Query Sales Summary</name><class>org.apache.nifi.processors.standard.ExecuteSQL</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+      <property><name>Database Connection Pooling Service</name><value>DBCPService</value></property>
+      <property><name>SQL select query</name><value>SELECT region, product, SUM(amount) as total, COUNT(*) as cnt FROM sales.transactions WHERE trade_date >= CURRENT_DATE - 7 GROUP BY region, product</value></property>
+    </processor>
+    <processor><id>p6</id><name>Update Attributes</name><class>org.apache.nifi.processors.standard.UpdateAttribute</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+      <property><name>output.filename</name><value>${filename:substringBefore('.')}_processed_${now():format('yyyyMMdd')}.csv</value></property>
+      <property><name>batch.id</name><value>${UUID()}</value></property>
+    </processor>
+    <processor><id>p7</id><name>Write to Data Lake</name><class>org.apache.nifi.processors.standard.PutFile</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+      <property><name>Directory</name><value>/data/output/processed_sales</value></property>
+      <property><name>Conflict Resolution Strategy</name><value>replace</value></property>
+    </processor>
+    <processor><id>p8</id><name>Insert to Warehouse</name><class>org.apache.nifi.processors.standard.PutDatabaseRecord</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+      <property><name>Database Connection Pooling Service</name><value>DBCPService</value></property>
+      <property><name>Table Name</name><value>warehouse.sales_processed</value></property>
+      <property><name>Statement Type</name><value>INSERT</value></property>
+    </processor>
+    <processor><id>p9</id><name>Log Completion</name><class>org.apache.nifi.processors.standard.LogMessage</class><schedulingStrategy>TIMER_DRIVEN</schedulingStrategy><schedulingPeriod>0 sec</schedulingPeriod><state>RUNNING</state>
+      <property><name>Log Level</name><value>info</value></property>
+      <property><name>Log Message</name><value>ETL batch complete: ${batch.id}</value></property>
+    </processor>
+    <connection><id>c1</id><source><id>p1</id><type>PROCESSOR</type></source><destination><id>p2</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+    <connection><id>c2</id><source><id>p2</id><type>PROCESSOR</type></source><destination><id>p3</id><type>PROCESSOR</type></destination><relationship>valid</relationship></connection>
+    <connection><id>c3</id><source><id>p3</id><type>PROCESSOR</type></source><destination><id>p4</id><type>PROCESSOR</type></destination><relationship>us_east</relationship></connection>
+    <connection><id>c4</id><source><id>p3</id><type>PROCESSOR</type></source><destination><id>p4</id><type>PROCESSOR</type></destination><relationship>us_west</relationship></connection>
+    <connection><id>c5</id><source><id>p3</id><type>PROCESSOR</type></source><destination><id>p4</id><type>PROCESSOR</type></destination><relationship>europe</relationship></connection>
+    <connection><id>c6</id><source><id>p4</id><type>PROCESSOR</type></source><destination><id>p5</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+    <connection><id>c7</id><source><id>p5</id><type>PROCESSOR</type></source><destination><id>p6</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+    <connection><id>c8</id><source><id>p6</id><type>PROCESSOR</type></source><destination><id>p7</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+    <connection><id>c9</id><source><id>p6</id><type>PROCESSOR</type></source><destination><id>p8</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+    <connection><id>c10</id><source><id>p8</id><type>PROCESSOR</type></source><destination><id>p9</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
+  </rootGroup>
+  <controllerServices>
+    <controllerService><id>cs1</id><name>DBCPService</name><class>org.apache.nifi.dbcp.DBCPConnectionPool</class><property><name>Database Connection URL</name><value>jdbc:postgresql://db.example.com:5432/analytics</value></property><property><name>Database User</name><value>etl_user</value></property><property><name>Password</name><value>s3cur3_p4ss</value></property></controllerService>
+  </controllerServices>
+</flowController>

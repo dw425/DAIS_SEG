@@ -1,0 +1,192 @@
+version: 2
+
+models:
+  - name: stg_transactions
+    description: Staging model for raw financial transactions
+    columns:
+      - name: transaction_id
+        description: Unique transaction identifier
+        data_type: bigint
+        tests:
+          - unique
+          - not_null
+      - name: account_id
+        description: Source account identifier
+        data_type: bigint
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_accounts')
+              field: account_id
+      - name: transaction_date
+        description: Date and time of transaction
+        data_type: timestamp
+        tests:
+          - not_null
+      - name: transaction_type
+        description: Type of transaction
+        data_type: varchar
+        tests:
+          - accepted_values:
+              values: ['deposit', 'withdrawal', 'transfer', 'payment', 'fee', 'interest', 'refund']
+      - name: amount
+        description: Transaction amount in account currency
+        data_type: decimal(15,2)
+        tests:
+          - not_null
+      - name: currency
+        description: ISO 4217 currency code
+        data_type: varchar(3)
+      - name: counterparty_id
+        description: Counterparty account for transfers
+        data_type: bigint
+      - name: reference_number
+        description: External reference / check number
+        data_type: varchar(50)
+      - name: status
+        description: Transaction processing status
+        data_type: varchar(20)
+        tests:
+          - accepted_values:
+              values: ['pending', 'posted', 'reversed', 'failed']
+      - name: channel
+        description: Origination channel
+        data_type: varchar(30)
+
+  - name: dim_accounts
+    description: Account dimension with customer linkage
+    columns:
+      - name: account_id
+        data_type: bigint
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        data_type: bigint
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customers')
+              field: customer_id
+      - name: account_number
+        data_type: varchar(20)
+        tests:
+          - unique
+      - name: account_type
+        data_type: varchar(30)
+        tests:
+          - accepted_values:
+              values: ['checking', 'savings', 'money_market', 'cd', 'ira', 'brokerage']
+      - name: opened_date
+        data_type: date
+      - name: closed_date
+        data_type: date
+      - name: status
+        data_type: varchar(20)
+      - name: current_balance
+        data_type: decimal(15,2)
+      - name: available_balance
+        data_type: decimal(15,2)
+      - name: interest_rate
+        data_type: decimal(6,4)
+      - name: branch_id
+        data_type: varchar(10)
+
+  - name: dim_customers
+    description: Customer master dimension
+    columns:
+      - name: customer_id
+        data_type: bigint
+        tests:
+          - unique
+          - not_null
+      - name: customer_type
+        data_type: varchar(20)
+        tests:
+          - accepted_values:
+              values: ['individual', 'business', 'trust', 'joint']
+      - name: first_name
+        data_type: varchar(100)
+      - name: last_name
+        data_type: varchar(100)
+      - name: business_name
+        data_type: varchar(300)
+      - name: tax_id_hash
+        data_type: varchar(64)
+      - name: risk_rating
+        data_type: varchar(10)
+        tests:
+          - accepted_values:
+              values: ['low', 'medium', 'high', 'critical']
+      - name: kyc_status
+        data_type: varchar(20)
+      - name: onboarded_date
+        data_type: date
+      - name: relationship_manager
+        data_type: varchar(100)
+
+  - name: fct_daily_balances
+    description: Daily account balance snapshots
+    columns:
+      - name: balance_date
+        data_type: date
+        tests:
+          - not_null
+      - name: account_id
+        data_type: bigint
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_accounts')
+              field: account_id
+      - name: opening_balance
+        data_type: decimal(15,2)
+      - name: closing_balance
+        data_type: decimal(15,2)
+      - name: total_debits
+        data_type: decimal(15,2)
+      - name: total_credits
+        data_type: decimal(15,2)
+      - name: transaction_count
+        data_type: int
+      - name: min_balance
+        data_type: decimal(15,2)
+      - name: max_balance
+        data_type: decimal(15,2)
+
+  - name: fct_risk_events
+    description: AML and fraud risk event tracking
+    columns:
+      - name: event_id
+        data_type: bigint
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        data_type: bigint
+        tests:
+          - relationships:
+              to: ref('dim_customers')
+              field: customer_id
+      - name: account_id
+        data_type: bigint
+      - name: event_type
+        data_type: varchar(50)
+        tests:
+          - accepted_values:
+              values: ['suspicious_activity', 'large_cash', 'structuring', 'velocity', 'geographic', 'sanctions_hit', 'fraud_alert']
+      - name: severity
+        data_type: varchar(10)
+        tests:
+          - accepted_values:
+              values: ['low', 'medium', 'high', 'critical']
+      - name: detected_date
+        data_type: timestamp
+      - name: resolution_date
+        data_type: timestamp
+      - name: status
+        data_type: varchar(20)
+      - name: analyst_notes
+        data_type: text
+      - name: sar_filed
+        data_type: boolean
