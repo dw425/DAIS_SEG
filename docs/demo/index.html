@@ -159,6 +159,31 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 .diagram-legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0; font-size: 0.75rem; color: var(--text2); }
 .diagram-legend span { display: flex; align-items: center; gap: 4px; }
 .diagram-legend .leg-line { width: 20px; height: 2px; border-radius: 1px; }
+/* Cycle indicators */
+.tier-node.in-cycle { border-color: #EF4444; animation: cyclePulse 2s ease-in-out infinite; }
+@keyframes cyclePulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); } 50% { box-shadow: 0 0 0 6px rgba(239,68,68,0); } }
+.cycle-badge { position: absolute; top: -6px; left: -6px; background: #EF4444; color: white;
+  border-radius: 50%; width: 18px; height: 18px; font-size: 0.6rem; display: flex;
+  align-items: center; justify-content: center; z-index: 4; }
+/* Expandable process groups */
+.tier-node .expand-indicator { font-size: 0.6rem; color: var(--text2); margin-top: 4px; }
+.tier-node.expanded { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(255,75,75,0.2); }
+.tier-sub-band { padding: 8px 20px 12px 40px; border-bottom: 1px solid var(--border);
+  background: rgba(255,255,255,0.02); position: relative; z-index: 2; }
+.tier-sub-band .tier-band-label { font-size: 0.6rem; opacity: 0.6; margin-bottom: 6px; }
+.tier-sub-band .tier-nodes { gap: 8px; }
+.tier-sub-band .tier-node { min-width: 100px; max-width: 160px; padding: 6px 10px; }
+.tier-sub-band .tier-node .node-name { font-size: 0.75rem; }
+/* Multi-select path tracing */
+.tier-node.path-selected { border-color: #FACA15; box-shadow: 0 0 0 3px rgba(250,202,21,0.4); z-index: 10; }
+.tier-node.path-member { border-color: #FACA15; background: rgba(250,202,21,0.08); }
+.tier-node.path-dimmed { opacity: 0.15; }
+.path-trace-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 20px; font-size: 0.85rem; color: var(--text); z-index: 1000;
+  display: none; align-items: center; gap: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
+.path-trace-toast .toast-hint { color: var(--text2); font-size: 0.75rem; }
+.path-trace-toast .toast-clear { cursor: pointer; color: var(--primary); font-weight: 600; font-size: 0.8rem; }
 </style>
 </head>
 <body>
@@ -1602,6 +1627,68 @@ function classifyNiFiProcessor(type) {
   );
 }
 
+// ── NiFi role-tier constants (shared by build + render) ──
+const ROLE_TIER_ORDER = ['source', 'route', 'transform', 'process', 'sink', 'utility'];
+const ROLE_TIER_COLORS = { source:'#3B82F6', route:'#EAB308', transform:'#A855F7', process:'#6366F1', sink:'#21C354', utility:'#808495' };
+const ROLE_TIER_LABELS = {
+  source:'SOURCES — Ingestion & Acquisition', route:'ROUTING — Distribution & Validation',
+  transform:'TRANSFORMS — Conversion & Enrichment', process:'PROCESSING — Execution & Lookup',
+  sink:'SINKS — Output & Delivery', utility:'UTILITY — Logging & Control'
+};
+
+// Tarjan's SCC algorithm — returns arrays of node groups forming cycles (size > 1 only)
+function detectCyclesSCC(adjacencyMap) {
+  let idx = 0; const stack = [], onStack = new Set(), indices = {}, lowlinks = {}, sccs = [];
+  function sc(v) {
+    indices[v] = lowlinks[v] = idx++;
+    stack.push(v); onStack.add(v);
+    for (const w of (adjacencyMap[v] || [])) {
+      if (indices[w] === undefined) { sc(w); lowlinks[v] = Math.min(lowlinks[v], lowlinks[w]); }
+      else if (onStack.has(w)) { lowlinks[v] = Math.min(lowlinks[v], indices[w]); }
+    }
+    if (lowlinks[v] === indices[v]) {
+      const scc = []; let w;
+      do { w = stack.pop(); onStack.delete(w); scc.push(w); } while (w !== v);
+      if (scc.length > 1) sccs.push(scc);
+    }
+  }
+  for (const v of Object.keys(adjacencyMap)) { if (indices[v] === undefined) sc(v); }
+  return sccs;
+}
+
+function classifyGroupDominantRole(stats) {
+  const counts = [['source',stats.sources],['route',stats.routes],['transform',stats.transforms],
+    ['process',stats.processes],['sink',stats.sinks],['utility',stats.utilities]];
+  counts.sort((a,b) => b[1] !== a[1] ? b[1] - a[1] : ROLE_TIER_ORDER.indexOf(a[0]) - ROLE_TIER_ORDER.indexOf(b[0]));
+  return counts[0][1] > 0 ? counts[0][0] : 'process';
+}
+
+// BFS shortest path through directed connections array; returns {pathNodes, pathEdgeKeys, found}
+function bfsShortestPath(connections, startId, endId) {
+  const adj = {};
+  connections.forEach(c => {
+    if (!adj[c.from]) adj[c.from] = [];
+    adj[c.from].push({ to: c.to, key: c.from + '|' + c.to });
+  });
+  const visited = new Set([startId]);
+  const parent = {};
+  const queue = [startId];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (cur === endId) {
+      const pathNodes = [], pathEdgeKeys = [];
+      let n = endId;
+      while (n !== startId) { pathNodes.unshift(n); pathEdgeKeys.unshift(parent[n].key); n = parent[n].from; }
+      pathNodes.unshift(startId);
+      return { pathNodes, pathEdgeKeys, found: true };
+    }
+    for (const nb of (adj[cur] || [])) {
+      if (!visited.has(nb.to)) { visited.add(nb.to); parent[nb.to] = { from: cur, key: nb.key }; queue.push(nb.to); }
+    }
+  }
+  return { pathNodes: [], pathEdgeKeys: [], found: false };
+}
+
 function buildTierData(blueprint, parsed) {
   const fmt = parsed ? parsed.input_format : '';
   if (fmt === 'nifi_xml' && parsed._nifi) return buildNiFiTierData(parsed._nifi, blueprint);
@@ -1647,133 +1734,88 @@ function buildNiFiTierData(nifi, blueprint) {
     }
   });
 
-  // ── Step 3: Determine group tier via topological sort ──
+  // ── Step 3: Detect cycles + assign role-based tiers ──
   const groupNames = Object.keys(groupStats);
-  const groupUpstream = {};  // group -> [upstream groups]
   const groupDownstream = {};
   Object.keys(interGroupConns).forEach(key => {
     const [from, to] = key.split('|');
-    if (!groupUpstream[to]) groupUpstream[to] = new Set();
-    groupUpstream[to].add(from);
     if (!groupDownstream[from]) groupDownstream[from] = new Set();
     groupDownstream[from].add(to);
   });
-  const groupDepth = {};
-  function getGroupDepth(gn, visited) {
-    if (groupDepth[gn] !== undefined) return groupDepth[gn];
-    if (visited.has(gn)) return 0;
-    visited.add(gn);
-    const ups = groupUpstream[gn] ? [...groupUpstream[gn]] : [];
-    if (!ups.length) { groupDepth[gn] = 0; return 0; }
-    const maxD = Math.max(...ups.map(u => getGroupDepth(u, new Set(visited))));
-    groupDepth[gn] = maxD + 1;
-    return groupDepth[gn];
-  }
-  groupNames.forEach(gn => getGroupDepth(gn, new Set()));
-  // If all depths are 0 (no inter-group connections), use process-group hierarchy or role-based ordering
-  if (Math.max(0, ...Object.values(groupDepth)) === 0 && groupNames.length > 1) {
-    // Sort by: groups with most sources first, then most sinks last
-    groupNames.sort((a, b) => {
-      const as = groupStats[a], bs = groupStats[b];
-      const aScore = (as.sources * 3) - (as.sinks * 3) + (as.transforms) - (as.utilities);
-      const bScore = (bs.sources * 3) - (bs.sinks * 3) + (bs.transforms) - (bs.utilities);
-      return bScore - aScore;
+  groupNames.forEach(gn => { if (!groupDownstream[gn]) groupDownstream[gn] = new Set(); });
+
+  const sccs = detectCyclesSCC(groupDownstream);
+  const cycleGroups = new Set();
+  const groupToSCC = {};
+  sccs.forEach((scc, i) => { scc.forEach(gn => { cycleGroups.add(gn); groupToSCC[gn] = i; }); });
+
+  // Assign dominant role per group
+  const groupDominantRole = {};
+  groupNames.forEach(gn => { groupDominantRole[gn] = classifyGroupDominantRole(groupStats[gn]); });
+
+  // Group groups by dominant role
+  const roleGroups = {};
+  ROLE_TIER_ORDER.forEach(r => { roleGroups[r] = []; });
+  groupNames.forEach(gn => { roleGroups[groupDominantRole[gn]].push(gn); });
+  // Sort within each role: purity desc, then total desc
+  ROLE_TIER_ORDER.forEach(role => {
+    const key = role + 's';
+    roleGroups[role].sort((a, b) => {
+      const aFrac = (groupStats[a][key] || 0) / (groupStats[a].total || 1);
+      const bFrac = (groupStats[b][key] || 0) / (groupStats[b].total || 1);
+      if (bFrac !== aFrac) return bFrac - aFrac;
+      return groupStats[b].total - groupStats[a].total;
     });
-    groupNames.forEach((gn, i) => { groupDepth[gn] = i; });
-  }
-  const maxGroupDepth = Math.max(0, ...Object.values(groupDepth));
-
-  // ── Step 4: Build tier layout ──
-  const tierColorPool = ['#3B82F6','#EAB308','#A855F7','#21C354','#F97316','#EC4899','#06B6D4','#8B5CF6','#F43F5E','#10B981'];
-  const tierBgPool = ['rgba(59,130,246,0.06)','rgba(234,179,8,0.06)','rgba(168,85,247,0.06)','rgba(33,195,84,0.06)','rgba(249,115,22,0.06)','rgba(236,72,153,0.06)','rgba(6,182,212,0.06)','rgba(139,92,246,0.06)','rgba(244,63,94,0.06)','rgba(16,185,129,0.06)'];
-
-  // Group groups by depth
-  const depthGroups = {};
-  groupNames.forEach(gn => {
-    const d = groupDepth[gn] || 0;
-    if (!depthGroups[d]) depthGroups[d] = [];
-    depthGroups[d].push(gn);
   });
-  const sortedDepths = Object.keys(depthGroups).map(Number).sort((a, b) => a - b);
-  let tierNum = 0;
-  const groupTierMap = {};
 
-  sortedDepths.forEach((depth, di) => {
-    const groups = depthGroups[depth];
+  // ── Step 4: Build role-based tier layout ──
+  let tierNum = 0;
+  ROLE_TIER_ORDER.forEach(role => {
+    const groups = roleGroups[role];
+    if (!groups.length) return;
     tierNum++;
-    const label = depth === 0 && maxGroupDepth > 0 ? 'INGESTION — Source Groups'
-      : depth === maxGroupDepth && maxGroupDepth > 0 ? 'OUTPUT — Terminal Groups'
-      : maxGroupDepth === 0 ? 'PROCESS GROUPS' : `PROCESSING LAYER ${depth}`;
-    tierLabels[tierNum] = { label, color: tierColorPool[tierNum % tierColorPool.length], bg: tierBgPool[tierNum % tierBgPool.length] };
+    const color = ROLE_TIER_COLORS[role];
+    const rgb = color.replace('#','').match(/.{2}/g).map(h => parseInt(h, 16));
+    tierLabels[tierNum] = { label: ROLE_TIER_LABELS[role], color, bg: `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.06)`, role };
 
     groups.forEach(gn => {
-      groupTierMap[gn] = tierNum;
       const stats = groupStats[gn];
       const topTypes = Object.entries(stats.typeCount).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([t, c]) => `${t}(${c})`).join(', ');
-      const intraConns = intraGroupConns[gn] || 0;
-      // Determine dominant role for coloring
-      const dominant = [['sources', stats.sources], ['sinks', stats.sinks], ['transforms', stats.transforms], ['routes', stats.routes], ['processes', stats.processes]].sort((a, b) => b[1] - a[1])[0];
+      const inCycle = cycleGroups.has(gn);
+      const sccIdx = groupToSCC[gn];
+      const sccMembers = inCycle ? sccs[sccIdx] : [];
+      const cycleEdges = inCycle ? Object.entries(interGroupConns)
+        .filter(([k]) => { const [f, t] = k.split('|'); return sccs[sccIdx].includes(f) && sccs[sccIdx].includes(t); })
+        .map(([k, v]) => { const [f, t] = k.split('|'); return { from: f, to: t, count: v }; }) : [];
+
       nodes.push({
         id: 'pg_' + gn, name: gn, tier: tierNum,
-        type: 'process_group',
-        subtype: dominant[0],
+        type: 'process_group', dominantRole: groupDominantRole[gn],
+        subtype: groupDominantRole[gn] + 's',
         procCount: stats.total,
         srcCount: stats.sources, sinkCount: stats.sinks,
         routeCount: stats.routes, transformCount: stats.transforms,
         processCount: stats.processes, utilityCount: stats.utilities,
-        intraConns: intraConns,
-        topTypes: topTypes,
-        detail: { processors: stats.processors, typeCount: stats.typeCount, intraConns }
+        intraConns: intraGroupConns[gn] || 0,
+        topTypes, inCycle, sccMembers, cycleEdges, expandable: true,
+        detail: { processors: stats.processors, typeCount: stats.typeCount, intraConns: intraGroupConns[gn] || 0 }
       });
     });
   });
 
-  // ── Step 5: Build inter-group connections ──
+  // ── Step 5: Build inter-group connections (red for cycle edges) ──
   Object.entries(interGroupConns).forEach(([key, count]) => {
     const [from, to] = key.split('|');
+    const bothInCycle = cycleGroups.has(from) && cycleGroups.has(to) && groupToSCC[from] === groupToSCC[to];
     connections.push({
       from: 'pg_' + from, to: 'pg_' + to,
       label: count > 1 ? count + ' flows' : '1 flow',
-      type: 'flow', color: '#4B5563', width: Math.min(1 + count * 0.3, 4)
+      type: 'flow', color: bothInCycle ? '#EF4444' : '#4B5563',
+      width: Math.min(1 + count * 0.3, 4), inCycle: bothInCycle
     });
   });
 
-  // ── Step 6: If there are few groups (<=3), also show top processors within each ──
-  if (groupNames.length <= 3 && processors.length <= 50) {
-    // Add processor-level tiers within each group
-    const extraNodes = [], extraConns = [];
-    groupNames.forEach(gn => {
-      const stats = groupStats[gn];
-      const baseTier = groupTierMap[gn];
-      // Sub-tier for each role within the group
-      const roleOrder = ['source', 'route', 'transform', 'process', 'sink', 'utility'];
-      roleOrder.forEach((role, ri) => {
-        const procs = stats.processors.filter(p => classifyNiFiProcessor(p.type) === role);
-        if (!procs.length) return;
-        tierNum++;
-        const roleLabel = { source: 'SOURCES', route: 'ROUTING', transform: 'TRANSFORMS', process: 'PROCESSING', sink: 'SINKS', utility: 'UTILITY' };
-        tierLabels[tierNum] = { label: `${gn} — ${roleLabel[role] || role.toUpperCase()}`, color: tierColorPool[tierNum % tierColorPool.length], bg: tierBgPool[tierNum % tierBgPool.length] };
-        procs.forEach(p => {
-          extraNodes.push({
-            id: p.name + '_' + p.type, name: p.name || p.type, tier: tierNum,
-            type: 'processor', subtype: role, meta: p.type,
-            group: gn, state: p.state, propCount: Object.keys(p.properties).length, detail: p
-          });
-        });
-      });
-    });
-    nodes.push(...extraNodes);
-    // Add individual processor connections
-    conns.forEach(c => {
-      const srcNode = nodes.find(n => n.type === 'processor' && (n.name === c.sourceName || n.id.startsWith(c.sourceName)));
-      const dstNode = nodes.find(n => n.type === 'processor' && (n.name === c.destinationName || n.id.startsWith(c.destinationName)));
-      if (srcNode && dstNode) {
-        connections.push({ from: srcNode.id, to: dstNode.id, label: c.relationships.join(', '), type: 'flow', color: '#4B5563', width: 1 });
-      }
-    });
-  }
-
-  // ── Step 7: Connection density sidebar — processor types across the flow ──
+  // ── Step 6: Connection density sidebar ──
   const densityData = [];
   const globalTypeCount = {};
   processors.forEach(p => { globalTypeCount[p.type] = (globalTypeCount[p.type] || 0) + 1; });
@@ -1782,7 +1824,13 @@ function buildNiFiTierData(nifi, blueprint) {
     densityData.push({ name: type, writers: count, readers: 0, lookups: 0, total: count, role });
   });
 
-  return { nodes, connections, tierLabels, diagramType: 'nifi_flow', densityData };
+  // ── Step 7: Cycle summary ──
+  const cycleData = sccs.map((scc, i) => ({
+    id: i, groups: scc,
+    edgeCount: Object.keys(interGroupConns).filter(k => { const [f, t] = k.split('|'); return scc.includes(f) && scc.includes(t); }).length
+  }));
+
+  return { nodes, connections, tierLabels, diagramType: 'nifi_flow', densityData, cycleData };
 }
 
 function buildSQLTierData(blueprint) {
@@ -2265,6 +2313,9 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
   const {nodes, connections, tierLabels, diagramType, densityData} = tierData;
   if (!nodes.length) { container.innerHTML = '<p style="text-align:center;padding:20px;color:var(--text2)">No nodes to display</p>'; return; }
 
+  // Multi-select state (closure-scoped)
+  const _ms = { selected: [], pathNodes: new Set(), pathEdgeKeys: new Set(), active: false };
+
   // Group nodes by tier
   const tierGroups = {};
   nodes.forEach(n => {
@@ -2378,12 +2429,21 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
       }
       // ── Process group nodes (NiFi) ──
       else if (node.type === 'process_group') {
-        el.className = 'tier-node';
-        const roleColor = node.subtype === 'sources' ? '#3B82F6' : node.subtype === 'sinks' ? '#21C354' : node.subtype === 'transforms' ? '#A855F7' : node.subtype === 'routes' ? '#EAB308' : '#6366F1';
+        el.className = 'tier-node expandable';
+        if (node.inCycle) el.classList.add('in-cycle');
+        const roleColor = ROLE_TIER_COLORS[node.dominantRole] || '#6366F1';
         el.style.borderTopColor = roleColor;
         el.style.borderTopWidth = '3px';
         el.style.minWidth = '160px';
         el.style.maxWidth = '240px';
+        // Cycle badge
+        if (node.inCycle) {
+          const cyBadge = document.createElement('div');
+          cyBadge.className = 'cycle-badge';
+          cyBadge.textContent = '\u21BB';
+          cyBadge.title = 'Cycle: ' + node.sccMembers.filter(g => g !== node.name).join(', ');
+          el.appendChild(cyBadge);
+        }
         // Name
         const nameEl = document.createElement('div');
         nameEl.className = 'node-name';
@@ -2405,13 +2465,11 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
         if (node.sinkCount) statsDiv.innerHTML += `<span class="ns" style="background:#21C354;color:white">${node.sinkCount} sink</span>`;
         if (node.utilityCount) statsDiv.innerHTML += `<span class="ns" style="background:#808495;color:white">${node.utilityCount} util</span>`;
         el.appendChild(statsDiv);
-        // Top types
-        if (node.topTypes) {
-          const metaEl = document.createElement('div');
-          metaEl.className = 'node-meta';
-          metaEl.textContent = node.topTypes;
-          el.appendChild(metaEl);
-        }
+        // Expand indicator
+        const expandInd = document.createElement('div');
+        expandInd.className = 'expand-indicator';
+        expandInd.textContent = '\u25B6 expand';
+        el.appendChild(expandInd);
       }
       // ── Generic nodes (NiFi processors, SQL, flat) ──
       else {
@@ -2442,11 +2500,24 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
         }
       }
 
-      // Hover: highlight connected
-      el.addEventListener('mouseenter', () => highlightConnected(node.id, nodes, connections, nodeEls, container));
-      el.addEventListener('mouseleave', () => clearHighlight(nodeEls, container));
-      // Click: show detail
-      el.addEventListener('click', () => showNodeDetail(node, detailEl, diagramType));
+      // Hover: highlight connected (suppressed during multi-select)
+      el.addEventListener('mouseenter', () => { if (!_ms.active) highlightConnected(node.id, nodes, connections, nodeEls, container); });
+      el.addEventListener('mouseleave', () => { if (!_ms.active) clearHighlight(nodeEls, container); });
+      // Click: expand/multi-select/detail
+      el.addEventListener('click', (e) => {
+        if (e.shiftKey && _ms.selected.length > 0) {
+          handleMultiSelectAdd(node.id, _ms, nodes, connections, nodeEls, container);
+          showNodeDetail(node, detailEl, diagramType);
+        } else if (node.type === 'process_group' && node.expandable && !e.shiftKey) {
+          toggleGroupExpand(node, el, band, tierData, nodeEls, container, detailEl, diagramType);
+          if (!_ms.active) { startMultiSelect(node.id, _ms, nodeEls, container); }
+          showNodeDetail(node, detailEl, diagramType);
+        } else {
+          if (_ms.active) clearMultiSelect(_ms, nodeEls, container);
+          startMultiSelect(node.id, _ms, nodeEls, container);
+          showNodeDetail(node, detailEl, diagramType);
+        }
+      });
 
       nodesDiv.appendChild(el);
       nodeEls[node.id] = el;
@@ -2459,6 +2530,16 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
   // Render SVG connections after DOM is laid out
   requestAnimationFrame(() => {
     renderConnections(container, connections, nodeEls);
+  });
+
+  // Escape clears multi-select; click empty space clears
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && _ms.active) clearMultiSelect(_ms, nodeEls, container);
+  });
+  container.addEventListener('click', (e) => {
+    if ((e.target === container || e.target.classList.contains('tier-band') || e.target.classList.contains('tier-band-label')) && _ms.active) {
+      clearMultiSelect(_ms, nodeEls, container);
+    }
   });
 
   // Connection density sidebar
@@ -2513,15 +2594,19 @@ function renderTierDiagram(tierData, containerId, detailId, legendId) {
     } else if (diagramType === 'nifi_flow') {
       const pgCount = nodes.filter(n => n.type === 'process_group').length;
       const procCount = nodes.filter(n => n.type === 'processor').length;
+      const cycleCount = tierData.cycleData ? tierData.cycleData.length : 0;
       legendEl.innerHTML = [
         `<span>${pgCount} Process Groups</span>`,
         procCount ? `<span>${procCount} Processors</span>` : '',
         `<span>${connections.length} Connections</span>`,
+        cycleCount ? `<span style="color:#EF4444">${cycleCount} Cycle(s)</span>` : '',
         '<span><span class="leg-line" style="background:#3B82F6"></span> Source</span>',
-        '<span><span class="leg-line" style="background:#EAB308"></span> Route/Transform</span>',
-        '<span><span class="leg-line" style="background:#A855F7"></span> Process</span>',
+        '<span><span class="leg-line" style="background:#EAB308"></span> Route</span>',
+        '<span><span class="leg-line" style="background:#A855F7"></span> Transform</span>',
+        '<span><span class="leg-line" style="background:#6366F1"></span> Process</span>',
         '<span><span class="leg-line" style="background:#21C354"></span> Sink</span>',
-        '<span><span class="leg-line" style="background:#4B5563;border-top:2px solid #4B5563"></span> Flow Connection</span>',
+        '<span><span class="leg-line" style="background:#EF4444;border-top:2px dashed #EF4444"></span> Cycle Edge</span>',
+        '<span style="color:var(--text2);font-size:0.7rem">Click node, then Shift+click another to trace path</span>',
       ].join('');
     } else if (diagramType === 'sql_tables') {
       legendEl.innerHTML = [
@@ -2624,6 +2709,7 @@ function renderConnections(container, connections, nodeEls) {
     path.dataset.origColor = strokeColor;
     path.dataset.origWidth = String(conn.width || 1.5);
     if (conn.dash) path.setAttribute('stroke-dasharray', '6,4');
+    if (conn.inCycle) path.setAttribute('stroke-dasharray', '8,4');
     svg.appendChild(path);
   });
 
@@ -2710,6 +2796,182 @@ function clearHighlight(nodeEls, container) {
   }
 }
 
+// ── Expand/collapse a process group ──
+function toggleGroupExpand(node, el, parentBand, tierData, nodeEls, container, detailEl, diagramType) {
+  const subBandId = 'sub_' + node.id;
+  const existing = container.querySelector(`[data-sub-band="${subBandId}"]`);
+  if (existing) {
+    existing.remove();
+    el.classList.remove('expanded');
+    const ind = el.querySelector('.expand-indicator');
+    if (ind) ind.textContent = '\u25B6 expand';
+    Object.keys(nodeEls).forEach(k => { if (k.startsWith('proc_' + node.name + '|')) delete nodeEls[k]; });
+    requestAnimationFrame(() => renderConnections(container, tierData.connections, nodeEls));
+    return;
+  }
+  el.classList.add('expanded');
+  const ind = el.querySelector('.expand-indicator');
+  if (ind) ind.textContent = '\u25BC collapse';
+  const processors = (node.detail && node.detail.processors) || [];
+  const ROLE_ORDER = ['source','route','transform','process','sink','utility'];
+  const ROLE_NAMES = {source:'Sources',route:'Routing',transform:'Transforms',process:'Processing',sink:'Sinks',utility:'Utility'};
+  const subBand = document.createElement('div');
+  subBand.className = 'tier-sub-band';
+  subBand.dataset.subBand = subBandId;
+  ROLE_ORDER.forEach(role => {
+    const procs = processors.filter(p => classifyNiFiProcessor(p.type) === role);
+    if (!procs.length) return;
+    const roleLabel = document.createElement('div');
+    roleLabel.className = 'tier-band-label';
+    roleLabel.style.color = ROLE_TIER_COLORS[role] || '#808495';
+    roleLabel.textContent = `${node.name} \u2192 ${ROLE_NAMES[role]} (${procs.length})`;
+    subBand.appendChild(roleLabel);
+    const nodesDiv = document.createElement('div');
+    nodesDiv.className = 'tier-nodes';
+    procs.forEach(p => {
+      const procEl = document.createElement('div');
+      procEl.className = 'tier-node';
+      const procId = 'proc_' + node.name + '|' + p.name;
+      procEl.dataset.nodeId = procId;
+      if (p.state === 'DISABLED' || p.state === 'STOPPED') procEl.style.opacity = '0.5';
+      procEl.style.borderTopColor = ROLE_TIER_COLORS[role] || '#808495';
+      procEl.style.borderTopWidth = '3px';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'node-name';
+      nameEl.textContent = p.name.length > 20 ? p.name.substring(0, 17) + '...' : p.name;
+      nameEl.title = p.name;
+      procEl.appendChild(nameEl);
+      const metaEl = document.createElement('div');
+      metaEl.className = 'node-meta';
+      metaEl.textContent = p.type;
+      procEl.appendChild(metaEl);
+      procEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showNodeDetail({name:p.name, type:'processor', subtype:role, meta:p.type, group:node.name, state:p.state, propCount:Object.keys(p.properties||{}).length, detail:p}, detailEl, diagramType);
+      });
+      nodesDiv.appendChild(procEl);
+      nodeEls[procId] = procEl;
+    });
+    subBand.appendChild(nodesDiv);
+  });
+  parentBand.after(subBand);
+  requestAnimationFrame(() => renderConnections(container, tierData.connections, nodeEls));
+}
+
+// ── Multi-select path tracing ──
+function startMultiSelect(nodeId, ms, nodeEls, container) {
+  ms.selected = [nodeId];
+  ms.pathNodes = new Set([nodeId]);
+  ms.pathEdgeKeys = new Set();
+  ms.active = true;
+  Object.entries(nodeEls).forEach(([id, el]) => {
+    el.classList.remove('path-selected','path-member','path-dimmed','highlighted','dimmed','selected');
+    if (id === nodeId) el.classList.add('path-selected');
+  });
+  showPathToast(ms);
+}
+
+function handleMultiSelectAdd(nodeId, ms, nodes, connections, nodeEls, container) {
+  if (ms.selected.includes(nodeId)) return;
+  const lastSel = ms.selected[ms.selected.length - 1];
+  ms.selected.push(nodeId);
+  // Try directed path last→new
+  let result = bfsShortestPath(connections, lastSel, nodeId);
+  if (!result.found) result = bfsShortestPath(connections, nodeId, lastSel);
+  if (!result.found) {
+    // Undirected fallback
+    const biConns = connections.flatMap(c => [c, {from:c.to, to:c.from, label:c.label, type:c.type, color:c.color, width:c.width}]);
+    result = bfsShortestPath(biConns, lastSel, nodeId);
+  }
+  if (result.found) {
+    result.pathNodes.forEach(n => ms.pathNodes.add(n));
+    result.pathEdgeKeys.forEach(k => ms.pathEdgeKeys.add(k));
+  }
+  // Apply visual state
+  Object.entries(nodeEls).forEach(([id, el]) => {
+    el.classList.remove('path-selected','path-member','path-dimmed','highlighted','dimmed','selected');
+    if (ms.selected.includes(id)) el.classList.add('path-selected');
+    else if (ms.pathNodes.has(id)) el.classList.add('path-member');
+    else el.classList.add('path-dimmed');
+  });
+  // Highlight SVG edges
+  const svg = container.querySelector('svg.tier-svg');
+  if (svg) {
+    svg.querySelectorAll('path[data-from]').forEach(p => {
+      const fwd = p.dataset.from + '|' + p.dataset.to;
+      const rev = p.dataset.to + '|' + p.dataset.from;
+      if (ms.pathEdgeKeys.has(fwd) || ms.pathEdgeKeys.has(rev)) {
+        p.setAttribute('opacity','1');
+        p.setAttribute('stroke','#FACA15');
+        p.setAttribute('stroke-width','3');
+        p.setAttribute('filter','url(#glow)');
+        p.setAttribute('marker-end','url(#arrow-white)');
+        p.style.transition = 'all 0.2s ease';
+      } else {
+        p.setAttribute('opacity','0.05');
+        p.removeAttribute('filter');
+        p.style.transition = 'all 0.2s ease';
+      }
+    });
+  }
+  showPathToast(ms);
+  if (!result.found) {
+    const toast = document.getElementById('pathTraceToast');
+    if (toast) {
+      const noPath = document.createElement('span');
+      noPath.style.color = 'var(--red)';
+      noPath.style.marginLeft = '8px';
+      noPath.textContent = 'No path found';
+      toast.appendChild(noPath);
+      setTimeout(() => { if (noPath.parentNode) noPath.remove(); }, 2500);
+    }
+  }
+}
+
+function clearMultiSelect(ms, nodeEls, container) {
+  ms.selected = [];
+  ms.pathNodes = new Set();
+  ms.pathEdgeKeys = new Set();
+  ms.active = false;
+  Object.values(nodeEls).forEach(el => { el.classList.remove('path-selected','path-member','path-dimmed'); });
+  const svg = container.querySelector('svg.tier-svg');
+  if (svg) {
+    svg.querySelectorAll('path[data-from]').forEach(p => {
+      p.setAttribute('opacity','0.35');
+      p.setAttribute('stroke', p.dataset.origColor || '#4B5563');
+      p.setAttribute('stroke-width', p.dataset.origWidth || '1.5');
+      p.removeAttribute('filter');
+      const c = p.dataset.origColor || '';
+      const arrowId = c.includes('EF44') ? 'arrow-red' : c.includes('F59E')||c.includes('F5') ? 'arrow-amber' : c.includes('6366') ? 'arrow-purple' : c.includes('3B82') ? 'arrow-blue' : c.includes('21C3') ? 'arrow-green' : 'arrow-default';
+      p.setAttribute('marker-end', `url(#${arrowId})`);
+      p.style.transition = '';
+    });
+  }
+  hidePathToast();
+}
+
+function showPathToast(ms) {
+  let toast = document.getElementById('pathTraceToast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'pathTraceToast';
+    toast.className = 'path-trace-toast';
+    document.body.appendChild(toast);
+  }
+  const count = ms.selected.length;
+  const pathLen = ms.pathNodes.size;
+  toast.innerHTML = `<span>${count} node${count>1?'s':''} selected${pathLen > count ? ' \u2014 ' + pathLen + ' in path' : ''}</span>` +
+    `<span class="toast-hint">Shift+click to trace path</span>` +
+    `<span class="toast-clear" id="pathTraceToastClear">Esc to clear</span>`;
+  toast.style.display = 'flex';
+  document.getElementById('pathTraceToastClear').onclick = () => { toast.style.display = 'none'; };
+}
+
+function hidePathToast() {
+  const toast = document.getElementById('pathTraceToast');
+  if (toast) toast.style.display = 'none';
+}
+
 function showNodeDetail(node, detailEl, diagramType) {
   if (!detailEl) return;
   let h = '<div class="node-detail">';
@@ -2741,6 +3003,17 @@ function showNodeDetail(node, detailEl, diagramType) {
       d.processors.slice(0, 10).forEach(p => { h += `<li>${p.name} <code style="font-size:0.65rem">${p.type}</code></li>`; });
       if (d.processors.length > 10) h += `<li style="color:var(--text2)">+${d.processors.length - 10} more</li>`;
       h += '</ul>';
+    }
+    // Cycle information
+    if (node.inCycle && node.sccMembers) {
+      h += '<div style="margin:8px 0;padding:8px 12px;border:1px solid #EF4444;border-radius:6px;background:rgba(239,68,68,0.08);font-size:0.8rem">';
+      h += '<strong style="color:#EF4444">Circular Dependency Detected</strong><br>';
+      h += 'Cycle with: ' + node.sccMembers.filter(g => g !== node.name).join(', ');
+      if (node.cycleEdges && node.cycleEdges.length) {
+        h += '<br><br><strong>Cycle edges:</strong><br>';
+        node.cycleEdges.forEach(ce => { h += `${ce.from} \u2192 ${ce.to} (${ce.count} flow${ce.count>1?'s':''})<br>`; });
+      }
+      h += '</div>';
     }
   } else if (diagramType === 'nifi_flow' && node.detail) {
     const p = node.detail;
