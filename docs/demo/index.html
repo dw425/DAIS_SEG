@@ -6197,6 +6197,33 @@ const PROCESSOR_SIM = {
 // ================================================================
 // PROCESSOR_SIM_V2 — VirtualEnv-based simulation per processor type
 // ================================================================
+// Simulation seed state — shared across both engine runs for determinism
+let SIM_PARAM_CTX = {};
+let SIM_SEED_TS = null;
+let SIM_SEED_COUNTER = 0;
+
+function buildParameterContext(manifest) {
+  if (!manifest || !manifest.parameters) return {};
+  const ctx = {};
+  const seen = new Set();
+  manifest.parameters.forEach(p => {
+    if (seen.has(p.attrName)) return;
+    seen.add(p.attrName);
+    const n = p.attrName;
+    if (/table/i.test(n)) ctx[n] = `catalog.schema.${n}`;
+    else if (/location|path|dir|zone|landingzone/i.test(n)) ctx[n] = `/data/${n.replace(/[^a-zA-Z0-9]/g,'_')}`;
+    else if (/query|statement|insert/i.test(n)) ctx[n] = `SELECT 1 /* ${n} */`;
+    else if (/counter|retry|attempts/i.test(n)) ctx[n] = '0';
+    else if (/date|time|ts$|_ts/i.test(n)) ctx[n] = '2025-01-01T00:00:00Z';
+    else if (/yn$|_yn|possible|allowed|needed|acquired|include|use_/i.test(n)) ctx[n] = 'Y';
+    else if (/limit|count|size/i.test(n)) ctx[n] = '1000';
+    else if (/script|command/i.test(n)) ctx[n] = `/usr/local/bin/${n}`;
+    else if (/filename|fname|file/i.test(n)) ctx[n] = `${n}.dat`;
+    else ctx[n] = n;
+  });
+  return ctx;
+}
+
 // NiFi Expression Language mini-evaluator
 function evaluateNiFiEL(expr, attributes) {
   if (!expr || typeof expr !== 'string' || !expr.includes('${')) return expr;
@@ -6204,15 +6231,15 @@ function evaluateNiFiEL(expr, attributes) {
     const parts = inner.split(':');
     const attrName = parts[0].trim();
     let val;
-    if (attrName === 'now()') val = new Date().toISOString();
-    else if (attrName === 'nextInt()' || attrName === 'random()') val = String(Math.floor(Math.random() * 10000));
-    else if (attrName === 'UUID()' || attrName === 'uuid()') val = 'ff_' + simHash(JSON.stringify(attributes) + Date.now());
+    if (attrName === 'now()') val = SIM_SEED_TS || new Date().toISOString();
+    else if (attrName === 'nextInt()' || attrName === 'random()') val = String(1000 + (SIM_SEED_COUNTER++));
+    else if (attrName === 'UUID()' || attrName === 'uuid()') val = 'ff_' + simHash(JSON.stringify(attributes) + (SIM_SEED_TS || '') + (SIM_SEED_COUNTER++));
     else if (attrName === 'hostname()') val = 'databricks-worker';
     else if (attrName.startsWith('literal(')) {
       const litMatch = attrName.match(/literal\(['"]([^'"]*)['"]\)/);
       val = litMatch ? litMatch[1] : '';
     } else {
-      val = attributes[attrName];
+      val = attributes[attrName] !== undefined ? attributes[attrName] : SIM_PARAM_CTX[attrName];
     }
     if (val === undefined || val === null) val = fullMatch;
     for (let i = 1; i < parts.length; i++) {
@@ -6990,10 +7017,20 @@ async function runDualSimulation() {
     const seed2 = buildInitialVirtualEnv(nifi, tables, STATE.manifest);
     dbxEnv = seed2.env;
   }
+  // Build synthetic parameter context and mark parameters resolved
+  SIM_PARAM_CTX = buildParameterContext(STATE.manifest);
+  if (STATE.manifest && STATE.manifest.parameters) {
+    STATE.manifest.parameters.forEach(p => {
+      if (SIM_PARAM_CTX[p.attrName] !== undefined) p.resolved = true;
+    });
+  }
+  // Shared deterministic seed for both engines
+  SIM_SEED_TS = new Date().toISOString();
   // Phase 1: NiFi
   await prog(5, hasVenv ? 'Building processor DAG + VirtualEnv...' : 'Building processor DAG...');
   engL.textContent = 'Running NiFi simulation engine...'; engL.style.color = '#728E9B';
   await prog(15, `Executing ${procCount} processors ${hasVenv ? 'with file I/O, SQL, tokens...' : 'in topological order...'}`);
+  SIM_SEED_COUNTER = 0;
   const nifiSim = simulateEngine('nifi', nifi.processors, nifi.connections, tables, mappings, nifiEnv);
   const nifiExec = nifiSim.results.filter(r => r && r.status === 'ok').length;
   const nifiActions = nifiEnv ? nifiEnv.log.length : 0;
@@ -7001,6 +7038,7 @@ async function runDualSimulation() {
   // Phase 2: Databricks
   engL.textContent = 'Running Databricks simulation engine...'; engL.style.color = 'var(--primary)';
   await prog(55, `Executing ${procCount} processors via PySpark equivalents${hasVenv ? ' + VirtualEnv' : ''}...`);
+  SIM_SEED_COUNTER = 0;
   const dbxSim = simulateEngine('databricks', nifi.processors, nifi.connections, tables, mappings, dbxEnv);
   const dbxExec = dbxSim.results.filter(r => r && r.status === 'ok').length;
   const dbxSkip = dbxSim.results.filter(r => r && r.status === 'skipped').length;
@@ -7370,7 +7408,7 @@ function buildFinalReportJSON() {
             if (!touched.has(f) && f.includes('/data_')) orphaned.push({ resource: f, type: 'file' });
           });
           Object.keys(nEnv.sqlTables).forEach(t => {
-            if (!touched.has(t)) orphaned.push({ resource: t, type: 'sql_table' });
+            if (!touched.has(t) && !t.startsWith('nifi_')) orphaned.push({ resource: t, type: 'sql_table' });
           });
         }
         return orphaned;
