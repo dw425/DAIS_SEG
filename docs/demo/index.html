@@ -267,6 +267,30 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 .sim-split-cell.nifi-side { border-right:1px solid var(--border); }
 @keyframes simPulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 .sim-running { animation:simPulse 1s ease-in-out infinite; }
+/* VirtualEnv */
+.venv-tree { font-family:var(--mono); font-size:0.82rem; line-height:1.7; padding:8px 0; }
+.venv-tree .dir { color:var(--text2); font-weight:600; }
+.venv-tree .file { color:var(--accent); }
+.venv-tree .venv-badge { display:inline-block; background:var(--surface2); border-radius:4px; padding:1px 6px; font-size:0.72rem; margin-left:6px; }
+.action-log { max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; margin:8px 0; }
+.action-log-entry { display:grid; grid-template-columns:100px 1fr 1fr; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border); font-size:0.78rem; align-items:start; }
+.action-log-entry:last-child { border-bottom:none; }
+.action-log-entry .action-type { font-weight:600; font-size:0.75rem; text-transform:uppercase; }
+.action-log-entry .action-type.file-op { color:#21C354; }
+.action-log-entry .action-type.sql-op { color:#6366F1; }
+.action-log-entry .action-type.token-op { color:#EAB308; }
+.action-log-entry .action-type.signal-op { color:#F97316; }
+.action-log-entry .action-type.queue-op { color:#06B6D4; }
+.state-diff { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:12px 0; }
+.state-diff-panel { background:var(--bg2); border-radius:8px; padding:12px; }
+.state-diff-panel h4 { margin:0 0 8px 0; font-size:0.85rem; color:var(--text2); }
+.state-diff-panel pre { font-size:0.72rem; max-height:200px; overflow-y:auto; }
+.venv-summary { display:flex; gap:16px; flex-wrap:wrap; margin:12px 0; }
+.venv-stat { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 16px; text-align:center; flex:1; min-width:100px; }
+.venv-stat .venv-stat-num { font-size:1.5rem; font-weight:700; color:var(--primary); }
+.venv-stat .venv-stat-label { font-size:0.75rem; color:var(--text2); margin-top:4px; }
+.conform-check { padding:4px 0; font-size:0.82rem; }
+.conform-check .check-icon { margin-right:6px; }
 </style>
 </head>
 <body>
@@ -473,7 +497,7 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 // ================================================================
 // STATE
 // ================================================================
-let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null, notebook: null, migrationReport: null, comparison: null, simulation: null, finalReport: null };
+let STATE = { parsed: null, blueprint: null, tables: null, medallion: null, validation: null, notebook: null, migrationReport: null, comparison: null, simulation: null, finalReport: null, virtualEnv: null };
 
 // ================================================================
 // TAB NAVIGATION
@@ -3971,7 +3995,7 @@ function parseInput() {
     alert('No tables found. Check your input format.' + (warnings ? '\n\n' + warnings : ''));
     return;
   }
-  STATE.parsed = parsed; STATE.blueprint = STATE.tables = STATE.medallion = STATE.validation = STATE.notebook = STATE.migrationReport = STATE.comparison = STATE.simulation = STATE.finalReport = null;
+  STATE.parsed = parsed; STATE.blueprint = STATE.tables = STATE.medallion = STATE.validation = STATE.notebook = STATE.migrationReport = STATE.comparison = STATE.simulation = STATE.finalReport = STATE.virtualEnv = null;
   // Lock steps 6+7+8+9+10 until validation completes
   setTabStatus('notebook', 'locked');
   setTabStatus('report', 'locked');
@@ -4164,8 +4188,20 @@ function generateData() {
     STATE.blueprint.tables.forEach(t => { t.row_count = rowOverride; });
   }
   STATE.tables = generateTables(STATE.blueprint, seed);
-  STATE.medallion = STATE.validation = null;
+  STATE.medallion = STATE.validation = STATE.virtualEnv = null;
   const tables = STATE.tables;
+  // Build VirtualEnv if NiFi flow is loaded
+  if (STATE.parsed && STATE.parsed._nifi) {
+    const venvResult = buildInitialVirtualEnv(STATE.parsed._nifi, tables);
+    // Clone for both engines
+    const nifiEnv = venvResult.env;
+    const dbxJson = JSON.stringify({ filesystem: nifiEnv.filesystem, sqlTables: nifiEnv.sqlTables, tokens: nifiEnv.tokens, signals: nifiEnv.signals, counters: nifiEnv.counters });
+    const dbxEnv = new VirtualEnv();
+    const dbxData = JSON.parse(dbxJson);
+    dbxEnv.filesystem = dbxData.filesystem; dbxEnv.sqlTables = dbxData.sqlTables;
+    dbxEnv.tokens = dbxData.tokens; dbxEnv.signals = dbxData.signals; dbxEnv.counters = dbxData.counters;
+    STATE.virtualEnv = { nifi: nifiEnv, dbx: dbxEnv, seedStats: venvResult.seedStats };
+  }
   const totalRows = Object.values(tables).reduce((a,d)=>a+(d[Object.keys(d)[0]]||[]).length,0);
   const totalCols = Object.values(tables).reduce((a,d)=>a+Object.keys(d).length,0);
   let h = '<hr class="divider">';
@@ -4188,7 +4224,20 @@ function generateData() {
     h += expanderHTML(`<strong>${name}</strong> — ${rc.toLocaleString()} rows, ${cols.length} columns`, body, true);
   }
   h += `<div style="margin-top:16px"><button class="btn btn-secondary" onclick="downloadCSV()">Download All (CSV ZIP)</button></div>`;
-  h += `<div class="alert alert-success">Generated <strong>${totalRows.toLocaleString()} rows</strong> across <strong>${Object.keys(tables).length} tables</strong> — proceed to Step 4</div>`;
+  // VirtualEnv summary
+  if (STATE.virtualEnv) {
+    const ss = STATE.virtualEnv.seedStats;
+    const nEnv = STATE.virtualEnv.nifi;
+    h += '<hr class="divider"><h3>Virtual Environment</h3>';
+    h += '<div class="venv-summary">';
+    h += `<div class="venv-stat"><div class="venv-stat-num">${ss.files}</div><div class="venv-stat-label">Files Seeded</div></div>`;
+    h += `<div class="venv-stat"><div class="venv-stat-num">${ss.sqlTables}</div><div class="venv-stat-label">SQL Tables</div></div>`;
+    h += `<div class="venv-stat"><div class="venv-stat-num">${ss.tokens}</div><div class="venv-stat-label">Tokens</div></div>`;
+    h += `<div class="venv-stat"><div class="venv-stat-num">${ss.signals}</div><div class="venv-stat-label">Signals</div></div>`;
+    h += '</div>';
+    h += expanderHTML('<strong>Virtual Environment Resources</strong> (files, tables, tokens, signals)', renderVenvTree(nEnv), false);
+  }
+  h += `<div class="alert alert-success">Generated <strong>${totalRows.toLocaleString()} rows</strong> across <strong>${Object.keys(tables).length} tables</strong>${STATE.virtualEnv ? ` + <strong>${STATE.virtualEnv.seedStats.files} files</strong>, <strong>${STATE.virtualEnv.seedStats.sqlTables} SQL tables</strong>, <strong>${STATE.virtualEnv.seedStats.tokens} tokens</strong> in VirtualEnv` : ''} — proceed to Step 4</div>`;
   document.getElementById('generateResults').innerHTML = h;
   document.getElementById('conformNotReady').classList.add('hidden');
   document.getElementById('conformReady').classList.remove('hidden');
@@ -4247,6 +4296,50 @@ function runConform() {
     const pc = med.results.filter(r=>r.passed).length;
     h += metricsHTML([['Pass Rate',`${pc}/${med.results.length} (${Math.round(pc/Math.max(med.results.length,1)*100)}%)`]]);
   } else h += '<div class="alert alert-info">No quality rules for this schema.</div>';
+  // Action Conformance check (VirtualEnv)
+  if (STATE.virtualEnv && STATE.parsed && STATE.parsed._nifi) {
+    h += '<hr class="divider"><h3>Action Conformance</h3>';
+    h += '<p style="font-size:0.82rem;color:var(--text2)">Verifying VirtualEnv has required resources for each processor type:</p>';
+    const nifi = STATE.parsed._nifi;
+    const env = STATE.virtualEnv.nifi;
+    const checks = [];
+    const typeCount = {};
+    nifi.processors.forEach(p => { typeCount[p.type] = (typeCount[p.type] || 0) + 1; });
+    // Check source processors have input files
+    const sources = nifi.processors.filter(p => p.type === 'GetFile' || p.type === 'FetchFile');
+    const srcDirs = new Set();
+    sources.forEach(p => {
+      const dir = p.properties['Input Directory'] || `/data/input/${(p.group||'default').replace(/\\s+/g,'_').toLowerCase()}`;
+      srcDirs.add(dir);
+    });
+    const srcFiles = Object.keys(env.filesystem).filter(f => ![...srcDirs].every(d => !f.startsWith(d)) && !f.endsWith('/.marker'));
+    checks.push({ label: `Source processors (GetFile/FetchFile: ${sources.length}) have input files`, pass: sources.length === 0 || srcFiles.length > 0, detail: `${srcFiles.length} files available` });
+    // Check SQL processors have tables
+    const sqlProcs = nifi.processors.filter(p => /^Execute(SQL|SQLRecord)/.test(p.type));
+    const sqlTablesAvailable = Object.keys(env.sqlTables).length;
+    checks.push({ label: `SQL processors (ExecuteSQL: ${sqlProcs.length}) have source tables`, pass: sqlProcs.length === 0 || sqlTablesAvailable > 0, detail: `${sqlTablesAvailable} tables seeded` });
+    // Check PutDatabaseRecord has target tables
+    const putDbProcs = nifi.processors.filter(p => p.type === 'PutDatabaseRecord');
+    checks.push({ label: `Database sink processors (PutDatabaseRecord: ${putDbProcs.length}) have target tables`, pass: putDbProcs.length === 0 || sqlTablesAvailable > 0, detail: `${sqlTablesAvailable} tables available` });
+    // Check Wait/Notify have matching signals
+    const waitProcs = nifi.processors.filter(p => p.type === 'Wait');
+    const signalsAvailable = Object.keys(env.signals).length;
+    checks.push({ label: `Wait processors (${waitProcs.length}) have signal definitions`, pass: waitProcs.length === 0 || signalsAvailable > 0, detail: `${signalsAvailable} signals configured` });
+    // Check shell commands have scripts
+    const shellProcs = nifi.processors.filter(p => p.type === 'ExecuteStreamCommand');
+    const scriptFiles = Object.keys(env.filesystem).filter(f => env.filesystem[f].format === 'script');
+    checks.push({ label: `Shell processors (ExecuteStreamCommand: ${shellProcs.length}) have scripts`, pass: shellProcs.length === 0 || scriptFiles.length > 0, detail: `${scriptFiles.length} scripts seeded` });
+    // Check HTTP processors have cached responses
+    const httpProcs = nifi.processors.filter(p => p.type === 'InvokeHTTP');
+    const httpFiles = Object.keys(env.filesystem).filter(f => f.startsWith('/tmp/http_responses/'));
+    checks.push({ label: `HTTP processors (InvokeHTTP: ${httpProcs.length}) have cached responses`, pass: httpProcs.length === 0 || httpFiles.length > 0, detail: `${httpFiles.length} responses cached` });
+    const passCount = checks.filter(c => c.pass).length;
+    checks.forEach(c => {
+      const icon = c.pass ? '<span class="check-icon" style="color:#21C354">&#10003;</span>' : '<span class="check-icon" style="color:#EF4444">&#10007;</span>';
+      h += `<div class="conform-check">${icon} ${c.label} <span style="color:var(--text2);font-size:0.75rem">(${c.detail})</span></div>`;
+    });
+    h += metricsHTML([['Checks Passed', `${passCount}/${checks.length}`], ['Coverage', `${Math.round(passCount/checks.length*100)}%`]]);
+  }
   h += '<div class="alert alert-success">Medallion pipeline complete — proceed to Step 5</div>';
   document.getElementById('conformResults').innerHTML = h;
   document.getElementById('validateNotReady').classList.add('hidden');
@@ -4292,6 +4385,42 @@ function runValidation() {
   h += '<hr class="divider"><h3>Scoring Methodology</h3>';
   h += tableHTML(['Dimension','Weight','Description'],[['Schema Parity','25%','Columns and types match blueprint'],['Data Fidelity','35%','Distributions, null ratios match'],['Quality Compliance','20%','DLT expectations pass rate'],['Pipeline Integrity','20%','Medallion pipeline success']]);
   h += tableHTML(['Level','Threshold','Meaning'],[['🟢 Green','≥ 90%','Ready for production cutover'],['🟡 Amber','≥ 70%','Needs attention'],['🔴 Red','< 70%','Not ready']]);
+  // Resource Validation (VirtualEnv)
+  if (STATE.virtualEnv) {
+    h += '<hr class="divider"><h3>Resource Validation</h3>';
+    h += '<p style="font-size:0.82rem;color:var(--text2)">Validating VirtualEnv resources for simulation readiness:</p>';
+    const env = STATE.virtualEnv.nifi;
+    const resChecks = [];
+    // Validate file contents are parseable
+    let parseableFiles = 0, totalFiles = 0;
+    Object.entries(env.filesystem).forEach(([path, entry]) => {
+      if (entry.format === 'raw' || path.endsWith('/.marker')) return;
+      totalFiles++;
+      try {
+        if (entry.format === 'json') { JSON.parse(entry.content); parseableFiles++; }
+        else if (entry.format === 'csv') { const lines = entry.content.split('\\n').filter(l => l.trim()); if (lines.length > 0) parseableFiles++; }
+        else if (entry.format === 'script') parseableFiles++;
+        else parseableFiles++;
+      } catch(e) {}
+    });
+    resChecks.push({ label: 'File contents parseable', pass: totalFiles === 0 || parseableFiles === totalFiles, detail: `${parseableFiles}/${totalFiles} files` });
+    // Validate SQL table schemas have rows
+    let tablesWithData = 0;
+    Object.values(env.sqlTables).forEach(t => { if (t.rowCount > 0) tablesWithData++; });
+    resChecks.push({ label: 'SQL tables have data', pass: Object.keys(env.sqlTables).length === 0 || tablesWithData === Object.keys(env.sqlTables).length, detail: `${tablesWithData}/${Object.keys(env.sqlTables).length} tables populated` });
+    // Validate token availability
+    const availableTokens = Object.values(env.tokens).filter(t => t.released).length;
+    resChecks.push({ label: 'Tokens available for acquisition', pass: Object.keys(env.tokens).length === 0 || availableTokens > 0, detail: `${availableTokens}/${Object.keys(env.tokens).length} available` });
+    // Validate signal targets are reachable
+    const reachableSignals = Object.values(env.signals).filter(s => s.target > 0).length;
+    resChecks.push({ label: 'Signal targets defined', pass: Object.keys(env.signals).length === 0 || reachableSignals > 0, detail: `${reachableSignals}/${Object.keys(env.signals).length} configured` });
+    const rPass = resChecks.filter(c => c.pass).length;
+    resChecks.forEach(c => {
+      const icon = c.pass ? '<span style="color:#21C354;margin-right:6px">&#10003;</span>' : '<span style="color:#EF4444;margin-right:6px">&#10007;</span>';
+      h += `<div class="conform-check">${icon} ${c.label} <span style="color:var(--text2);font-size:0.75rem">(${c.detail})</span></div>`;
+    });
+    h += metricsHTML([['Resource Checks', `${rPass}/${resChecks.length}`], ['Readiness', `${Math.round(rPass/resChecks.length*100)}%`]]);
+  }
   h += '<div class="alert alert-success">Validation complete! Your synthetic environment is ready.</div>';
   document.getElementById('validateResults').innerHTML = h;
   // Add validation scoring to diagram
@@ -4672,6 +4801,199 @@ function simHash(str) {
   return 'h_' + Math.abs(h).toString(16).padStart(8, '0');
 }
 
+// ================================================================
+// VIRTUALENV — In-memory operating system for simulation
+// ================================================================
+class VirtualEnv {
+  constructor() {
+    this.filesystem = {};   // path -> { content, size, modified, format }
+    this.sqlTables = {};    // "schema.table" -> { columns: {col:[vals]}, rowCount }
+    this.tokens = {};       // name -> { owner, acquired, released }
+    this.signals = {};      // id -> { count, target, released }
+    this.counters = {};     // name -> value
+    this.flowfileQueues = {}; // connId -> [{attributes:{}, content:""}]
+    this.log = [];          // [{tick, processor, action, target, before, after}]
+    this.tick = 0;
+  }
+  _log(proc, action, target, before, after) {
+    this.log.push({ tick: this.tick++, processor: proc, action, target, before, after });
+  }
+  // Filesystem
+  writeFile(proc, path, content, format) {
+    const before = this.filesystem[path] ? { ...this.filesystem[path], content: this.filesystem[path].content.substring(0, 100) } : null;
+    this.filesystem[path] = { content, size: content.length, modified: this.tick, format: format || 'raw' };
+    this._log(proc, 'FILE_WRITE', path, before, { size: content.length, format: format || 'raw' });
+  }
+  readFile(proc, path) {
+    const entry = this.filesystem[path];
+    this._log(proc, 'FILE_READ', path, null, entry ? { size: entry.size, format: entry.format } : null);
+    return entry ? entry.content : null;
+  }
+  moveFile(proc, from, to) {
+    const entry = this.filesystem[from];
+    if (entry) {
+      this.filesystem[to] = { ...entry, modified: this.tick };
+      delete this.filesystem[from];
+      this._log(proc, 'FILE_MOVE', `${from} -> ${to}`, { path: from }, { path: to, size: entry.size });
+    }
+  }
+  deleteFile(proc, path) {
+    const before = this.filesystem[path] ? { size: this.filesystem[path].size } : null;
+    delete this.filesystem[path];
+    this._log(proc, 'FILE_DELETE', path, before, null);
+  }
+  listFiles(proc, dir) {
+    const files = Object.keys(this.filesystem).filter(p => p.startsWith(dir));
+    this._log(proc, 'FILE_LIST', dir, null, { count: files.length });
+    return files;
+  }
+  fileExists(path) { return !!this.filesystem[path]; }
+  // SQL
+  createTable(proc, table, schema) {
+    const columns = {};
+    Object.keys(schema).forEach(c => { columns[c] = []; });
+    this.sqlTables[table] = { columns, rowCount: 0 };
+    this._log(proc, 'SQL_CREATE', table, null, { columns: Object.keys(schema) });
+  }
+  insertRows(proc, table, data) {
+    if (!this.sqlTables[table]) {
+      const columns = {};
+      Object.keys(data).forEach(c => { columns[c] = []; });
+      this.sqlTables[table] = { columns, rowCount: 0 };
+    }
+    const t = this.sqlTables[table];
+    const beforeRC = t.rowCount;
+    Object.keys(data).forEach(c => {
+      if (!t.columns[c]) t.columns[c] = Array(t.rowCount).fill(null);
+      t.columns[c] = t.columns[c].concat(data[c]);
+    });
+    const newRows = data[Object.keys(data)[0]] ? data[Object.keys(data)[0]].length : 0;
+    t.rowCount += newRows;
+    this._log(proc, 'SQL_INSERT', table, { rowCount: beforeRC }, { rowCount: t.rowCount, added: newRows });
+  }
+  queryTable(proc, table, filter) {
+    const t = this.sqlTables[table];
+    this._log(proc, 'SQL_QUERY', table, null, t ? { rowCount: t.rowCount, cols: Object.keys(t.columns).length } : null);
+    return t ? deepCopyColumnar(t.columns) : null;
+  }
+  updateRows(proc, table, setObj, where) {
+    const t = this.sqlTables[table];
+    if (!t) return;
+    const beforeRC = t.rowCount;
+    Object.entries(setObj).forEach(([col, val]) => {
+      if (!t.columns[col]) t.columns[col] = Array(t.rowCount).fill(null);
+      for (let i = 0; i < t.rowCount; i++) t.columns[col][i] = val;
+    });
+    this._log(proc, 'SQL_UPDATE', table, { rowCount: beforeRC }, { rowCount: t.rowCount, set: Object.keys(setObj) });
+  }
+  // Tokens
+  acquireToken(proc, name) {
+    if (!this.tokens[name]) this.tokens[name] = { owner: null, acquired: false, released: true };
+    const before = { ...this.tokens[name] };
+    this.tokens[name] = { owner: proc, acquired: true, released: false };
+    this._log(proc, 'TOKEN_ACQUIRE', name, before, { ...this.tokens[name] });
+  }
+  releaseToken(proc, name) {
+    if (!this.tokens[name]) this.tokens[name] = { owner: null, acquired: false, released: true };
+    const before = { ...this.tokens[name] };
+    this.tokens[name] = { owner: null, acquired: false, released: true };
+    this._log(proc, 'TOKEN_RELEASE', name, before, { ...this.tokens[name] });
+  }
+  // Signals
+  sendSignal(proc, id, count) {
+    if (!this.signals[id]) this.signals[id] = { count: 0, target: 1, released: false };
+    const before = { ...this.signals[id] };
+    this.signals[id].count += (count || 1);
+    if (this.signals[id].count >= this.signals[id].target) this.signals[id].released = true;
+    this._log(proc, 'SIGNAL_SEND', id, before, { ...this.signals[id] });
+  }
+  waitSignal(proc, id, target) {
+    if (!this.signals[id]) this.signals[id] = { count: 0, target: target || 1, released: false };
+    const before = { ...this.signals[id] };
+    const ready = this.signals[id].released || this.signals[id].count >= (target || this.signals[id].target);
+    this._log(proc, 'SIGNAL_WAIT', id, before, { ready, ...this.signals[id] });
+    return ready;
+  }
+  // Counters
+  incrementCounter(proc, name, delta) {
+    if (!this.counters[name]) this.counters[name] = 0;
+    const before = this.counters[name];
+    this.counters[name] += (delta || 1);
+    this._log(proc, 'COUNTER_INC', name, { value: before }, { value: this.counters[name] });
+  }
+  // FlowFile queues
+  enqueue(proc, connId, flowfile) {
+    if (!this.flowfileQueues[connId]) this.flowfileQueues[connId] = [];
+    this.flowfileQueues[connId].push(flowfile);
+    this._log(proc, 'QUEUE_ENQUEUE', connId, null, { queueSize: this.flowfileQueues[connId].length });
+  }
+  dequeue(proc, connId) {
+    if (!this.flowfileQueues[connId] || !this.flowfileQueues[connId].length) return null;
+    const ff = this.flowfileQueues[connId].shift();
+    this._log(proc, 'QUEUE_DEQUEUE', connId, { queueSize: this.flowfileQueues[connId].length + 1 }, { queueSize: this.flowfileQueues[connId].length });
+    return ff;
+  }
+  queueSize(connId) { return this.flowfileQueues[connId] ? this.flowfileQueues[connId].length : 0; }
+  // Snapshots
+  snapshot() {
+    return {
+      filesystem: Object.fromEntries(Object.entries(this.filesystem).map(([k, v]) => [k, { size: v.size, format: v.format, modified: v.modified }])),
+      sqlTables: Object.fromEntries(Object.entries(this.sqlTables).map(([k, v]) => [k, { rowCount: v.rowCount, cols: Object.keys(v.columns) }])),
+      tokens: JSON.parse(JSON.stringify(this.tokens)),
+      signals: JSON.parse(JSON.stringify(this.signals)),
+      counters: { ...this.counters },
+      tick: this.tick
+    };
+  }
+  diffSnapshots(before, after) {
+    const diffs = [];
+    // Filesystem diffs
+    const allPaths = new Set([...Object.keys(before.filesystem), ...Object.keys(after.filesystem)]);
+    allPaths.forEach(p => {
+      const b = before.filesystem[p], a = after.filesystem[p];
+      if (!b && a) diffs.push({ type: 'FILE', action: 'CREATED', target: p, after: a });
+      else if (b && !a) diffs.push({ type: 'FILE', action: 'DELETED', target: p, before: b });
+      else if (b && a && (b.size !== a.size || b.modified !== a.modified)) diffs.push({ type: 'FILE', action: 'MODIFIED', target: p, before: b, after: a });
+    });
+    // SQL diffs
+    const allTables = new Set([...Object.keys(before.sqlTables), ...Object.keys(after.sqlTables)]);
+    allTables.forEach(t => {
+      const b = before.sqlTables[t], a = after.sqlTables[t];
+      if (!b && a) diffs.push({ type: 'SQL', action: 'CREATED', target: t, after: a });
+      else if (b && !a) diffs.push({ type: 'SQL', action: 'DELETED', target: t, before: b });
+      else if (b && a && b.rowCount !== a.rowCount) diffs.push({ type: 'SQL', action: 'MODIFIED', target: t, before: b, after: a });
+    });
+    // Token diffs
+    const allTokens = new Set([...Object.keys(before.tokens), ...Object.keys(after.tokens)]);
+    allTokens.forEach(t => {
+      const b = before.tokens[t], a = after.tokens[t];
+      if (JSON.stringify(b) !== JSON.stringify(a)) diffs.push({ type: 'TOKEN', action: 'CHANGED', target: t, before: b, after: a });
+    });
+    // Signal diffs
+    const allSignals = new Set([...Object.keys(before.signals), ...Object.keys(after.signals)]);
+    allSignals.forEach(s => {
+      const b = before.signals[s], a = after.signals[s];
+      if (JSON.stringify(b) !== JSON.stringify(a)) diffs.push({ type: 'SIGNAL', action: 'CHANGED', target: s, before: b, after: a });
+    });
+    return diffs;
+  }
+  getProcessorActions(procName) {
+    return this.log.filter(e => e.processor === procName);
+  }
+  getSummary() {
+    return {
+      files: Object.keys(this.filesystem).length,
+      totalFileSize: Object.values(this.filesystem).reduce((s, f) => s + f.size, 0),
+      sqlTables: Object.keys(this.sqlTables).length,
+      totalSqlRows: Object.values(this.sqlTables).reduce((s, t) => s + t.rowCount, 0),
+      tokens: Object.keys(this.tokens).length,
+      signals: Object.keys(this.signals).length,
+      counters: Object.keys(this.counters).length,
+      totalActions: this.log.length
+    };
+  }
+}
+
 // Generate synthetic data pool for a process group
 function generateGroupDataPool(groupName, processors, tables) {
   // Try to find a matching table from Step 3
@@ -4702,6 +5024,226 @@ function generateGroupDataPool(groupName, processors, tables) {
   });
   sqlCols.forEach(cn => { if (!pool[cn]) pool[cn] = Array.from({length:rowCount}, (_,i) => `${cn}_val_${i}`); });
   return pool;
+}
+
+// ================================================================
+// VIRTUALENV SEED BUILDER
+// ================================================================
+function inferColumnType(name) {
+  const n = name.toLowerCase();
+  if (/^(id|_id|record_id|pk)$/.test(n) || n.endsWith('_id')) return 'int';
+  if (/date|time|timestamp|created|modified|updated/.test(n)) return 'date';
+  if (/count|num|qty|quantity|amount|total|size|length/.test(n)) return 'int';
+  if (/price|cost|rate|pct|percent|ratio|score|weight/.test(n)) return 'float';
+  if (/flag|is_|has_|enabled|active|deleted|bool/.test(n)) return 'bool';
+  return 'string';
+}
+
+function generateSyntheticValue(colName, rowIdx, colType) {
+  switch (colType) {
+    case 'int': return rowIdx + 1;
+    case 'float': return Math.round((rowIdx * 1.73 + 0.5) * 100) / 100;
+    case 'date': return `2026-01-${String((rowIdx % 28) + 1).padStart(2, '0')}`;
+    case 'bool': return rowIdx % 3 !== 0;
+    default: return `${colName}_val_${rowIdx}`;
+  }
+}
+
+function generateSyntheticFileContent(columns, rowCount, format) {
+  const rows = [];
+  for (let i = 0; i < rowCount; i++) {
+    const row = {};
+    columns.forEach(col => {
+      row[col] = generateSyntheticValue(col, i, inferColumnType(col));
+    });
+    rows.push(row);
+  }
+  if (format === 'json') return JSON.stringify(rows, null, 2);
+  if (format === 'xml') {
+    let xml = '<?xml version="1.0"?>\n<records>\n';
+    rows.forEach(r => { xml += '  <record>\n'; Object.entries(r).forEach(([k, v]) => { xml += `    <${k}>${v}</${k}>\n`; }); xml += '  </record>\n'; });
+    return xml + '</records>';
+  }
+  // Default: CSV
+  const header = columns.join(',');
+  const lines = rows.map(r => columns.map(c => r[c]).join(','));
+  return header + '\n' + lines.join('\n');
+}
+
+function buildInitialVirtualEnv(nifiData, tables) {
+  const env = new VirtualEnv();
+  const procs = nifiData.processors;
+  const conns = nifiData.connections;
+  // Discover columns from existing tables
+  const allCols = new Set();
+  if (tables) Object.values(tables).forEach(t => Object.keys(t).forEach(c => allCols.add(c)));
+  const defaultCols = allCols.size > 0 ? [...allCols].slice(0, 8) : ['record_id', 'file_name', 'load_date', 'status', 'value', 'record_count'];
+
+  // 1. Filesystem seeding from processor properties
+  procs.forEach(p => {
+    const props = p.properties || {};
+    const grp = (p.group || 'default').replace(/\s+/g, '_').toLowerCase();
+    if (p.type === 'GetFile') {
+      const dir = props['Input Directory'] || props['input-directory'] || `/data/input/${grp}`;
+      const fmt = (props['File Filter'] || '').includes('.json') ? 'json' : 'csv';
+      const cols = defaultCols.length > 0 ? defaultCols : ['id', 'value', 'timestamp'];
+      for (let i = 0; i < 3; i++) {
+        const fname = `${grp}_${p.name.replace(/\s+/g,'_').toLowerCase()}_${i}.${fmt}`;
+        const content = generateSyntheticFileContent(cols, 10 + i * 5, fmt);
+        env.writeFile('SEED', `${dir}/${fname}`, content, fmt);
+      }
+    }
+    if (p.type === 'FetchFile') {
+      const fname = props['filename'] || props['File to Fetch'] || `${grp}_fetch_data.csv`;
+      const dir = props['Input Directory'] || `/data/fetch/${grp}`;
+      const content = generateSyntheticFileContent(defaultCols, 15, 'csv');
+      env.writeFile('SEED', `${dir}/${fname}`, content, 'csv');
+    }
+    if (p.type === 'PutFile' || p.type === 'PutSFTP') {
+      const dir = props['Directory'] || props['Remote Path'] || props['Hostname'] || `/data/output/${grp}`;
+      // Create target directory marker
+      env.writeFile('SEED', `${dir}/.marker`, '', 'raw');
+    }
+    if (p.type === 'ExecuteStreamCommand') {
+      const cmd = props['Command'] || props['command'] || '';
+      const args = props['Command Arguments'] || props['command-arguments'] || '';
+      if (cmd) {
+        const scriptContent = `#!/bin/bash\n# Synthetic script for ${p.name}\n# Original: ${cmd} ${args}\necho "Execution complete"\nexit 0`;
+        env.writeFile('SEED', cmd.startsWith('/') ? cmd : `/usr/local/bin/${cmd}`, scriptContent, 'script');
+      }
+      // Detect HDFS operations
+      if (cmd === 'hdfs' || args.includes('dfs ')) {
+        const pathMatch = args.match(/\/([\w/._-]+)/g);
+        if (pathMatch) pathMatch.forEach(path => {
+          if (!env.fileExists(path)) {
+            env.writeFile('SEED', path, generateSyntheticFileContent(defaultCols, 8, 'csv'), 'csv');
+          }
+        });
+      }
+    }
+    if (p.type === 'GenerateFlowFile') {
+      const customText = props['Custom Text'] || props['custom-text'] || '';
+      if (customText) {
+        env.writeFile('SEED', `/data/generated/${p.name.replace(/\s+/g,'_')}.dat`, customText, 'raw');
+      }
+    }
+    if (p.type === 'InvokeHTTP') {
+      const url = props['Remote URL'] || props['HTTP URL'] || 'http://api.example.com/data';
+      const response = JSON.stringify({ status: 'ok', data: Array.from({length: 5}, (_, i) => ({ id: i + 1, value: `response_${i}` })) });
+      env.writeFile('SEED', `/tmp/http_responses/${p.name.replace(/\s+/g,'_')}.json`, response, 'json');
+    }
+  });
+
+  // 2. SQL table seeding
+  procs.forEach(p => {
+    const props = p.properties || {};
+    if (p.type === 'ExecuteSQL' || p.type === 'ExecuteSQLRecord') {
+      const sql = props['SQL select query'] || props['sql-select-query'] || props['SQL Pre-Query'] || '';
+      const tableMatch = sql.match(/(?:FROM|JOIN)\s+([a-zA-Z_][\w.]*)/gi);
+      if (tableMatch) {
+        tableMatch.forEach(m => {
+          const tName = m.replace(/^(FROM|JOIN)\s+/i, '').trim();
+          if (!env.sqlTables[tName]) {
+            const cols = {};
+            defaultCols.forEach(c => {
+              cols[c] = Array.from({length: 20}, (_, i) => generateSyntheticValue(c, i, inferColumnType(c)));
+            });
+            env.insertRows('SEED', tName, cols);
+          }
+        });
+      }
+    }
+    if (p.type === 'PutDatabaseRecord') {
+      const tName = props['Table Name'] || props['table-name'] || `${(p.group || 'default').replace(/\s+/g,'_').toLowerCase()}_target`;
+      if (!env.sqlTables[tName]) {
+        env.createTable('SEED', tName, Object.fromEntries(defaultCols.map(c => [c, inferColumnType(c)])));
+      }
+    }
+    if (p.type === 'LookupRecord' || p.type === 'LookupAttribute') {
+      const lookupTable = props['lookup-table'] || props['Lookup Table'] || `lookup_${p.name.replace(/\s+/g,'_').toLowerCase()}`;
+      if (!env.sqlTables[lookupTable]) {
+        const cols = { lookup_key: Array.from({length: 10}, (_, i) => `key_${i}`), lookup_value: Array.from({length: 10}, (_, i) => `val_${i}`) };
+        env.insertRows('SEED', lookupTable, cols);
+      }
+    }
+  });
+  // Also seed from STATE.tables
+  if (tables) {
+    Object.entries(tables).forEach(([tName, data]) => {
+      if (!env.sqlTables[tName] && data && Object.keys(data).length) {
+        env.insertRows('SEED', tName, deepCopyColumnar(data));
+      }
+    });
+  }
+
+  // 3. Token seeding (Wait/ControlRate)
+  procs.forEach(p => {
+    const props = p.properties || {};
+    if (p.type === 'Wait') {
+      const sigName = props['Signal Counter Name'] || props['Release Signal Identifier'] || `wait_${p.name.replace(/\s+/g,'_').toLowerCase()}`;
+      const target = parseInt(props['Target Signal Count']) || 1;
+      env.signals[sigName] = { count: 0, target, released: false };
+      const tokenName = props['Distributed Cache Service'] || sigName + '_token';
+      env.tokens[tokenName] = { owner: null, acquired: false, released: true };
+    }
+    if (p.type === 'Notify') {
+      const sigName = props['Signal Counter Name'] || props['Release Signal Identifier'] || `notify_${p.name.replace(/\s+/g,'_').toLowerCase()}`;
+      if (!env.signals[sigName]) env.signals[sigName] = { count: 0, target: 1, released: false };
+    }
+    if (p.type === 'ControlRate') {
+      const tokenName = `rate_${p.name.replace(/\s+/g,'_').toLowerCase()}`;
+      env.tokens[tokenName] = { owner: null, acquired: false, released: true };
+    }
+  });
+
+  // Clear SEED entries from log (they're infrastructure, not simulation)
+  const seedLogCount = env.log.length;
+  env.log = [];
+  env.tick = 0;
+
+  return { env, seedStats: { files: Object.keys(env.filesystem).length, sqlTables: Object.keys(env.sqlTables).length, tokens: Object.keys(env.tokens).length, signals: Object.keys(env.signals).length, seedActions: seedLogCount } };
+}
+
+function renderVenvTree(env) {
+  let h = '<div class="venv-tree">';
+  // Files
+  const paths = Object.keys(env.filesystem).sort();
+  const dirs = new Set();
+  paths.forEach(p => { const parts = p.split('/'); for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/')); });
+  const sortedDirs = [...dirs].sort();
+  sortedDirs.forEach(d => {
+    const depth = d.split('/').length - 1;
+    const dirFiles = paths.filter(p => p.startsWith(d + '/') && p.split('/').length === d.split('/').length + 1);
+    if (dirFiles.length) {
+      h += `<div style="padding-left:${depth * 16}px"><span class="dir">${d.split('/').pop()}/</span> <span class="venv-badge">${dirFiles.length} files</span></div>`;
+      dirFiles.forEach(f => {
+        const entry = env.filesystem[f];
+        h += `<div style="padding-left:${(depth + 1) * 16}px"><span class="file">${f.split('/').pop()}</span> <span class="venv-badge">${entry.size}B ${entry.format}</span></div>`;
+      });
+    }
+  });
+  // SQL tables
+  if (Object.keys(env.sqlTables).length) {
+    h += '<div style="margin-top:8px"><span class="dir">SQL Tables</span></div>';
+    Object.entries(env.sqlTables).forEach(([name, t]) => {
+      h += `<div style="padding-left:16px"><span class="file">${name}</span> <span class="venv-badge">${t.rowCount} rows, ${Object.keys(t.columns).length} cols</span></div>`;
+    });
+  }
+  // Tokens & Signals
+  if (Object.keys(env.tokens).length) {
+    h += '<div style="margin-top:8px"><span class="dir">Tokens</span></div>';
+    Object.entries(env.tokens).forEach(([name, t]) => {
+      h += `<div style="padding-left:16px"><span class="file">${name}</span> <span class="venv-badge">${t.released ? 'available' : 'held'}</span></div>`;
+    });
+  }
+  if (Object.keys(env.signals).length) {
+    h += '<div style="margin-top:8px"><span class="dir">Signals</span></div>';
+    Object.entries(env.signals).forEach(([name, s]) => {
+      h += `<div style="padding-left:16px"><span class="file">${name}</span> <span class="venv-badge">${s.count}/${s.target} ${s.released ? 'released' : 'waiting'}</span></div>`;
+    });
+  }
+  h += '</div>';
+  return h;
 }
 
 const PROCESSOR_SIM = {
@@ -4772,70 +5314,451 @@ const PROCESSOR_SIM = {
   }
 };
 
-function simulateEngine(engineName, processors, connections, tables, mappings) {
+// ================================================================
+// PROCESSOR_SIM_V2 — VirtualEnv-based simulation per processor type
+// ================================================================
+const PROCESSOR_SIM_V2 = {
+  GetFile: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const dir = isDbx ? `/Volumes/input/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Input Directory'] || `/data/input/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+    const files = env.listFiles(proc.name, dir);
+    const outFFs = [];
+    files.forEach(path => {
+      if (path.endsWith('/.marker')) return;
+      const content = env.readFile(proc.name, path);
+      if (content !== null) {
+        outFFs.push({ attributes: { filename: path.split('/').pop(), path, 'absolute.path': dir, uuid: 'ff_' + simHash(path) }, content });
+        if (props['Keep Source File'] !== 'true') env.deleteFile(proc.name, path);
+      }
+    });
+    if (!outFFs.length) outFFs.push({ attributes: { filename: 'empty.dat', path: dir }, content: '' });
+    return outFFs;
+  },
+  FetchFile: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    return inputFF.map(ff => {
+      const fname = ff.attributes.filename || props['filename'] || props['File to Fetch'] || 'data.csv';
+      const dir = isDbx ? `/Volumes/fetch/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Input Directory'] || `/data/fetch/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+      const content = env.readFile(proc.name, `${dir}/${fname}`) || ff.content;
+      return { attributes: { ...ff.attributes, 'fetch.status': 'ok' }, content };
+    });
+  },
+  PutFile: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const dir = isDbx ? `/Volumes/output/${proc.group.replace(/\s+/g,'_').toLowerCase()}` : (props['Directory'] || `/data/output/${proc.group.replace(/\s+/g,'_').toLowerCase()}`);
+    return inputFF.map(ff => {
+      const fname = ff.attributes.filename || `output_${simHash(ff.content.substring(0, 20))}.dat`;
+      env.writeFile(proc.name, `${dir}/${fname}`, ff.content, ff.attributes.format || 'raw');
+      return { attributes: { ...ff.attributes, 'put.status': 'ok', 'put.path': `${dir}/${fname}` }, content: ff.content };
+    });
+  },
+  PutSFTP: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const host = props['Hostname'] || props['hostname'] || 'sftp.example.com';
+    const dir = isDbx ? `/Volumes/sftp/${host}` : `/sftp/${host}/${props['Remote Path'] || 'upload'}`;
+    return inputFF.map(ff => {
+      const fname = ff.attributes.filename || 'uploaded.dat';
+      env.writeFile(proc.name, `${dir}/${fname}`, ff.content, 'raw');
+      return { attributes: { ...ff.attributes, 'sftp.status': 'ok', 'sftp.path': `${dir}/${fname}` }, content: ff.content };
+    });
+  },
+  ExecuteSQL: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const sql = props['SQL select query'] || props['sql-select-query'] || '';
+    const tableMatch = sql.match(/(?:FROM|JOIN)\s+([a-zA-Z_][\w.]*)/i);
+    const tName = tableMatch ? tableMatch[1] : null;
+    let data = tName ? env.queryTable(proc.name, tName) : null;
+    if (!data) { const tables = Object.keys(env.sqlTables); data = tables.length ? env.queryTable(proc.name, tables[0]) : null; }
+    const content = data ? JSON.stringify(Object.keys(data).reduce((arr, col) => { data[col].forEach((v, i) => { if (!arr[i]) arr[i] = {}; arr[i][col] = v; }); return arr; }, [])) : '[]';
+    return inputFF.map(ff => ({ attributes: { ...ff.attributes, 'executesql.row.count': data ? (data[Object.keys(data)[0]] || []).length.toString() : '0', 'sql.table': tName || '' }, content }));
+  },
+  PutDatabaseRecord: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const tName = props['Table Name'] || props['table-name'] || `${proc.group.replace(/\s+/g,'_').toLowerCase()}_target`;
+    return inputFF.map(ff => {
+      let data = {};
+      try {
+        const rows = JSON.parse(ff.content);
+        if (Array.isArray(rows) && rows.length) {
+          Object.keys(rows[0]).forEach(c => { data[c] = rows.map(r => r[c]); });
+        }
+      } catch(e) {
+        // Try CSV parse
+        const lines = ff.content.split('\n').filter(l => l.trim());
+        if (lines.length > 1) {
+          const headers = lines[0].split(',');
+          headers.forEach(h => { data[h.trim()] = []; });
+          lines.slice(1).forEach(line => {
+            const vals = line.split(',');
+            headers.forEach((h, i) => { data[h.trim()].push(vals[i] ? vals[i].trim() : null); });
+          });
+        }
+      }
+      if (Object.keys(data).length) env.insertRows(proc.name, tName, data);
+      return { attributes: { ...ff.attributes, 'db.write.status': 'ok', 'db.table': tName, 'db.rows': Object.keys(data).length ? data[Object.keys(data)[0]].length.toString() : '0' }, content: ff.content };
+    });
+  },
+  ExecuteStreamCommand: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const cmd = props['Command'] || '';
+    const args = props['Command Arguments'] || props['command-arguments'] || '';
+    // Read script if exists
+    const scriptPath = cmd.startsWith('/') ? cmd : `/usr/local/bin/${cmd}`;
+    env.readFile(proc.name, scriptPath);
+    // Detect patterns and simulate
+    if (cmd === 'hdfs' || args.includes('dfs ')) {
+      const pathArgs = args.match(/\/([\w/._-]+)/g) || [];
+      if (args.includes('-cp') || args.includes('-mv')) {
+        if (pathArgs.length >= 2) {
+          const src = pathArgs[pathArgs.length - 2], dst = pathArgs[pathArgs.length - 1];
+          const srcContent = env.readFile(proc.name, src);
+          if (srcContent) env.writeFile(proc.name, dst, srcContent, 'csv');
+          if (args.includes('-mv')) env.deleteFile(proc.name, src);
+        }
+      } else if (args.includes('-rm')) {
+        pathArgs.forEach(p => env.deleteFile(proc.name, p));
+      }
+    } else if (cmd.includes('impala') || args.includes('REFRESH') || args.includes('INVALIDATE')) {
+      if (isDbx) {
+        // Databricks: spark.sql("REFRESH TABLE ...")
+        const tableMatch = args.match(/(?:REFRESH|INVALIDATE\s+METADATA)\s+(\S+)/i);
+        if (tableMatch && env.sqlTables[tableMatch[1]]) env.queryTable(proc.name, tableMatch[1]);
+      }
+    } else if (cmd.includes('kinit')) {
+      env.acquireToken(proc.name, 'kerberos_' + proc.name.replace(/\s+/g,'_'));
+    }
+    // Write command output
+    const outputContent = `exit_code=0\nstdout=Command completed: ${cmd} ${args}\n`;
+    env.writeFile(proc.name, `/tmp/cmd_output/${proc.name.replace(/\s+/g,'_')}.out`, outputContent, 'raw');
+    return inputFF.map(ff => ({ attributes: { ...ff.attributes, 'execution.status': '0', 'execution.command': cmd }, content: ff.content || outputContent }));
+  },
+  RouteOnAttribute: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const routeProps = {};
+    Object.entries(props).forEach(([k, v]) => { if (k !== 'Routing Strategy') routeProps[k] = v; });
+    const routes = Object.keys(routeProps);
+    if (!routes.length) return inputFF;
+    // Simulate routing: distribute FFs across routes
+    return inputFF.map((ff, i) => {
+      const routeName = routes[i % routes.length];
+      return { attributes: { ...ff.attributes, 'route': routeName, 'route.expression': routeProps[routeName] || '' }, content: ff.content };
+    });
+  },
+  UpdateAttribute: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    return inputFF.map(ff => {
+      const newAttrs = { ...ff.attributes };
+      Object.entries(props).forEach(([k, v]) => {
+        if (k === 'Delete Attributes Expression' || k === 'Store State') return;
+        // Evaluate simple NiFi expressions
+        let val = v;
+        if (val.includes('${now()')) val = new Date().toISOString();
+        else if (val.includes('${')) val = val.replace(/\$\{([^}]+)\}/g, (_, expr) => ff.attributes[expr.split(':')[0]] || val);
+        newAttrs[k] = val;
+      });
+      return { attributes: newAttrs, content: ff.content };
+    });
+  },
+  ReplaceText: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const search = props['Search Value'] || props['search-value'] || '';
+    const replace = props['Replacement Value'] || props['replacement-value'] || '';
+    const strategy = props['Replacement Strategy'] || 'Regex Replace';
+    return inputFF.map(ff => {
+      let content = ff.content;
+      if (search && strategy === 'Literal Replace') content = content.split(search).join(replace);
+      else if (search) { try { content = content.replace(new RegExp(search, 'g'), replace); } catch(e) {} }
+      else if (replace) content = replace; // Entire content replacement
+      return { attributes: { ...ff.attributes, 'replace.status': 'ok' }, content };
+    });
+  },
+  MergeContent: function(env, proc, inputFF, isDbx) {
+    if (inputFF.length <= 1) return inputFF;
+    const merged = inputFF.map(ff => ff.content).join('\n');
+    return [{ attributes: { ...inputFF[0].attributes, 'merge.count': inputFF.length.toString(), 'merge.bin.age': '0' }, content: merged }];
+  },
+  SplitContent: function(env, proc, inputFF, isDbx) {
+    const outFFs = [];
+    inputFF.forEach(ff => {
+      const lines = ff.content.split('\n').filter(l => l.trim());
+      if (lines.length <= 1) { outFFs.push(ff); return; }
+      // Split into chunks (header + groups of lines)
+      const header = lines[0];
+      const chunkSize = Math.max(1, Math.ceil((lines.length - 1) / 3));
+      for (let i = 1; i < lines.length; i += chunkSize) {
+        const chunk = lines.slice(i, i + chunkSize);
+        outFFs.push({ attributes: { ...ff.attributes, 'split.index': Math.floor((i - 1) / chunkSize).toString(), 'fragment.count': Math.ceil((lines.length - 1) / chunkSize).toString() }, content: header + '\n' + chunk.join('\n') });
+      }
+    });
+    return outFFs.length ? outFFs : inputFF;
+  },
+  ConvertRecord: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const targetFormat = (props['output-format'] || props['Record Writer'] || '').toLowerCase().includes('json') ? 'json' : 'csv';
+    return inputFF.map(ff => {
+      let content = ff.content;
+      try {
+        // Try parsing as JSON -> convert to CSV or vice versa
+        const parsed = JSON.parse(ff.content);
+        if (Array.isArray(parsed) && parsed.length && targetFormat === 'csv') {
+          const cols = Object.keys(parsed[0]);
+          content = cols.join(',') + '\n' + parsed.map(r => cols.map(c => r[c] ?? '').join(',')).join('\n');
+        }
+      } catch(e) {
+        // Try CSV -> JSON
+        if (targetFormat === 'json') {
+          const lines = ff.content.split('\n').filter(l => l.trim());
+          if (lines.length > 1) {
+            const headers = lines[0].split(',').map(h => h.trim());
+            const rows = lines.slice(1).map(l => { const vals = l.split(','); const obj = {}; headers.forEach((h, i) => { obj[h] = vals[i] ? vals[i].trim() : null; }); return obj; });
+            content = JSON.stringify(rows);
+          }
+        }
+      }
+      return { attributes: { ...ff.attributes, 'convert.format': targetFormat }, content };
+    });
+  },
+  EvaluateJsonPath: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    return inputFF.map(ff => {
+      const newAttrs = { ...ff.attributes };
+      try {
+        const data = JSON.parse(ff.content);
+        const target = Array.isArray(data) ? data[0] : data;
+        if (target) {
+          Object.entries(props).forEach(([k, v]) => {
+            if (k === 'Destination' || k === 'Return Type' || k === 'Null Value Representation') return;
+            // Simple JSONPath: $.field
+            const field = v.replace(/^\$\.?/, '');
+            if (field && target[field] !== undefined) newAttrs[k] = String(target[field]);
+          });
+        }
+      } catch(e) {}
+      return { attributes: newAttrs, content: ff.content };
+    });
+  },
+  LogMessage: function(env, proc, inputFF, isDbx) {
+    env.incrementCounter(proc.name, `log_${proc.name.replace(/\s+/g,'_')}`, inputFF.length);
+    return inputFF; // passthrough
+  },
+  Wait: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const sigName = props['Signal Counter Name'] || props['Release Signal Identifier'] || `wait_${proc.name.replace(/\s+/g,'_').toLowerCase()}`;
+    const target = parseInt(props['Target Signal Count']) || 1;
+    // In simulation, signals are pre-released by Notify processors (via topo order)
+    // Force release for simulation purposes
+    if (!env.signals[sigName]) env.signals[sigName] = { count: 0, target, released: false };
+    env.signals[sigName].count = env.signals[sigName].target; // simulate signal received
+    env.signals[sigName].released = true;
+    env.waitSignal(proc.name, sigName, target);
+    return inputFF;
+  },
+  Notify: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const sigName = props['Signal Counter Name'] || props['Release Signal Identifier'] || `notify_${proc.name.replace(/\s+/g,'_').toLowerCase()}`;
+    env.sendSignal(proc.name, sigName, inputFF.length || 1);
+    return inputFF;
+  },
+  ControlRate: function(env, proc, inputFF, isDbx) {
+    const tokenName = `rate_${proc.name.replace(/\s+/g,'_').toLowerCase()}`;
+    env.acquireToken(proc.name, tokenName);
+    env.releaseToken(proc.name, tokenName);
+    return inputFF;
+  },
+  GenerateFlowFile: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const content = props['Custom Text'] || props['custom-text'] || 'generated-content';
+    const size = parseInt(props['File Size']) || content.length;
+    const batchSize = parseInt(props['Batch Size']) || 1;
+    const outFFs = [];
+    for (let i = 0; i < batchSize; i++) {
+      outFFs.push({ attributes: { filename: `generated_${proc.name.replace(/\s+/g,'_')}_${i}.dat`, 'mime.type': props['Mime Type'] || 'application/octet-stream', uuid: 'ff_gen_' + simHash(proc.name + i) }, content });
+    }
+    return outFFs;
+  },
+  InvokeHTTP: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const url = props['Remote URL'] || props['HTTP URL'] || 'http://api.example.com/data';
+    // Read cached response from seed
+    const respPath = `/tmp/http_responses/${proc.name.replace(/\s+/g,'_')}.json`;
+    const responseContent = env.readFile(proc.name, respPath) || '{"status":"ok"}';
+    return inputFF.map(ff => ({ attributes: { ...ff.attributes, 'invokehttp.status.code': '200', 'invokehttp.status.message': 'OK', 'invokehttp.request.url': url }, content: responseContent }));
+  },
+  LookupAttribute: function(env, proc, inputFF, isDbx) {
+    const props = proc.properties || {};
+    const lookupTable = props['lookup-table'] || props['Lookup Table'] || `lookup_${proc.name.replace(/\s+/g,'_').toLowerCase()}`;
+    const data = env.queryTable(proc.name, lookupTable);
+    return inputFF.map(ff => {
+      const newAttrs = { ...ff.attributes, 'lookup.found': 'true' };
+      if (data) {
+        Object.keys(data).forEach(c => { if (data[c] && data[c][0] !== undefined) newAttrs['lookup.' + c] = String(data[c][0]); });
+      }
+      return { attributes: newAttrs, content: ff.content };
+    });
+  }
+};
+
+// Dispatch to PROCESSOR_SIM_V2 by type, fallback by role
+function simV2Dispatch(env, proc, inputFF, isDbx) {
+  const fn = PROCESSOR_SIM_V2[proc.type];
+  if (fn) return fn(env, proc, inputFF, isDbx);
+  // Role-based fallback
+  const role = classifyNiFiProcessor(proc.type);
+  if (role === 'source') return PROCESSOR_SIM_V2.GetFile(env, proc, inputFF, isDbx);
+  if (role === 'sink') return PROCESSOR_SIM_V2.PutFile(env, proc, inputFF, isDbx);
+  if (role === 'route') return PROCESSOR_SIM_V2.RouteOnAttribute(env, proc, inputFF, isDbx);
+  if (role === 'transform') return PROCESSOR_SIM_V2.ReplaceText(env, proc, inputFF, isDbx);
+  if (role === 'process') return PROCESSOR_SIM_V2.ExecuteSQL(env, proc, inputFF, isDbx);
+  // Default: passthrough
+  return inputFF;
+}
+
+// ================================================================
+// FLOWFILE <-> COLUMNAR BRIDGE
+// ================================================================
+function flowfilesToColumnar(flowfiles) {
+  if (!flowfiles || !flowfiles.length) return {};
+  // Try to parse content as structured data
+  const first = flowfiles[0];
+  if (first.content) {
+    try {
+      const parsed = JSON.parse(first.content);
+      if (Array.isArray(parsed) && parsed.length) {
+        const cols = {};
+        Object.keys(parsed[0]).forEach(c => { cols[c] = parsed.map(r => r[c]); });
+        return cols;
+      }
+    } catch(e) {}
+    // Try CSV
+    const lines = first.content.split('\n').filter(l => l.trim());
+    if (lines.length > 1) {
+      const headers = lines[0].split(',').map(h => h.trim());
+      if (headers.length > 1 && headers.every(h => h.length > 0)) {
+        const cols = {};
+        headers.forEach(h => { cols[h] = []; });
+        // Combine all flowfiles
+        flowfiles.forEach(ff => {
+          const flines = ff.content.split('\n').filter(l => l.trim());
+          flines.slice(1).forEach(line => {
+            const vals = line.split(',');
+            headers.forEach((h, i) => { cols[h].push(vals[i] ? vals[i].trim() : null); });
+          });
+        });
+        return cols;
+      }
+    }
+  }
+  // Fallback: attributes-based columnar
+  const cols = { _ff_index: [], _ff_filename: [], _ff_content_size: [] };
+  const attrKeys = new Set();
+  flowfiles.forEach(ff => Object.keys(ff.attributes).forEach(k => attrKeys.add(k)));
+  attrKeys.forEach(k => { cols['attr_' + k] = []; });
+  flowfiles.forEach((ff, i) => {
+    cols._ff_index.push(i);
+    cols._ff_filename.push(ff.attributes.filename || `ff_${i}`);
+    cols._ff_content_size.push(ff.content ? ff.content.length : 0);
+    attrKeys.forEach(k => { cols['attr_' + k].push(ff.attributes[k] || null); });
+  });
+  return cols;
+}
+
+function columnarToFlowfiles(columnar, format) {
+  if (!columnar || !Object.keys(columnar).length) return [{ attributes: {}, content: '' }];
+  const cols = Object.keys(columnar);
+  const rc = columnar[cols[0]] ? columnar[cols[0]].length : 0;
+  if (!rc) return [{ attributes: {}, content: '' }];
+  const rows = [];
+  for (let i = 0; i < rc; i++) { const row = {}; cols.forEach(c => { row[c] = columnar[c][i]; }); rows.push(row); }
+  const content = format === 'json' ? JSON.stringify(rows) : (cols.join(',') + '\n' + rows.map(r => cols.map(c => r[c] ?? '').join(',')).join('\n'));
+  return [{ attributes: { filename: 'data.' + (format || 'csv'), 'record.count': rc.toString() }, content }];
+}
+
+function simulateEngine(engineName, processors, connections, tables, mappings, env) {
   const {order, adj} = topoSortProcessors(processors, connections);
-  // Build reverse adjacency (incoming edges) from adj
   const incoming = Array.from({length:processors.length}, () => []);
   adj.forEach((neighbors, src) => { neighbors.forEach(dst => { incoming[dst].push(src); }); });
-  // Per-group data pools (generated once, shared by all sources in the group)
+  const isDbx = engineName === 'databricks';
+  // Per-group data pools
   const groupPools = {};
   const groups = [...new Set(processors.map(p => p.group))];
   groups.forEach(g => {
     const gProcs = processors.filter(p => p.group === g);
     groupPools[g] = generateGroupDataPool(g, gProcs, tables);
   });
-  // Results array (index-based, one entry per processor)
-  const outputs = new Array(processors.length);
+  // FlowFile outputs per processor (index-based)
+  const ffOutputs = new Array(processors.length);
   const results = new Array(processors.length);
   const errors = [];
+  const useV2 = !!env; // Use VirtualEnv-based sim if env provided
+
   for (const idx of order) {
     const proc = processors[idx];
     const mapping = mappings[idx] || {};
     const role = classifyNiFiProcessor(proc.type);
-    // Gather input data from upstream processors
+    // Take snapshot before this processor
+    const snapBefore = useV2 ? env.snapshot() : null;
+    // Gather input FlowFiles from upstream
     const inc = incoming[idx];
+    let inputFF = [];
+    if (useV2) {
+      inc.forEach(srcIdx => {
+        if (ffOutputs[srcIdx]) inputFF = inputFF.concat(ffOutputs[srcIdx]);
+      });
+      // If no upstream FFs, create from group pool
+      if (!inputFF.length) {
+        const pool = groupPools[proc.group] || {};
+        if (Object.keys(pool).length) {
+          inputFF = columnarToFlowfiles(pool, 'csv');
+        } else {
+          inputFF = [{ attributes: { filename: 'default.dat' }, content: '' }];
+        }
+      }
+    }
+    // Gather columnar input for backward compat
     let inputData = null;
-    if (inc.length === 1 && outputs[inc[0]]) {
-      inputData = deepCopyColumnar(outputs[inc[0]]);
+    if (inc.length === 1 && results[inc[0]] && results[inc[0]].output) {
+      inputData = deepCopyColumnar(results[inc[0]].output);
     } else if (inc.length > 1) {
       const merged = {};
       inc.forEach(srcIdx => {
-        const d = outputs[srcIdx]; if (!d) return;
+        const d = results[srcIdx] ? results[srcIdx].output : null; if (!d) return;
         Object.keys(d).forEach(c => { if (!merged[c]) merged[c] = []; merged[c] = merged[c].concat(d[c]); });
       });
       inputData = Object.keys(merged).length ? merged : null;
     }
-    // For sources or processors without upstream data, use group pool
     if (!inputData || !Object.keys(inputData).length) {
-      if (role === 'source') {
-        // Sources load from tables or group pool
-      } else {
-        // Non-sources with no upstream: inject group pool data so they aren't empty
-        inputData = deepCopyColumnar(groupPools[proc.group] || {});
-      }
+      if (role !== 'source') inputData = deepCopyColumnar(groupPools[proc.group] || {});
     }
-    // Skip unmapped processors in Databricks engine
-    if (engineName === 'databricks' && mapping && !mapping.mapped) {
-      outputs[idx] = inputData;
+    // Skip unmapped in Databricks
+    if (isDbx && mapping && !mapping.mapped) {
+      ffOutputs[idx] = inputFF;
       const oc = inputData ? Object.keys(inputData) : [];
       const rc = oc.length && inputData[oc[0]] ? inputData[oc[0]].length : 0;
-      results[idx] = { output: inputData, rows: rc, cols: oc.length, status: 'skipped', name: proc.name, group: proc.group };
+      results[idx] = { output: inputData, rows: rc, cols: oc.length, status: 'skipped', name: proc.name, group: proc.group, actions: [], inputFF, outputFF: inputFF };
       continue;
     }
-    const simFn = PROCESSOR_SIM[role] || PROCESSOR_SIM.utility;
-    let output;
+    let outputFF, output;
     try {
-      output = simFn(inputData, proc, tables, groupPools[proc.group]);
+      if (useV2) {
+        outputFF = simV2Dispatch(env, proc, inputFF, isDbx);
+        output = flowfilesToColumnar(outputFF);
+      } else {
+        const simFn = PROCESSOR_SIM[role] || PROCESSOR_SIM.utility;
+        output = simFn(inputData, proc, tables, groupPools[proc.group]);
+        outputFF = inputFF;
+      }
     } catch(e) {
       output = inputData || deepCopyColumnar(groupPools[proc.group] || {});
+      outputFF = inputFF;
       errors.push({idx, name: proc.name, error: e.message});
     }
-    // Ensure output is never null/empty for downstream propagation
+    // Ensure output never empty
     if (!output || !Object.keys(output).length) {
       output = deepCopyColumnar(groupPools[proc.group] || {});
+      if (useV2 && (!outputFF || !outputFF.length)) outputFF = columnarToFlowfiles(output, 'csv');
     }
     // Databricks confidence-based differences
-    if (engineName === 'databricks' && mapping && mapping.mapped && output && Object.keys(output).length) {
+    if (isDbx && mapping && mapping.mapped && output && Object.keys(output).length) {
       const oc = Object.keys(output);
       const rc = oc.length && output[oc[0]] ? output[oc[0]].length : 0;
       if (rc > 0 && mapping.confidence >= 0.50 && mapping.confidence < 0.80) {
@@ -4847,12 +5770,18 @@ function simulateEngine(engineName, processors, connections, tables, mappings) {
         Object.keys(output).forEach(c => { output[c] = output[c].slice(0, keepN); });
       }
     }
-    outputs[idx] = output;
+    ffOutputs[idx] = outputFF;
+    const snapAfter = useV2 ? env.snapshot() : null;
+    const procActions = useV2 ? env.getProcessorActions(proc.name) : [];
     const oc = output ? Object.keys(output) : [];
     const rc = oc.length && output[oc[0]] ? output[oc[0]].length : 0;
-    results[idx] = { output, rows: rc, cols: oc.length, status: 'ok', name: proc.name, group: proc.group };
+    results[idx] = {
+      output, rows: rc, cols: oc.length, status: 'ok', name: proc.name, group: proc.group,
+      actions: procActions, inputFF: useV2 ? inputFF : null, outputFF: useV2 ? outputFF : null,
+      snapBefore, snapAfter
+    };
   }
-  return { results, order, errors, groupCount: groups.length, groupPools };
+  return { results, order, errors, groupCount: groups.length, groupPools, env };
 }
 
 function compareSimOutputs(nifiOut, dbxOut) {
@@ -4876,20 +5805,74 @@ function compareSimOutputs(nifiOut, dbxOut) {
   return { rowMatch, schemaMatch, dataFidelity, details };
 }
 
-function computeDualSimulation(nifiResults, dbxResults, order, mappings, processors) {
-  let tRM = 0, tSM = 0, tDF = 0, cnt = 0;
+function compareActions(nifiActions, dbxActions) {
+  if (!nifiActions.length && !dbxActions.length) return { matched: 0, mismatched: 0, coverage: 100 };
+  // Compare action types and targets
+  const nTypes = nifiActions.map(a => a.action + ':' + a.target);
+  const dTypes = dbxActions.map(a => a.action + ':' + a.target);
+  let matched = 0;
+  const used = new Set();
+  nTypes.forEach(nt => {
+    const idx = dTypes.findIndex((dt, i) => !used.has(i) && dt === nt);
+    if (idx >= 0) { matched++; used.add(idx); }
+  });
+  const total = Math.max(nTypes.length, dTypes.length);
+  return { matched, mismatched: total - matched, coverage: total ? Math.round(matched / total * 100) : 100, nifiCount: nTypes.length, dbxCount: dTypes.length };
+}
+
+function compareStateDiffs(nifiSnaps, dbxSnaps) {
+  if (!nifiSnaps || !dbxSnaps) return { filesMatch: true, tablesMatch: true, tokensMatch: true, signalsMatch: true, overall: 100 };
+  let score = 0, total = 0;
+  // Compare filesystem changes
+  const nFiles = new Set(Object.keys(nifiSnaps.after ? nifiSnaps.after.filesystem : {}));
+  const dFiles = new Set(Object.keys(dbxSnaps.after ? dbxSnaps.after.filesystem : {}));
+  const filesMatch = nFiles.size === dFiles.size;
+  total++; if (filesMatch) score++;
+  // Compare SQL table changes
+  const nTables = nifiSnaps.after ? nifiSnaps.after.sqlTables : {};
+  const dTables = dbxSnaps.after ? dbxSnaps.after.sqlTables : {};
+  const tablesMatch = JSON.stringify(Object.keys(nTables).sort()) === JSON.stringify(Object.keys(dTables).sort());
+  total++; if (tablesMatch) score++;
+  // Compare tokens
+  const tokensMatch = JSON.stringify(nifiSnaps.after ? nifiSnaps.after.tokens : {}) === JSON.stringify(dbxSnaps.after ? dbxSnaps.after.tokens : {});
+  total++; if (tokensMatch) score++;
+  // Compare signals
+  const signalsMatch = JSON.stringify(nifiSnaps.after ? nifiSnaps.after.signals : {}) === JSON.stringify(dbxSnaps.after ? dbxSnaps.after.signals : {});
+  total++; if (signalsMatch) score++;
+  return { filesMatch, tablesMatch, tokensMatch, signalsMatch, overall: total ? Math.round(score / total * 100) : 100 };
+}
+
+function computeDualSimulation(nifiResults, dbxResults, order, mappings, processors, nifiEnv, dbxEnv) {
+  let tRM = 0, tSM = 0, tDF = 0, tAC = 0, tSF = 0, cnt = 0, cntAction = 0;
   const perProc = [];
+  const hasEnv = !!nifiEnv && !!dbxEnv;
   for (const idx of order) {
     const nr = nifiResults[idx], dr = dbxResults[idx];
     if (!nr) continue;
     const mapping = mappings[idx] || {};
     const proc = processors[idx] || {};
     const cmp = compareSimOutputs(nr.output, dr ? dr.output : null);
-    let verdict, verdictClass;
-    if (dr && dr.status === 'skipped') { verdict = 'SKIPPED'; verdictClass = 'match-gap'; }
-    else if (cmp.dataFidelity >= 95 && cmp.rowMatch >= 95 && cmp.schemaMatch >= 95) { verdict = 'IDENTICAL'; verdictClass = 'match-exact'; }
-    else if (cmp.dataFidelity >= 70) { verdict = 'EQUIVALENT'; verdictClass = 'match-functional'; }
-    else { verdict = 'DIFFERS'; verdictClass = 'match-gap'; }
+    // Action comparison
+    const nActions = nr.actions || [];
+    const dActions = dr ? (dr.actions || []) : [];
+    const actionCmp = compareActions(nActions, dActions);
+    // State diff comparison
+    const stateCmp = (nr.snapBefore && nr.snapAfter && dr && dr.snapBefore && dr.snapAfter) ?
+      compareStateDiffs({ before: nr.snapBefore, after: nr.snapAfter }, { before: dr.snapBefore, after: dr.snapAfter }) :
+      { filesMatch: true, tablesMatch: true, tokensMatch: true, signalsMatch: true, overall: 100 };
+    // Verdicts
+    let dataVerdict, actionVerdict, stateVerdict, verdict, verdictClass;
+    if (dr && dr.status === 'skipped') {
+      dataVerdict = actionVerdict = stateVerdict = verdict = 'SKIPPED'; verdictClass = 'match-gap';
+    } else {
+      dataVerdict = (cmp.dataFidelity >= 95 && cmp.rowMatch >= 95 && cmp.schemaMatch >= 95) ? 'IDENTICAL' : cmp.dataFidelity >= 70 ? 'EQUIVALENT' : 'DIFFERS';
+      actionVerdict = actionCmp.coverage >= 95 ? 'IDENTICAL' : actionCmp.coverage >= 70 ? 'EQUIVALENT' : 'DIFFERS';
+      stateVerdict = stateCmp.overall >= 95 ? 'IDENTICAL' : stateCmp.overall >= 70 ? 'EQUIVALENT' : 'DIFFERS';
+      // Overall = worst of the three
+      if (dataVerdict === 'IDENTICAL' && actionVerdict === 'IDENTICAL' && stateVerdict === 'IDENTICAL') { verdict = 'IDENTICAL'; verdictClass = 'match-exact'; }
+      else if (dataVerdict !== 'DIFFERS' && actionVerdict !== 'DIFFERS' && stateVerdict !== 'DIFFERS') { verdict = 'EQUIVALENT'; verdictClass = 'match-functional'; }
+      else { verdict = 'DIFFERS'; verdictClass = 'match-gap'; }
+    }
     perProc.push({
       idx, name: proc.name || nr.name, type: (proc.type || mapping.type || ''),
       group: proc.group || nr.group || '', role: mapping.role || classifyNiFiProcessor(proc.type || ''),
@@ -4897,23 +5880,34 @@ function computeDualSimulation(nifiResults, dbxResults, order, mappings, process
       nifiRows: nr.rows, nifiCols: nr.cols,
       dbxRows: dr ? dr.rows : 0, dbxCols: dr ? dr.cols : 0,
       rowMatch: cmp.rowMatch, schemaMatch: cmp.schemaMatch, dataFidelity: cmp.dataFidelity,
+      dataVerdict, actionVerdict, stateVerdict,
       verdict, verdictClass, details: cmp.details,
-      nifiOutput: nr.output, dbxOutput: dr ? dr.output : null
+      nifiOutput: nr.output, dbxOutput: dr ? dr.output : null,
+      actions: { nifi: nActions, dbx: dActions, matched: actionCmp.matched, mismatched: actionCmp.mismatched, coverage: actionCmp.coverage },
+      stateDiff: stateCmp,
+      nifiActions: nActions, dbxActions: dActions
     });
-    if (verdict !== 'SKIPPED') { tRM += cmp.rowMatch; tSM += cmp.schemaMatch; tDF += cmp.dataFidelity; cnt++; }
+    if (verdict !== 'SKIPPED') {
+      tRM += cmp.rowMatch; tSM += cmp.schemaMatch; tDF += cmp.dataFidelity; cnt++;
+      tAC += actionCmp.coverage; tSF += stateCmp.overall; cntAction++;
+    }
   }
   return {
     perProc,
     rowMatchPct: cnt ? Math.round(tRM / cnt) : 0,
     schemaMatchPct: cnt ? Math.round(tSM / cnt) : 0,
     fidelityPct: cnt ? Math.round(tDF / cnt) : 0,
+    actionCoveragePct: cntAction ? Math.round(tAC / cntAction) : 0,
+    stateFidelityPct: cntAction ? Math.round(tSF / cntAction) : 0,
+    functionalEquivPct: cnt ? Math.round((tRM + tSM + tDF + tAC + tSF) / (cnt * 3 + cntAction * 2)) : 0,
     summary: {
       total: perProc.length,
       identical: perProc.filter(p => p.verdict === 'IDENTICAL').length,
       equivalent: perProc.filter(p => p.verdict === 'EQUIVALENT').length,
       differs: perProc.filter(p => p.verdict === 'DIFFERS').length,
       skipped: perProc.filter(p => p.verdict === 'SKIPPED').length
-    }
+    },
+    envSummary: hasEnv ? { nifi: nifiEnv.getSummary(), dbx: dbxEnv.getSummary() } : null
   };
 }
 
@@ -4945,6 +5939,7 @@ async function runDualSimulation() {
   const tables = STATE.tables;
   const mappings = STATE.notebook.mappings;
   const rDiv = document.getElementById('simulateResults');
+  const hasVenv = !!STATE.virtualEnv;
   // Progress UI
   let h = '<div class="sim-progress" id="simProgressBox">';
   h += '<div class="sim-status"><span class="engine-label sim-running" id="simEngineLabel">Initializing simulation engines...</span><span id="simPctLabel">0%</span></div>';
@@ -4961,42 +5956,67 @@ async function runDualSimulation() {
     await new Promise(r => setTimeout(r, 120));
   }
   const procCount = nifi.processors.length;
+  // Prepare VirtualEnv instances (fresh copies for simulation)
+  let nifiEnv = null, dbxEnv = null;
+  if (hasVenv) {
+    await prog(3, 'Building VirtualEnv instances...');
+    const seed = buildInitialVirtualEnv(nifi, tables);
+    nifiEnv = seed.env;
+    const seed2 = buildInitialVirtualEnv(nifi, tables);
+    dbxEnv = seed2.env;
+  }
   // Phase 1: NiFi
-  await prog(5, 'Building processor DAG...');
+  await prog(5, hasVenv ? 'Building processor DAG + VirtualEnv...' : 'Building processor DAG...');
   engL.textContent = 'Running NiFi simulation engine...'; engL.style.color = '#728E9B';
-  await prog(15, `Executing ${procCount} processors in topological order...`);
-  const nifiSim = simulateEngine('nifi', nifi.processors, nifi.connections, tables, mappings);
+  await prog(15, `Executing ${procCount} processors ${hasVenv ? 'with file I/O, SQL, tokens...' : 'in topological order...'}`);
+  const nifiSim = simulateEngine('nifi', nifi.processors, nifi.connections, tables, mappings, nifiEnv);
   const nifiExec = nifiSim.results.filter(r => r && r.status === 'ok').length;
-  await prog(40, `NiFi complete — ${nifiExec}/${procCount} processors executed across ${nifiSim.groupCount} groups`);
+  const nifiActions = nifiEnv ? nifiEnv.log.length : 0;
+  await prog(40, `NiFi complete — ${nifiExec}/${procCount} processors, ${nifiActions} actions across ${nifiSim.groupCount} groups`);
   // Phase 2: Databricks
   engL.textContent = 'Running Databricks simulation engine...'; engL.style.color = 'var(--primary)';
-  await prog(55, `Executing ${procCount} processors via PySpark equivalents...`);
-  const dbxSim = simulateEngine('databricks', nifi.processors, nifi.connections, tables, mappings);
+  await prog(55, `Executing ${procCount} processors via PySpark equivalents${hasVenv ? ' + VirtualEnv' : ''}...`);
+  const dbxSim = simulateEngine('databricks', nifi.processors, nifi.connections, tables, mappings, dbxEnv);
   const dbxExec = dbxSim.results.filter(r => r && r.status === 'ok').length;
   const dbxSkip = dbxSim.results.filter(r => r && r.status === 'skipped').length;
-  await prog(75, `Databricks complete — ${dbxExec} executed, ${dbxSkip} skipped (unmapped)`);
+  const dbxActions = dbxEnv ? dbxEnv.log.length : 0;
+  await prog(75, `Databricks complete — ${dbxExec} executed, ${dbxSkip} skipped, ${dbxActions} actions`);
   // Phase 3: Compare
-  engL.textContent = 'Comparing outputs...'; engL.style.color = 'var(--text)';
-  await prog(85, 'Computing row match, schema match, and data fidelity...');
-  const sim = computeDualSimulation(nifiSim.results, dbxSim.results, nifiSim.order, mappings, nifi.processors);
-  // Store full simulation data for Step 10 report
+  engL.textContent = 'Comparing outputs + actions + state...'; engL.style.color = 'var(--text)';
+  await prog(85, 'Computing data fidelity, action coverage, and state comparison...');
+  const sim = computeDualSimulation(nifiSim.results, dbxSim.results, nifiSim.order, mappings, nifi.processors, nifiEnv, dbxEnv);
   STATE.simulation = sim;
   STATE.simulation._meta = {
     timestamp: new Date().toISOString(),
     processorCount: procCount,
     groupCount: nifiSim.groupCount,
     nifiExecuted: nifiExec, dbxExecuted: dbxExec, dbxSkipped: dbxSkip,
-    nifiErrors: nifiSim.errors, dbxErrors: dbxSim.errors
+    nifiErrors: nifiSim.errors, dbxErrors: dbxSim.errors,
+    nifiActions, dbxActions,
+    hasVirtualEnv: hasVenv
   };
+  if (nifiEnv) STATE.simulation._nifiEnv = nifiEnv;
+  if (dbxEnv) STATE.simulation._dbxEnv = dbxEnv;
   await prog(100, 'Simulation complete');
   engL.textContent = 'Dual simulation complete'; engL.classList.remove('sim-running');
   // Render results
   h = '<hr class="divider">';
+  // Row 1: Data donuts (existing)
+  h += '<h3>Data Comparison</h3>';
   h += '<div class="sim-donuts">';
   h += donutSVG(sim.rowMatchPct, 'Row Match', `avg across ${sim.summary.total - sim.summary.skipped} procs`);
   h += donutSVG(sim.schemaMatchPct, 'Schema Match', `columns aligned`);
   h += donutSVG(sim.fidelityPct, 'Data Fidelity', `cell-level accuracy`);
   h += '</div>';
+  // Row 2: Action donuts (new)
+  if (hasVenv) {
+    h += '<h3>Action & State Comparison</h3>';
+    h += '<div class="sim-donuts">';
+    h += donutSVG(sim.actionCoveragePct, 'Action Coverage', `${nifiActions} NiFi / ${dbxActions} DBX actions`);
+    h += donutSVG(sim.stateFidelityPct, 'State Fidelity', `file/SQL/token match`);
+    h += donutSVG(sim.functionalEquivPct, 'Functional Equiv', `weighted composite`);
+    h += '</div>';
+  }
   h += metricsHTML([
     ['Processors', sim.summary.total],
     ['Identical', `<span style="color:#21C354">${sim.summary.identical}</span>`],
@@ -5005,14 +6025,43 @@ async function runDualSimulation() {
     ['Skipped', `<span style="color:#808495">${sim.summary.skipped}</span>`]
   ]);
   h += '<div style="margin:12px 0;font-size:0.82rem;color:var(--text2)">';
-  h += `<strong>${procCount}</strong> processors simulated across <strong>${nifiSim.groupCount}</strong> process groups &nbsp;|&nbsp; `;
-  h += '<strong>Identical</strong> = &ge;95% match &nbsp;|&nbsp; <strong>Equivalent</strong> = &ge;70% fidelity &nbsp;|&nbsp; ';
-  h += '<strong>Differs</strong> = mismatch &nbsp;|&nbsp; <strong>Skipped</strong> = unmapped';
+  h += `<strong>${procCount}</strong> processors simulated across <strong>${nifiSim.groupCount}</strong> process groups`;
+  if (hasVenv) h += ` &nbsp;|&nbsp; <strong>${nifiActions}</strong> NiFi actions, <strong>${dbxActions}</strong> DBX actions`;
   h += '</div>';
   if (nifiSim.errors.length || dbxSim.errors.length) {
     h += '<div class="alert alert-info" style="margin:8px 0;font-size:0.78rem">';
     h += `Simulation errors: ${nifiSim.errors.length} NiFi, ${dbxSim.errors.length} DBX — see Step 10 report for details`;
     h += '</div>';
+  }
+  // VirtualEnv Action Log Summary
+  if (hasVenv && nifiEnv) {
+    h += '<hr class="divider">';
+    const nSummary = nifiEnv.getSummary();
+    const dSummary = dbxEnv.getSummary();
+    h += expanderHTML('<strong>VirtualEnv Final State</strong> — NiFi vs Databricks', (() => {
+      let body = '<div class="state-diff">';
+      body += '<div class="state-diff-panel"><h4 style="color:#728E9B">NiFi Engine</h4>';
+      body += `<div style="font-size:0.78rem">Files: ${nSummary.files} (${nSummary.totalFileSize}B) | SQL Tables: ${nSummary.sqlTables} (${nSummary.totalSqlRows} rows) | Tokens: ${nSummary.tokens} | Signals: ${nSummary.signals} | Actions: ${nSummary.totalActions}</div>`;
+      body += '</div>';
+      body += '<div class="state-diff-panel"><h4 style="color:var(--primary)">Databricks Engine</h4>';
+      body += `<div style="font-size:0.78rem">Files: ${dSummary.files} (${dSummary.totalFileSize}B) | SQL Tables: ${dSummary.sqlTables} (${dSummary.totalSqlRows} rows) | Tokens: ${dSummary.tokens} | Signals: ${dSummary.signals} | Actions: ${dSummary.totalActions}</div>`;
+      body += '</div></div>';
+      // Action type breakdown
+      const nActTypes = {}, dActTypes = {};
+      nifiEnv.log.forEach(e => { nActTypes[e.action] = (nActTypes[e.action] || 0) + 1; });
+      dbxEnv.log.forEach(e => { dActTypes[e.action] = (dActTypes[e.action] || 0) + 1; });
+      const allActTypes = [...new Set([...Object.keys(nActTypes), ...Object.keys(dActTypes)])].sort();
+      body += '<div style="margin-top:12px"><strong style="font-size:0.82rem">Action Type Breakdown</strong></div>';
+      body += '<div class="action-log" style="max-height:200px">';
+      allActTypes.forEach(at => {
+        const nC = nActTypes[at] || 0, dC = dActTypes[at] || 0;
+        const match = nC === dC;
+        const cls = at.startsWith('FILE') ? 'file-op' : at.startsWith('SQL') ? 'sql-op' : at.startsWith('TOKEN') ? 'token-op' : at.startsWith('SIGNAL') ? 'signal-op' : 'queue-op';
+        body += `<div class="action-log-entry"><span class="action-type ${cls}">${at}</span><span>NiFi: ${nC}</span><span>DBX: ${dC} ${match ? '<span style="color:#21C354">&#10003;</span>' : '<span style="color:#EAB308">&ne;</span>'}</span></div>`;
+      });
+      body += '</div>';
+      return body;
+    })(), false);
   }
   // Per-processor comparison grouped by process group
   h += '<hr class="divider">';
@@ -5045,17 +6094,35 @@ async function runDualSimulation() {
         body += `<span>NiFi: ${p.nifiRows}r ${p.nifiCols}c</span>`;
         body += `<span>DBX: ${p.dbxRows}r ${p.dbxCols}c</span>`;
         body += `<span>Rows:${p.rowMatch}%</span><span>Schema:${p.schemaMatch}%</span><span>Fidelity:${p.dataFidelity}%</span>`;
+        if (p.actions && p.actions.coverage !== undefined) body += `<span>Actions:${p.actions.coverage}%</span>`;
+        if (p.stateDiff) body += `<span>State:${p.stateDiff.overall}%</span>`;
         body += `</div>`;
+        // Action log for this processor
+        if (p.nifiActions && p.nifiActions.length) {
+          body += '<div style="margin:6px 0"><strong style="font-size:0.75rem">Actions performed:</strong></div>';
+          body += '<div class="action-log" style="max-height:150px">';
+          p.nifiActions.slice(0, 20).forEach(a => {
+            const cls = a.action.startsWith('FILE') ? 'file-op' : a.action.startsWith('SQL') ? 'sql-op' : a.action.startsWith('TOKEN') ? 'token-op' : a.action.startsWith('SIGNAL') ? 'signal-op' : 'queue-op';
+            body += `<div class="action-log-entry"><span class="action-type ${cls}">${a.action}</span><span>${a.target}</span><span style="font-size:0.72rem;color:var(--text2)">${a.after ? JSON.stringify(a.after).substring(0,60) : '—'}</span></div>`;
+          });
+          if (p.nifiActions.length > 20) body += `<div style="padding:4px 10px;font-size:0.72rem;color:var(--text2)">... +${p.nifiActions.length - 20} more actions</div>`;
+          body += '</div>';
+        }
         body += '<div class="sim-split">';
         body += '<div class="sim-split-header nifi-side">NiFi Output</div>';
         body += '<div class="sim-split-header dbx-side">Databricks Output</div>';
         body += `<div class="sim-split-cell nifi-side">${columnarPreview(p.nifiOutput, 2)}</div>`;
         body += `<div class="sim-split-cell dbx-side">${p.verdict === 'SKIPPED' ? '<em style="color:var(--text2)">SKIPPED</em>' : columnarPreview(p.dbxOutput, 2)}</div>`;
         body += '</div>';
+        const verdictParts = [];
+        if (p.dataVerdict) verdictParts.push(`D:${p.dataVerdict}`);
+        if (p.actionVerdict && hasVenv) verdictParts.push(`A:${p.actionVerdict}`);
+        if (p.stateVerdict && hasVenv) verdictParts.push(`S:${p.stateVerdict}`);
         const title = `<span style="color:${roleColor}">[${p.role}]</span> <strong>${p.name}</strong> `
           + `<span style="color:var(--text2);font-size:0.72rem">(${p.type})</span> `
           + `<span class="conf-badge ${confCls}" style="margin-left:4px">${confStr}</span> `
-          + `<span class="match-badge ${p.verdictClass}" style="margin-left:4px">${p.verdict}</span>`;
+          + `<span class="match-badge ${p.verdictClass}" style="margin-left:4px">${p.verdict}</span>`
+          + (hasVenv && p.nifiActions ? ` <span style="font-size:0.68rem;color:var(--text2)">${p.nifiActions.length} actions</span>` : '');
         return expanderHTML(title, body, false);
       }).join(''),
       false
@@ -5160,6 +6227,12 @@ function buildFinalReportJSON() {
         row_match_pct: sim.rowMatchPct,
         schema_match_pct: sim.schemaMatchPct,
         data_fidelity_pct: sim.fidelityPct,
+        action_coverage_pct: sim.actionCoveragePct || 0,
+        state_fidelity_pct: sim.stateFidelityPct || 0,
+        functional_equiv_pct: sim.functionalEquivPct || 0,
+        nifi_actions: meta.nifiActions || 0,
+        dbx_actions: meta.dbxActions || 0,
+        has_virtual_env: meta.hasVirtualEnv || false,
         verdicts: sim.summary
       }
     },
@@ -5176,6 +6249,9 @@ function buildFinalReportJSON() {
       code_snippet: mappings[p.idx] ? mappings[p.idx].code.substring(0, 200) : null,
       simulation: {
         verdict: p.verdict,
+        data_verdict: p.dataVerdict || p.verdict,
+        action_verdict: p.actionVerdict || null,
+        state_verdict: p.stateVerdict || null,
         nifi_rows: p.nifiRows,
         nifi_cols: p.nifiCols,
         dbx_rows: p.dbxRows,
@@ -5183,8 +6259,13 @@ function buildFinalReportJSON() {
         row_match: p.rowMatch,
         schema_match: p.schemaMatch,
         data_fidelity: p.dataFidelity,
+        action_coverage: p.actions ? p.actions.coverage : null,
+        action_count_nifi: p.actions ? p.actions.nifi.length : 0,
+        action_count_dbx: p.actions ? p.actions.dbx.length : 0,
+        state_fidelity: p.stateDiff ? p.stateDiff.overall : null,
         details: p.details
-      }
+      },
+      actions: p.nifiActions ? p.nifiActions.map(a => ({ action: a.action, target: a.target })) : []
     })),
     // Section 4: Gap analysis
     gaps: {
@@ -5219,7 +6300,28 @@ function buildFinalReportJSON() {
       if (sim.fidelityPct < 80) recs.push({severity:'high', area:'fidelity', message:`Overall data fidelity is ${sim.fidelityPct}% — significant differences in data transformation`});
       if (sim.fidelityPct >= 80 && sim.fidelityPct < 95) recs.push({severity:'medium', area:'fidelity', message:`Data fidelity is ${sim.fidelityPct}% — minor differences, likely from metadata columns added by Databricks`});
       if (sim.fidelityPct >= 95) recs.push({severity:'info', area:'fidelity', message:`Data fidelity is ${sim.fidelityPct}% — migration produces nearly identical results`});
+      // Action-based recommendations
+      if (sim.actionCoveragePct && sim.actionCoveragePct < 80) recs.push({severity:'medium', area:'actions', message:`Action coverage is ${sim.actionCoveragePct}% — some NiFi operations have no Databricks equivalent`});
+      if (sim.stateFidelityPct && sim.stateFidelityPct < 80) recs.push({severity:'medium', area:'state', message:`State fidelity is ${sim.stateFidelityPct}% — file/SQL/token operations differ between engines`});
+      const actionDiffers = sim.perProc.filter(p => p.actionVerdict === 'DIFFERS');
+      if (actionDiffers.length) recs.push({severity:'high', area:'actions', message:`${actionDiffers.length} processors have different action patterns — review file I/O and SQL operations`, types:[...new Set(actionDiffers.map(p=>p.type))]});
       return recs;
+    })(),
+    // Section 7: VirtualEnv analysis
+    virtual_environment: (() => {
+      if (!meta.hasVirtualEnv || !sim.envSummary) return null;
+      return {
+        nifi_engine: sim.envSummary.nifi,
+        dbx_engine: sim.envSummary.dbx,
+        action_log_summary: (() => {
+          const nEnv = sim._nifiEnv, dEnv = sim._dbxEnv;
+          if (!nEnv || !dEnv) return null;
+          const nTypes = {}, dTypes = {};
+          nEnv.log.forEach(e => { nTypes[e.action] = (nTypes[e.action] || 0) + 1; });
+          dEnv.log.forEach(e => { dTypes[e.action] = (dTypes[e.action] || 0) + 1; });
+          return { nifi_action_types: nTypes, dbx_action_types: dTypes };
+        })()
+      };
     })()
   };
   return report;
