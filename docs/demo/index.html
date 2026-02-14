@@ -6569,8 +6569,9 @@ function generateReport() {
   }
 
   // --- Download ---
-  h += '<hr class="divider"><div style="display:flex;gap:8px;flex-wrap:wrap">';
+  h += '<hr class="divider"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
   h += `<button class="btn" onclick="downloadReport()">Download Report (Markdown)</button>`;
+  h += `<button class="btn btn-primary" onclick="downloadProductionNotebook()">Download Databricks Notebook</button>`;
   h += '</div>';
 
   document.getElementById('reportResults').innerHTML = h;
@@ -6610,6 +6611,210 @@ function downloadReport() {
   a.href = URL.createObjectURL(blob);
   a.download = 'migration_report.md';
   a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ================================================================
+// PRODUCTION NOTEBOOK — No synthetic data, deployment-ready
+// ================================================================
+function generateProductionNotebook() {
+  if (!STATE.notebook || !STATE.parsed || !STATE.parsed._nifi) return null;
+  const nifi = STATE.parsed._nifi;
+  const cfg = getDbxConfig();
+  const mappings = STATE.notebook.mappings;
+
+  // Generate notebook WITHOUT blueprint (null) → skips synthetic DDL
+  const nbResult = generateDatabricksNotebook(mappings, nifi, null, cfg);
+  const cells = nbResult.cells;
+  const qualifiedSchema = cfg.catalog ? `${cfg.catalog}.${cfg.schema || 'nifi_migration'}` : (cfg.schema || 'nifi_migration');
+
+  // Find insertion point: after "Imports & Config" cell
+  const insertIdx = cells.findIndex(c => c.label === 'Imports & Config');
+  const prodCells = [];
+
+  // ── 1. Controller Service → Secret Scope Mapping ──
+  const cs = nifi.controllerServices || [];
+  if (cs.length) {
+    let csCode = '# ============================================================\n';
+    csCode += '# Controller Service → Databricks Secret Scope Mapping\n';
+    csCode += '# ============================================================\n';
+    csCode += '# Original NiFi controller services mapped to Databricks secrets.\n';
+    csCode += '# Store credentials using: databricks secrets put-secret --scope <scope> --key <key>\n\n';
+    cs.forEach(svc => {
+      const varName = sanitizeVarName(svc.name);
+      const scope = cfg.secretScope || 'migration_secrets';
+      csCode += `# --- ${svc.name} (${svc.fullType || svc.type}) ---\n`;
+      if (/DBCP|ConnectionPool|DBConnection/i.test(svc.type)) {
+        const url = svc.properties['Database Connection URL'] || svc.properties['database-connection-url'] || '';
+        const user = svc.properties['Database User'] || svc.properties['database-user'] || '';
+        const driver = svc.properties['Database Driver Class Name'] || '';
+        if (url) csCode += `# Original JDBC URL: ${url}\n`;
+        if (user) csCode += `# Original User: ${user}\n`;
+        if (driver) csCode += `# Original Driver: ${driver}\n`;
+        csCode += `${varName}_jdbc_url = dbutils.secrets.get(scope="${scope}", key="${varName}-jdbc-url")\n`;
+        csCode += `${varName}_user = dbutils.secrets.get(scope="${scope}", key="${varName}-user")\n`;
+        csCode += `${varName}_password = dbutils.secrets.get(scope="${scope}", key="${varName}-password")\n`;
+        csCode += `# Usage: spark.read.format("jdbc").option("url", ${varName}_jdbc_url).option("user", ${varName}_user).option("password", ${varName}_password)\n\n`;
+      } else if (/DistributedMapCache/i.test(svc.type)) {
+        const host = svc.properties['Server Hostname'] || svc.properties['server-hostname'] || '';
+        const port = svc.properties['Server Port'] || svc.properties['server-port'] || '4557';
+        csCode += `# NiFi Distributed Map Cache → Databricks Delta Table or Spark broadcast variable\n`;
+        if (host) csCode += `# Original cache server: ${host}:${port}\n`;
+        csCode += `# Recommendation: Replace with Delta Table for persistent cache or broadcast variable for in-memory\n`;
+        csCode += `# cache_table = spark.table("${qualifiedSchema}.__distributed_cache")\n\n`;
+      } else {
+        Object.entries(svc.properties).forEach(([k, v]) => {
+          if (v && !/password/i.test(k)) csCode += `# ${k}: ${v}\n`;
+          else if (v) csCode += `# ${k}: ****\n`;
+        });
+        csCode += `# Store credentials: dbutils.secrets.get(scope="${scope}", key="${varName}-<key>")\n\n`;
+      }
+    });
+    prodCells.push({type:'code', label:'Controller Service Mapping', source:csCode, role:'config'});
+  }
+
+  // ── 2. Real SQL Table References from NiFi Flow ──
+  const sqlTables = nifi.sqlTables || [];
+  const sqlTableMeta = nifi.sqlTableMeta || {};
+  if (sqlTables.length) {
+    let sqlCode = '-- ============================================================\n';
+    sqlCode += '-- SQL Table References Extracted from NiFi Flow\n';
+    sqlCode += '-- ============================================================\n';
+    sqlCode += `-- ${sqlTables.length} tables referenced across the pipeline.\n`;
+    sqlCode += '-- These are the ACTUAL tables your NiFi flow reads from / writes to.\n';
+    sqlCode += '-- Verify each table exists in your Unity Catalog before running.\n\n';
+    if (cfg.catalog) sqlCode += `USE CATALOG ${cfg.catalog};\n\n`;
+    sqlTables.forEach(t => {
+      if (!t || t.startsWith('$') && t.includes('{')) {
+        // Parameterized table — note it but don't create DDL
+        sqlCode += `-- Parameterized: ${t} (resolved at runtime via Spark config or widget)\n`;
+        const meta = sqlTableMeta[t];
+        if (meta) {
+          if (meta.readers.length) sqlCode += `--   Read by: ${meta.readers.slice(0,5).join(', ')}${meta.readers.length > 5 ? ` (+${meta.readers.length-5} more)` : ''}\n`;
+          if (meta.writers.length) sqlCode += `--   Written by: ${meta.writers.slice(0,5).join(', ')}${meta.writers.length > 5 ? ` (+${meta.writers.length-5} more)` : ''}\n`;
+        }
+        sqlCode += '\n';
+        return;
+      }
+      const meta = sqlTableMeta[t];
+      sqlCode += `-- Table: ${t}\n`;
+      if (meta) {
+        if (meta.readers.length) sqlCode += `--   Read by: ${meta.readers.slice(0,5).join(', ')}${meta.readers.length > 5 ? ` (+${meta.readers.length-5} more)` : ''}\n`;
+        if (meta.writers.length) sqlCode += `--   Written by: ${meta.writers.slice(0,5).join(', ')}${meta.writers.length > 5 ? ` (+${meta.writers.length-5} more)` : ''}\n`;
+        if (meta.columns && meta.columns.size) sqlCode += `--   Columns detected: ${[...meta.columns].slice(0,10).join(', ')}${meta.columns.size > 10 ? ` (+${meta.columns.size-10} more)` : ''}\n`;
+      }
+      // Schema-qualified table: preserve as-is; unqualified: add target schema
+      if (t.includes('.')) {
+        sqlCode += `-- VERIFY: SELECT * FROM ${t} LIMIT 1;\n\n`;
+      } else {
+        sqlCode += `-- VERIFY: SELECT * FROM ${qualifiedSchema}.${t} LIMIT 1;\n\n`;
+      }
+    });
+    prodCells.push({type:'sql', label:'NiFi Flow SQL Table References', source:sqlCode, role:'config'});
+  }
+
+  // ── 3. Cloudera / External Systems Migration Notes ──
+  const clouderaTools = nifi.clouderaTools || [];
+  if (clouderaTools.length) {
+    let migCode = '# ============================================================\n';
+    migCode += '# Cloudera → Databricks Migration Guide\n';
+    migCode += '# ============================================================\n';
+    migCode += `# ${clouderaTools.length} Cloudera-specific tool invocations detected in the NiFi flow.\n`;
+    migCode += '# Each tool below has a Databricks equivalent — follow the guidance.\n\n';
+    // Group by tool
+    const toolGroups = {};
+    clouderaTools.forEach(t => {
+      const key = t.tool || 'Unknown';
+      if (!toolGroups[key]) toolGroups[key] = [];
+      toolGroups[key].push(t);
+    });
+    Object.entries(toolGroups).sort((a,b) => b[1].length - a[1].length).forEach(([tool, usages]) => {
+      migCode += `# --- ${tool} (${usages.length} invocation${usages.length > 1 ? 's' : ''}) ---\n`;
+      if (/kerberos|kinit|keytab/i.test(tool)) {
+        migCode += '# MIGRATION: Kerberos authentication is ELIMINATED in Databricks.\n';
+        migCode += '# Unity Catalog handles identity federation automatically.\n';
+        migCode += '# No kinit, keytab, or kdestroy commands needed.\n';
+        migCode += '# Action: Remove all Kerberos-related processors from the pipeline.\n';
+      } else if (/impala/i.test(tool)) {
+        migCode += '# MIGRATION: Impala SQL → Spark SQL (mostly compatible).\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   REFRESH <table>              → spark.catalog.refreshTable("<table>")\n';
+        migCode += '#   INVALIDATE METADATA <table>  → spark.catalog.refreshTable("<table>")\n';
+        migCode += '#   COMPUTE STATS <table>        → ANALYZE TABLE <table> COMPUTE STATISTICS\n';
+        migCode += '#   INSERT OVERWRITE              → df.write.mode("overwrite").saveAsTable()\n';
+        migCode += '#   ALTER TABLE RECOVER PARTITIONS → MSCK REPAIR TABLE <table>\n';
+      } else if (/hdfs|hadoop/i.test(tool)) {
+        migCode += '# MIGRATION: HDFS → Unity Catalog Volumes / DBFS / Cloud Storage.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   hdfs dfs -put <local> <hdfs>  → dbutils.fs.cp("file:<local>", "/Volumes/<path>")\n';
+        migCode += '#   hdfs dfs -get <hdfs> <local>  → dbutils.fs.cp("/Volumes/<path>", "file:<local>")\n';
+        migCode += '#   hdfs dfs -ls <path>           → dbutils.fs.ls("/Volumes/<path>")\n';
+        migCode += '#   hdfs dfs -mkdir <path>        → dbutils.fs.mkdirs("/Volumes/<path>")\n';
+        migCode += '#   hdfs dfs -rm <path>           → dbutils.fs.rm("/Volumes/<path>")\n';
+      } else if (/sftp/i.test(tool)) {
+        migCode += '# MIGRATION: SFTP transfers → Unity Catalog Volumes + external connectors.\n';
+        migCode += '# Use Databricks Fivetran or partner integrations for scheduled SFTP ingestion.\n';
+        migCode += '# Or use dbutils.fs with a mounted SFTP volume.\n';
+      } else if (/nifi.*(orchestration|cache)/i.test(tool)) {
+        migCode += '# MIGRATION: NiFi orchestration (Wait/Notify/ControlRate) → Databricks Workflows.\n';
+        migCode += '# Wait/Notify patterns become DAG task dependencies in Databricks Workflows.\n';
+        migCode += '# ControlRate becomes streaming trigger intervals.\n';
+        migCode += '# Distributed Map Cache → Delta Table or Spark broadcast variable.\n';
+      } else if (/hive|beeline/i.test(tool)) {
+        migCode += '# MIGRATION: Hive/Beeline → Spark SQL (native support in Databricks).\n';
+        migCode += '# All HiveQL syntax is supported natively by Spark SQL.\n';
+      } else if (/sqoop/i.test(tool)) {
+        migCode += '# MIGRATION: Sqoop → JDBC source with spark.read.format("jdbc").\n';
+        migCode += '# Use Auto Loader for incremental ingestion from JDBC sources.\n';
+      } else {
+        migCode += `# MIGRATION: Review ${tool} usage and map to Databricks equivalent.\n`;
+      }
+      // List specific usages (capped at 10 for readability)
+      const shown = usages.slice(0, 10);
+      shown.forEach(u => {
+        migCode += `#   Processor: ${u.processor} (${u.group})`;
+        if (u.server) migCode += ` — server: ${u.server}`;
+        if (u.subtype) migCode += ` [${u.subtype}]`;
+        migCode += '\n';
+      });
+      if (usages.length > 10) migCode += `#   ... and ${usages.length - 10} more\n`;
+      migCode += '\n';
+    });
+    prodCells.push({type:'code', label:'Cloudera Migration Guide', source:migCode, role:'config'});
+  }
+
+  // Insert production cells after Imports & Config
+  if (insertIdx >= 0) {
+    cells.splice(insertIdx + 1, 0, ...prodCells);
+  } else {
+    cells.unshift(...prodCells);
+  }
+
+  return { cells, flowName: nbResult.flowName, metadata: { ...nbResult.metadata, type: 'production', syntheticDDL: false }};
+}
+
+function downloadProductionNotebook() {
+  const prodNb = generateProductionNotebook();
+  if (!prodNb) { console.warn('[SEG] No notebook data — complete Steps 1-6 first'); return; }
+
+  // Convert to Databricks .py notebook format (same as downloadNotebook)
+  const pyCells = prodNb.cells.map(c => {
+    if (c.type === 'md') {
+      return c.source.split('\n').map(l => '# MAGIC %md\n# MAGIC ' === l ? '# MAGIC %md' : '# MAGIC ' + l).join('\n');
+    }
+    if (c.type === 'sql') {
+      return '# MAGIC %sql\n' + c.source.split('\n').map(l => '# MAGIC ' + l).join('\n');
+    }
+    return c.source;
+  });
+
+  const nb = '# Databricks notebook source\n\n' + pyCells.join('\n\n# COMMAND ----------\n\n');
+  const flowSlug = sanitizeVarName(prodNb.flowName || 'nifi_migration').substring(0, 40);
+  const blob = new Blob([nb], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${flowSlug}_production_notebook.py`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // ================================================================
