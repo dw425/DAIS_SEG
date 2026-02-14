@@ -6458,7 +6458,7 @@ function downloadNotebook() {
   // Convert clean cell content to Databricks .py notebook format
   const pyCells = STATE.notebook.cells.map(c => {
     if (c.type === 'md') {
-      return c.source.split('\n').map(l => '# MAGIC %md' === l ? '# MAGIC %md' : '# MAGIC ' + l).join('\n');
+      return '# MAGIC %md\n' + c.source.split('\n').map(l => '# MAGIC ' + l).join('\n');
     }
     if (c.type === 'sql') {
       return '# MAGIC %sql\n' + c.source.split('\n').map(l => '# MAGIC ' + l).join('\n');
@@ -6795,10 +6795,10 @@ function downloadProductionNotebook() {
   const prodNb = generateProductionNotebook();
   if (!prodNb) { console.warn('[SEG] No notebook data — complete Steps 1-6 first'); return; }
 
-  // Convert to Databricks .py notebook format (same as downloadNotebook)
+  // Convert to Databricks .py notebook format
   const pyCells = prodNb.cells.map(c => {
     if (c.type === 'md') {
-      return c.source.split('\n').map(l => '# MAGIC %md\n# MAGIC ' === l ? '# MAGIC %md' : '# MAGIC ' + l).join('\n');
+      return '# MAGIC %md\n' + c.source.split('\n').map(l => '# MAGIC ' + l).join('\n');
     }
     if (c.type === 'sql') {
       return '# MAGIC %sql\n' + c.source.split('\n').map(l => '# MAGIC ' + l).join('\n');
