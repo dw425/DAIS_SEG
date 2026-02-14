@@ -2884,7 +2884,7 @@ function buildResourceManifest(nifi) {
         });
       }
       // Kerberos — mark script as auth-related
-      if (/kinit|keytab|kerberos|klist/.test(allCmd)) {
+      if (/kinit|keytab|kerberos|klist/.test(allCmd) && scripts.length && cmd) {
         scripts[scripts.length-1]._cloudera = 'kerberos';
       }
       // Sqoop — extract table refs
