@@ -376,7 +376,12 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
       </div>
     </div>
     <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <button class="btn btn-primary" onclick="parseInput()">Parse Input</button>
+      <button class="btn btn-primary" id="parseBtn" onclick="parseInput()">Parse Input</button>
+      <div id="parseProgress" style="display:none;flex:1;min-width:300px;align-items:center;gap:10px">
+        <div style="flex:0 0 200px;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden"><div id="parsePBar" style="height:100%;width:0%;background:var(--primary);border-radius:4px;transition:width 0.15s"></div></div>
+        <span id="parsePPct" style="font-size:0.8rem;font-weight:700;color:var(--primary);min-width:36px">0%</span>
+        <span id="parsePStatus" style="font-size:0.78rem;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:500px"></span>
+      </div>
     </div>
     <div style="margin-top:20px;border:1px solid var(--border);border-radius:12px;padding:16px;background:var(--bg2)">
       <h3 style="margin:0 0 4px 0;font-size:0.95rem">Sample Files — Click to Load &amp; Run</h3>
@@ -1954,26 +1959,523 @@ function parseNiFiXML(doc, sourceName) {
     c.destinationName = idToName[c.destinationId] || c.destinationId.substring(0,12)+'...';
   });
 
-  // Extract SQL and table refs from processor properties
+  // Extract SQL and table refs from processor properties — build FULL table inventory
   const sqlTables = new Set();
-  processors.forEach(p => {
-    Object.values(p.properties).forEach(v => {
-      if (!v) return;
-      // Try to find CREATE TABLE
-      if (/CREATE\s+(?:EXTERNAL\s+)?TABLE/i.test(v)) {
-        try { const r = parseDDL(v, p.name); tables.push(...r.tables); } catch(e) {}
-      }
-      // Extract table name refs from SQL
-      const tblRefs = v.match(/(?:FROM|JOIN|INTO|TABLE|UPDATE)\s+(?:\$\{[^}]+\}|[\w.]+)/gi);
-      if (tblRefs) tblRefs.forEach(m => {
-        const tn = m.replace(/^(FROM|JOIN|INTO|TABLE|UPDATE)\s+/i,'').trim();
-        if (tn && !tn.startsWith('(') && tn.length > 2 && !/^(select|where|set|and|or|as|on|in|is|not|null|case|when|then|else|end|group|order|by|having|limit|offset|union|all|exists|between|like|true|false|values|into|for|if|with|from|table|now|production|varchar|int|bigint|text|date|timestamp|decimal|boolean|float|double)$/i.test(tn)) sqlTables.add(tn);
+  const sqlTableMeta = {}; // {tableName: {readers:[], writers:[], columns:Set, sqlContexts:[], parameterized:bool}}
+  const SQL_NOISE = new Set(['select','where','set','and','or','as','on','in','is','not','null','case','when','then','else','end','group','order','by','having','limit','offset','union','all','exists','between','like','true','false','values','into','for','if','with','from','table','now','production','varchar','int','bigint','text','date','timestamp','decimal','boolean','float','double','waiting','because','account','log','Dates','LeadLag','startGrouping','grps','Temptation','dual']);
+  function addSqlTableMeta(tn, role, proc, sqlCtx) {
+    if (!tn || tn.length < 2 || SQL_NOISE.has(tn) || SQL_NOISE.has(tn.toLowerCase())) return;
+    const cleaned = tn.replace(/^["'`]+|["'`]+$/g, '').trim();
+    if (!cleaned || cleaned.startsWith('(')) return;
+    // Skip NiFi Expression Language CTE aliases
+    if (/^\$\{.*\}$/.test(cleaned) && !/\$\{(external_table|staging_table|prod_table|query|script)/.test(cleaned)) return;
+    sqlTables.add(cleaned);
+    if (!sqlTableMeta[cleaned]) sqlTableMeta[cleaned] = { readers:[], writers:[], columns: new Set(), sqlContexts:[], parameterized: cleaned.includes('${') };
+    if (role === 'read') sqlTableMeta[cleaned].readers.push(proc);
+    else sqlTableMeta[cleaned].writers.push(proc);
+    if (sqlCtx) sqlTableMeta[cleaned].sqlContexts.push(sqlCtx);
+  }
+  function extractColumnsFromSQL(sql) {
+    const cols = new Set();
+    // Extract from SELECT columns
+    const selMatch = sql.match(/SELECT\s+([\s\S]*?)\s+FROM/i);
+    if (selMatch && selMatch[1] && selMatch[1].trim() !== '*') {
+      selMatch[1].split(',').forEach(c => {
+        const col = c.trim().replace(/.*\s+AS\s+/i,'').replace(/.*\./,'').replace(/[()]/g,'').trim();
+        if (col && col !== '*' && col.length < 60 && !/^(count|sum|avg|min|max|nvl|concat|coalesce|cast|case|distinct|group_concat|trim|substr|substring|upper|lower|replace|ifnull|nullif|round|ceil|floor|abs|date_format|current_timestamp|current_date)$/i.test(col.split('(')[0])) cols.add(col.toLowerCase());
       });
-    });
-    // Extract table names from specific NiFi properties
-    ['Table Name','table-name','put-db-record-table-name'].forEach(k => {
-      if (p.properties[k]) sqlTables.add(p.properties[k]);
-    });
+    }
+    // Extract from WHERE column references
+    const whereMatch = sql.match(/WHERE\s+([\s\S]*?)(?:ORDER|GROUP|LIMIT|HAVING|UNION|$)/i);
+    if (whereMatch) {
+      const parts = whereMatch[1].match(/(\w+)\s*(?:=|<|>|!=|LIKE|IN|IS|BETWEEN)/gi);
+      if (parts) parts.forEach(p => {
+        const col = p.replace(/\s*(=|<|>|!=|LIKE|IN|IS|BETWEEN).*$/i,'').replace(/.*\./,'').trim();
+        if (col && col.length < 50 && !SQL_NOISE.has(col.toLowerCase())) cols.add(col.toLowerCase());
+      });
+    }
+    // Extract from INSERT column list
+    const insMatch = sql.match(/INSERT\s+INTO\s+\S+\s*\(([^)]+)\)/i);
+    if (insMatch) insMatch[1].split(',').forEach(c => { const col = c.trim(); if (col) cols.add(col.toLowerCase()); });
+    return cols;
+  }
+  // External system detection — comprehensive multi-system scan
+  // Covers: Cloudera/Hadoop, AWS, Azure, GCP, Kafka, databases, messaging, monitoring, file transfer, custom code
+  const clouderaTools = [];
+  // Deep property inventory: tracks every file path, URL, JDBC connection, NiFi EL, CRON, credential reference
+  const deepPropertyInventory = { filePaths: {}, urls: {}, jdbcUrls: {}, nifiEL: {}, cronExprs: {}, credentialRefs: {}, hostPorts: {}, dataFormats: new Set(), encodings: new Set() };
+  // Pre-compiled regex patterns for performance at 5000+ processors
+  const _RE = {
+    createTable: /CREATE\s+(?:EXTERNAL\s+)?TABLE/i,
+    sqlKeyword: /FROM|JOIN|INTO|TABLE|UPDATE/i,
+    sqlTableRef: /(?:FROM|JOIN|INTO|TABLE|UPDATE)\s+(?:\$\{[^}]+\}|[\w.]+)/gi,
+    sqlWriteRole: /^(INTO|UPDATE)/i,
+    selectInsert: /SELECT|INSERT/i,
+    filePath: /(?:\/[\w${}._-]+){2,}/g,
+    urlPattern: /https?:\/\/[^\s"',;]+/gi,
+    jdbcUrl: /jdbc:[a-z0-9]+:[^\s"',;]+/gi,
+    nifiEL: /\$\{[^}]+\}/g,
+    cronExpr: /(?:^|\s)((?:\*|[0-9]+(?:[-/,][0-9]+)*)\s+){4,5}(?:\*|[0-9]+(?:[-/,][0-9]+)*)/,
+    hostPort: /([a-zA-Z0-9][-a-zA-Z0-9.]+\.[a-zA-Z]{2,})(?::(\d{2,5}))?/g,
+    credentialKey: /password|secret|token|api[_-]?key|credential|private[_-]?key|auth/i,
+    impalaCmd: /impala-shell|impala/,
+    hdfsCmd: /hdfs|dfs/,
+    kerberosCmd: /kinit|keytab|kerberos|klist|kdestroy/,
+    hiveCmd: /hive|beeline/,
+    kuduCmd: /kudu/,
+    sqoopCmd: /sqoop/,
+    oozieCmd: /oozie/,
+    flumeCmd: /flume/,
+    hbaseCmd: /hbase/,
+    sparkCmd: /spark-submit|spark-shell|pyspark/,
+    pigCmd: /pig\b/,
+    mapreduceCmd: /hadoop\s+jar|mapreduce/,
+    solrCmd: /solr/,
+    zookeeperCmd: /zookeeper|zkCli/,
+    rangerCmd: /ranger/,
+    sentryCmd: /sentry/,
+    atlasCmd: /atlas/,
+    kafkaCmd: /kafka/,
+    nifiCmd: /nifi/,
+    pythonCmd: /python[23]?|pip\b/,
+    rCmd: /\bRscript\b|\bR\s+--/,
+    scriptExt: /\.sh$|\.py$|\.pl$|\.rb$|\.groovy$|\.jar$|\.bat$|\.ps1$/,
+    dataFormat: /avro|parquet|orc|json|csv|tsv|xml|protobuf|thrift|msgpack|yaml|excel|xlsx/i
+  };
+  // NiFi processor type → external system mapping (covers 100+ processor types)
+  const PROC_TYPE_SYSTEM_MAP = {
+    // Kafka
+    ConsumeKafka:{tool:'Kafka',subtype:'consumer',dbx:'Structured Streaming',pri:1,code:'spark.readStream.format("kafka")...',notes:'Kafka → Structured Streaming consumer'},
+    ConsumeKafka_2_6:{tool:'Kafka',subtype:'consumer-2.6',dbx:'Structured Streaming',pri:1,code:'spark.readStream.format("kafka")...',notes:'Kafka 2.6 consumer'},
+    ConsumeKafkaRecord_2_6:{tool:'Kafka',subtype:'record-consumer',dbx:'Structured Streaming',pri:1,code:'spark.readStream.format("kafka")...select(from_json(...))',notes:'Kafka record consumer with schema'},
+    PublishKafka:{tool:'Kafka',subtype:'producer',dbx:'Structured Streaming Write',pri:1,code:'df.write.format("kafka")...',notes:'Kafka producer'},
+    PublishKafka_2_6:{tool:'Kafka',subtype:'producer-2.6',dbx:'Structured Streaming Write',pri:1,code:'df.write.format("kafka")...',notes:'Kafka 2.6 producer'},
+    PublishKafkaRecord_2_6:{tool:'Kafka',subtype:'record-producer',dbx:'Structured Streaming Write',pri:1,code:'df.selectExpr("to_json(struct(*)) AS value").write.format("kafka")...',notes:'Kafka record producer'},
+    // AWS
+    ListS3:{tool:'AWS S3',subtype:'list',dbx:'dbutils.fs.ls / Unity Catalog External Location',pri:1,code:'dbutils.fs.ls("s3://<bucket>/<prefix>")',notes:'Use Unity Catalog external locations for S3'},
+    FetchS3Object:{tool:'AWS S3',subtype:'fetch',dbx:'Spark Read',pri:1,code:'spark.read.format("<fmt>").load("s3://<bucket>/<key>")',notes:'Read S3 via external location'},
+    GetS3Object:{tool:'AWS S3',subtype:'get',dbx:'Spark Read',pri:1,code:'spark.read.load("s3://<bucket>/<key>")',notes:'Read S3 objects'},
+    PutS3Object:{tool:'AWS S3',subtype:'put',dbx:'Spark Write',pri:1,code:'df.write.save("s3://<bucket>/<key>")',notes:'Write to S3 via external location'},
+    DeleteS3Object:{tool:'AWS S3',subtype:'delete',dbx:'dbutils.fs.rm',pri:3,code:'dbutils.fs.rm("s3://<bucket>/<key>")',notes:'Delete S3 objects'},
+    TagS3Object:{tool:'AWS S3',subtype:'tag',dbx:'boto3 / dbutils',pri:3,code:'# Use boto3 for S3 tagging',notes:'No native Spark equivalent'},
+    PutSNS:{tool:'AWS SNS',subtype:'publish',dbx:'Databricks Workflows Notification',pri:3,code:'# Use workflow notifications or boto3\nimport boto3; sns = boto3.client("sns")',notes:'Use workflow notifications or boto3'},
+    GetSQS:{tool:'AWS SQS',subtype:'consume',dbx:'Structured Streaming Custom',pri:3,code:'# Use boto3 or custom Spark source',notes:'No native SQS source; use boto3 or Kinesis'},
+    PutSQS:{tool:'AWS SQS',subtype:'produce',dbx:'boto3',pri:3,code:'import boto3; sqs = boto3.client("sqs")',notes:'Use boto3 for SQS'},
+    PutDynamoDB:{tool:'AWS DynamoDB',subtype:'write',dbx:'Spark DynamoDB Connector',pri:2,code:'df.write.format("dynamodb").option("tableName","<tbl>").save()',notes:'Install emr-dynamodb-connector'},
+    GetDynamoDB:{tool:'AWS DynamoDB',subtype:'read',dbx:'Spark DynamoDB Connector',pri:2,code:'spark.read.format("dynamodb").option("tableName","<tbl>").load()',notes:'Install emr-dynamodb-connector'},
+    PutKinesisFirehose:{tool:'AWS Kinesis',subtype:'firehose',dbx:'Structured Streaming Kinesis',pri:2,code:'df.writeStream.format("kinesis")...',notes:'Use kinesis-spark connector'},
+    PutKinesisStream:{tool:'AWS Kinesis',subtype:'stream',dbx:'Structured Streaming Kinesis',pri:2,code:'df.writeStream.format("kinesis")...',notes:'Use kinesis-spark connector'},
+    GetKinesisStream:{tool:'AWS Kinesis',subtype:'consumer',dbx:'Structured Streaming Kinesis',pri:2,code:'spark.readStream.format("kinesis")...',notes:'Use kinesis-spark connector'},
+    PutLambda:{tool:'AWS Lambda',subtype:'invoke',dbx:'Databricks Workflows / boto3',pri:3,code:'import boto3; lam = boto3.client("lambda")',notes:'Use Databricks Jobs or boto3 for Lambda'},
+    // Azure
+    PutAzureBlobStorage:{tool:'Azure Blob',subtype:'write',dbx:'Spark Write / Unity Catalog',pri:1,code:'df.write.save("wasbs://<container>@<account>.blob.core.windows.net/<path>")',notes:'Use Unity Catalog external location'},
+    FetchAzureBlobStorage:{tool:'Azure Blob',subtype:'read',dbx:'Spark Read',pri:1,code:'spark.read.load("wasbs://...")',notes:'Use Unity Catalog external location'},
+    ListAzureBlobStorage:{tool:'Azure Blob',subtype:'list',dbx:'dbutils.fs.ls',pri:1,code:'dbutils.fs.ls("wasbs://...")',notes:'List Azure Blob contents'},
+    DeleteAzureBlobStorage:{tool:'Azure Blob',subtype:'delete',dbx:'dbutils.fs.rm',pri:3,code:'dbutils.fs.rm("wasbs://...")',notes:'Delete Azure Blob objects'},
+    PutAzureDataLakeStorage:{tool:'Azure ADLS',subtype:'write',dbx:'Spark Write / Unity Catalog',pri:1,code:'df.write.save("abfss://<container>@<account>.dfs.core.windows.net/<path>")',notes:'Unity Catalog external location'},
+    FetchAzureDataLakeStorage:{tool:'Azure ADLS',subtype:'read',dbx:'Spark Read',pri:1,code:'spark.read.load("abfss://...")',notes:'Unity Catalog external location'},
+    ListAzureDataLakeStorage:{tool:'Azure ADLS',subtype:'list',dbx:'dbutils.fs.ls',pri:1,code:'dbutils.fs.ls("abfss://...")',notes:'List ADLS contents'},
+    DeleteAzureDataLakeStorage:{tool:'Azure ADLS',subtype:'delete',dbx:'dbutils.fs.rm',pri:3,code:'dbutils.fs.rm("abfss://...")',notes:'Delete ADLS objects'},
+    PutAzureEventHub:{tool:'Azure Event Hubs',subtype:'produce',dbx:'Structured Streaming + Event Hubs Connector',pri:1,code:'df.writeStream.format("eventhubs")...',notes:'Install azure-eventhubs-spark library'},
+    ConsumeAzureEventHub:{tool:'Azure Event Hubs',subtype:'consume',dbx:'Structured Streaming',pri:1,code:'spark.readStream.format("eventhubs")...',notes:'Install azure-eventhubs-spark library'},
+    GetAzureEventHub:{tool:'Azure Event Hubs',subtype:'get',dbx:'Structured Streaming',pri:1,code:'spark.readStream.format("eventhubs")...',notes:'Install azure-eventhubs-spark library'},
+    PutAzureCosmosDBRecord:{tool:'Azure Cosmos DB',subtype:'write',dbx:'Cosmos DB Spark Connector',pri:2,code:'df.write.format("cosmos.oltp").option("spark.cosmos.accountEndpoint","...").save()',notes:'Install azure-cosmos-spark library'},
+    PutAzureCosmosDB:{tool:'Azure Cosmos DB',subtype:'write',dbx:'Cosmos DB Spark Connector',pri:2,code:'df.write.format("cosmos.oltp")...',notes:'Install azure-cosmos-spark library'},
+    // GCP
+    ListGCSBucket:{tool:'GCP GCS',subtype:'list',dbx:'dbutils.fs.ls / External Location',pri:1,code:'dbutils.fs.ls("gs://<bucket>/<prefix>")',notes:'Use Unity Catalog external location for GCS'},
+    FetchGCSObject:{tool:'GCP GCS',subtype:'fetch',dbx:'Spark Read',pri:1,code:'spark.read.load("gs://<bucket>/<key>")',notes:'GCS via external location'},
+    PutGCSObject:{tool:'GCP GCS',subtype:'put',dbx:'Spark Write',pri:1,code:'df.write.save("gs://<bucket>/<key>")',notes:'GCS via external location'},
+    DeleteGCSObject:{tool:'GCP GCS',subtype:'delete',dbx:'dbutils.fs.rm',pri:3,code:'dbutils.fs.rm("gs://<bucket>/<key>")',notes:'Delete GCS objects'},
+    PutBigQueryBatch:{tool:'GCP BigQuery',subtype:'write',dbx:'BigQuery Spark Connector',pri:1,code:'df.write.format("bigquery").option("table","<project>.<dataset>.<table>").save()',notes:'Install spark-bigquery-connector'},
+    // MongoDB
+    GetMongo:{tool:'MongoDB',subtype:'read',dbx:'MongoDB Spark Connector',pri:2,code:'spark.read.format("mongodb").option("connection.uri","...").load()',notes:'Install mongodb-spark-connector'},
+    PutMongo:{tool:'MongoDB',subtype:'write',dbx:'MongoDB Spark Connector',pri:2,code:'df.write.format("mongodb").mode("append").save()',notes:'Install mongodb-spark-connector'},
+    PutMongoRecord:{tool:'MongoDB',subtype:'record-write',dbx:'MongoDB Spark Connector',pri:2,code:'df.write.format("mongodb").mode("append").save()',notes:'Record-based MongoDB write'},
+    DeleteMongo:{tool:'MongoDB',subtype:'delete',dbx:'pymongo',pri:3,code:'from pymongo import MongoClient; db.collection.delete_many({...})',notes:'Use pymongo for deletes'},
+    // Elasticsearch
+    PutElasticsearchHttp:{tool:'Elasticsearch',subtype:'write',dbx:'ES Spark Connector',pri:2,code:'df.write.format("org.elasticsearch.spark.sql").save("<index>")',notes:'Install elasticsearch-spark'},
+    PutElasticsearchHttpRecord:{tool:'Elasticsearch',subtype:'record-write',dbx:'ES Spark Connector',pri:2,code:'df.write.format("org.elasticsearch.spark.sql").save("<index>")',notes:'Record-based ES write'},
+    PutElasticsearchRecord:{tool:'Elasticsearch',subtype:'record-write',dbx:'ES Spark Connector',pri:2,code:'df.write.format("org.elasticsearch.spark.sql").save("<index>")',notes:'ES record write'},
+    FetchElasticsearchHttp:{tool:'Elasticsearch',subtype:'read',dbx:'ES Spark Connector',pri:2,code:'spark.read.format("org.elasticsearch.spark.sql").load("<index>")',notes:'ES read'},
+    GetElasticsearch:{tool:'Elasticsearch',subtype:'read',dbx:'ES Spark Connector',pri:2,code:'spark.read.format("org.elasticsearch.spark.sql").load("<index>")',notes:'ES read'},
+    JsonQueryElasticsearch:{tool:'Elasticsearch',subtype:'query',dbx:'ES Spark Connector',pri:2,code:'spark.read.format("org.elasticsearch.spark.sql").option("es.query","...").load("<index>")',notes:'ES query read'},
+    ScrollElasticsearchHttp:{tool:'Elasticsearch',subtype:'scroll',dbx:'ES Spark Connector',pri:2,code:'spark.read.format("org.elasticsearch.spark.sql").load("<index>")',notes:'ES scroll read'},
+    // Cassandra
+    PutCassandraQL:{tool:'Cassandra',subtype:'write',dbx:'Cassandra Spark Connector',pri:2,code:'df.write.format("org.apache.spark.sql.cassandra").option("keyspace","...").option("table","...").save()',notes:'Install spark-cassandra-connector'},
+    PutCassandraRecord:{tool:'Cassandra',subtype:'record-write',dbx:'Cassandra Spark Connector',pri:2,code:'df.write.format("org.apache.spark.sql.cassandra").save()',notes:'Record-based Cassandra write'},
+    QueryCassandra:{tool:'Cassandra',subtype:'read',dbx:'Cassandra Spark Connector',pri:2,code:'spark.read.format("org.apache.spark.sql.cassandra").option("keyspace","...").option("table","...").load()',notes:'Cassandra read'},
+    // HBase (processor-type based)
+    PutHBaseCell:{tool:'HBase',subtype:'cell-write',dbx:'Delta Lake',pri:1,code:'df.write.format("delta").saveAsTable("<catalog>.<schema>.<table>")',notes:'Replace HBase with Delta Lake'},
+    PutHBaseJSON:{tool:'HBase',subtype:'json-write',dbx:'Delta Lake',pri:1,code:'df.write.format("delta").mode("append").saveAsTable("...")',notes:'JSON to Delta Lake'},
+    PutHBaseRecord:{tool:'HBase',subtype:'record-write',dbx:'Delta Lake',pri:1,code:'df.write.format("delta").mode("append").saveAsTable("...")',notes:'Record write to Delta Lake'},
+    GetHBase:{tool:'HBase',subtype:'read',dbx:'Delta Lake',pri:1,code:'spark.read.format("delta").table("...")',notes:'Replace HBase scan with Delta table read'},
+    ScanHBase:{tool:'HBase',subtype:'scan',dbx:'Delta Lake',pri:1,code:'spark.table("<catalog>.<schema>.<table>").filter(...)',notes:'HBase scan → Delta table filter'},
+    FetchHBaseRow:{tool:'HBase',subtype:'fetch',dbx:'Delta Lake',pri:1,code:'spark.table("...").filter(col("rowkey") == "...")',notes:'HBase row fetch → Delta point lookup'},
+    // Hive (processor-type based)
+    PutHiveQL:{tool:'Hive',subtype:'hiveql-write',dbx:'Spark SQL',pri:1,code:'spark.sql("INSERT INTO <table> ...")',notes:'HiveQL → Spark SQL'},
+    SelectHiveQL:{tool:'Hive',subtype:'hiveql-read',dbx:'Spark SQL',pri:1,code:'spark.sql("SELECT ...")',notes:'HiveQL → Spark SQL'},
+    PutHiveStreaming:{tool:'Hive',subtype:'streaming',dbx:'Structured Streaming + Delta',pri:1,code:'df.writeStream.format("delta").toTable("...")',notes:'Hive streaming → Delta streaming'},
+    PutORC:{tool:'Hive',subtype:'orc-write',dbx:'Delta Lake',pri:1,code:'df.write.format("delta").saveAsTable("...")',notes:'ORC → Delta Lake (better performance)'},
+    PutParquet:{tool:'Hive',subtype:'parquet-write',dbx:'Delta Lake',pri:1,code:'df.write.format("delta").saveAsTable("...")',notes:'Parquet → Delta Lake (adds ACID)'},
+    // HDFS (processor-type based)
+    GetHDFS:{tool:'HDFS',subtype:'read',dbx:'Unity Catalog Volumes / DBFS',pri:1,code:'spark.read.load("/Volumes/<catalog>/<schema>/<path>")',notes:'HDFS → Volumes'},
+    PutHDFS:{tool:'HDFS',subtype:'write',dbx:'Unity Catalog Volumes / DBFS',pri:1,code:'df.write.save("/Volumes/<catalog>/<schema>/<path>")',notes:'HDFS → Volumes'},
+    ListHDFS:{tool:'HDFS',subtype:'list',dbx:'dbutils.fs.ls',pri:1,code:'dbutils.fs.ls("/Volumes/...")',notes:'HDFS list → dbutils.fs.ls'},
+    FetchHDFS:{tool:'HDFS',subtype:'fetch',dbx:'Spark Read',pri:1,code:'spark.read.load("...")',notes:'HDFS fetch → Spark read'},
+    MoveHDFS:{tool:'HDFS',subtype:'move',dbx:'dbutils.fs.mv',pri:1,code:'dbutils.fs.mv("...", "...")',notes:'HDFS move → dbutils.fs.mv'},
+    DeleteHDFS:{tool:'HDFS',subtype:'delete',dbx:'dbutils.fs.rm',pri:1,code:'dbutils.fs.rm("...")',notes:'HDFS delete → dbutils.fs.rm'},
+    CreateHadoopSequenceFile:{tool:'HDFS',subtype:'sequence-file',dbx:'Delta Lake',pri:1,code:'df.write.format("delta").save("...")',notes:'Sequence files → Delta Lake'},
+    // Kudu
+    PutKudu:{tool:'Kudu',subtype:'write',dbx:'Delta Lake',pri:1,code:'df.write.format("delta").saveAsTable("...")',notes:'Kudu → Delta Lake'},
+    // SFTP/FTP
+    GetSFTP:{tool:'SFTP',subtype:'read',dbx:'Unity Catalog Volumes + External Transfer',pri:2,code:'# Stage from SFTP to Volumes\ndbutils.fs.cp("sftp://...", "/Volumes/...")',notes:'SFTP → stage to Volumes'},
+    PutSFTP:{tool:'SFTP',subtype:'write',dbx:'Unity Catalog Volumes + External Transfer',pri:2,code:'# Stage to Volumes then SFTP transfer',notes:'Volumes → SFTP external transfer'},
+    ListSFTP:{tool:'SFTP',subtype:'list',dbx:'External Listing',pri:3,code:'# Use paramiko for SFTP listing',notes:'No native SFTP listing in Spark'},
+    FetchSFTP:{tool:'SFTP',subtype:'fetch',dbx:'Unity Catalog Volumes',pri:2,code:'# Fetch from SFTP to Volumes',notes:'Stage to Volumes via external tool'},
+    GetFTP:{tool:'FTP',subtype:'read',dbx:'External Transfer + Volumes',pri:3,code:'# FTP → stage to Volumes',notes:'No native FTP; use external transfer'},
+    PutFTP:{tool:'FTP',subtype:'write',dbx:'External Transfer',pri:3,code:'# Volumes → FTP transfer',notes:'No native FTP; use external transfer'},
+    ListFTP:{tool:'FTP',subtype:'list',dbx:'External Listing',pri:3,code:'# Use ftplib for FTP listing',notes:'No native FTP listing'},
+    FetchFTP:{tool:'FTP',subtype:'fetch',dbx:'External Transfer + Volumes',pri:3,code:'# Fetch from FTP to Volumes',notes:'Stage to Volumes'},
+    // HTTP/REST
+    InvokeHTTP:{tool:'HTTP/REST',subtype:'invoke',dbx:'PySpark pandas_udf / requests',pri:2,code:'@pandas_udf("string")\ndef call_api(urls): ...',notes:'HTTP calls via pandas_udf for distributed execution'},
+    HandleHttpRequest:{tool:'HTTP/REST',subtype:'server',dbx:'Model Serving / API Gateway',pri:3,code:'# No native HTTP server; use Model Serving',notes:'Databricks cannot host HTTP endpoints natively'},
+    HandleHttpResponse:{tool:'HTTP/REST',subtype:'response',dbx:'Model Serving',pri:3,code:'# Pair with HandleHttpRequest replacement',notes:'Use Model Serving'},
+    ListenHTTP:{tool:'HTTP/REST',subtype:'listener',dbx:'Model Serving / Webhook',pri:3,code:'# External API gateway → Databricks Job trigger',notes:'Use webhook or Model Serving'},
+    PostHTTP:{tool:'HTTP/REST',subtype:'post',dbx:'requests / pandas_udf',pri:2,code:'import requests; requests.post(url, json=data)',notes:'HTTP POST via requests'},
+    GetHTTP:{tool:'HTTP/REST',subtype:'get',dbx:'Spark HTTP / requests',pri:2,code:'spark.read.json(url)',notes:'HTTP GET'},
+    // JMS
+    ConsumeJMS:{tool:'JMS',subtype:'consume',dbx:'Structured Streaming Custom Source',pri:3,code:'# Use custom Spark data source or Python JMS client',notes:'No native JMS; use custom connector'},
+    PublishJMS:{tool:'JMS',subtype:'publish',dbx:'Python JMS Client',pri:3,code:'# Use stomp.py or java JMS client via spark._jvm',notes:'No native JMS publisher'},
+    // AMQP / RabbitMQ
+    ConsumeAMQP:{tool:'AMQP/RabbitMQ',subtype:'consume',dbx:'Structured Streaming Custom',pri:3,code:'# Use pika or custom Spark source',notes:'No native AMQP; use pika library'},
+    PublishAMQP:{tool:'AMQP/RabbitMQ',subtype:'publish',dbx:'pika',pri:3,code:'import pika; channel.basic_publish(...)',notes:'Use pika for AMQP/RabbitMQ'},
+    // MQTT
+    ConsumeMQTT:{tool:'MQTT',subtype:'consume',dbx:'Structured Streaming Custom',pri:3,code:'# Use paho-mqtt or custom Spark source',notes:'No native MQTT; use paho-mqtt'},
+    PublishMQTT:{tool:'MQTT',subtype:'publish',dbx:'paho-mqtt',pri:3,code:'import paho.mqtt.client as mqtt; client.publish(...)',notes:'Use paho-mqtt for MQTT publishing'},
+    // Solr
+    PutSolrContentStream:{tool:'Solr',subtype:'write',dbx:'Solr Spark Connector / pysolr',pri:3,code:'# Use pysolr or solr-spark connector',notes:'Install solr-spark or use pysolr'},
+    PutSolrRecord:{tool:'Solr',subtype:'record-write',dbx:'Solr Spark Connector',pri:3,code:'df.write.format("solr").save()',notes:'Install solr-spark connector'},
+    GetSolr:{tool:'Solr',subtype:'read',dbx:'Solr Spark Connector',pri:3,code:'spark.read.format("solr").load()',notes:'Install solr-spark connector'},
+    QuerySolr:{tool:'Solr',subtype:'query',dbx:'Solr Spark Connector',pri:3,code:'spark.read.format("solr").option("query","...").load()',notes:'Solr query read'},
+    // Email
+    PutEmail:{tool:'Email/SMTP',subtype:'send',dbx:'Workflow Notification / smtplib',pri:3,code:'# Use Databricks Job email notifications\n# Or: import smtplib',notes:'Use workflow notifications or smtplib'},
+    GetPOP3:{tool:'Email/POP3',subtype:'receive',dbx:'poplib',pri:3,code:'import poplib; pop = poplib.POP3_SSL(host)',notes:'Use poplib for POP3'},
+    GetIMAP:{tool:'Email/IMAP',subtype:'receive',dbx:'imaplib',pri:3,code:'import imaplib; mail = imaplib.IMAP4_SSL(host)',notes:'Use imaplib for IMAP'},
+    // Syslog
+    PutSyslog:{tool:'Syslog',subtype:'send',dbx:'Python syslog / Logging',pri:3,code:'import syslog; syslog.syslog(...)',notes:'Use Python syslog module'},
+    ListenSyslog:{tool:'Syslog',subtype:'listen',dbx:'Structured Streaming TCP',pri:3,code:'spark.readStream.format("socket")...',notes:'Use socket source or external syslog collector'},
+    ParseSyslog:{tool:'Syslog',subtype:'parse',dbx:'PySpark regex',pri:2,code:'df.withColumn("parsed", regexp_extract(...))',notes:'Parse syslog with regex'},
+    // Slack
+    PutSlack:{tool:'Slack',subtype:'send',dbx:'Webhook / requests',pri:3,code:'import requests; requests.post(webhook_url, json={"text":"..."})',notes:'Use Slack webhook integration'},
+    // TCP/UDP
+    PutTCP:{tool:'TCP',subtype:'send',dbx:'Python socket',pri:3,code:'import socket; s = socket.socket(); s.connect((host,port))',notes:'Use Python socket'},
+    ListenTCP:{tool:'TCP',subtype:'listen',dbx:'Structured Streaming socket',pri:3,code:'spark.readStream.format("socket").option("host","...").option("port","...").load()',notes:'Socket source'},
+    ListenUDP:{tool:'UDP',subtype:'listen',dbx:'Python socket',pri:3,code:'import socket; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)',notes:'Use Python UDP socket'},
+    GetTCP:{tool:'TCP',subtype:'get',dbx:'Python socket',pri:3,code:'import socket; s.recv(...)',notes:'Use Python socket'},
+    // SNMP
+    GetSNMP:{tool:'SNMP',subtype:'get',dbx:'pysnmp',pri:3,code:'from pysnmp.hlapi import *; getCmd(...)',notes:'Use pysnmp library'},
+    SetSNMP:{tool:'SNMP',subtype:'set',dbx:'pysnmp',pri:3,code:'from pysnmp.hlapi import *; setCmd(...)',notes:'Use pysnmp library'},
+    // Splunk
+    PutSplunk:{tool:'Splunk',subtype:'send',dbx:'Splunk Spark Connector / HEC',pri:2,code:'# Use Splunk HTTP Event Collector\nimport requests; requests.post(hec_url, json=...)',notes:'Use Splunk HEC or splunk-spark connector'},
+    GetSplunk:{tool:'Splunk',subtype:'read',dbx:'Splunk Spark Connector',pri:2,code:'spark.read.format("splunk")...',notes:'Install splunk-spark connector'},
+    QuerySplunkIndexingStatus:{tool:'Splunk',subtype:'query',dbx:'Splunk REST API',pri:3,code:'import requests; requests.get(splunk_url + "/services/...")',notes:'Splunk REST API'},
+    // InfluxDB
+    PutInfluxDB:{tool:'InfluxDB',subtype:'write',dbx:'influxdb-client-python',pri:3,code:'from influxdb_client import InfluxDBClient; client.write_api().write(...)',notes:'Use influxdb-client-python'},
+    // Couchbase
+    PutCouchbaseKey:{tool:'Couchbase',subtype:'write',dbx:'Couchbase Spark Connector',pri:3,code:'df.write.format("couchbase.kv").save()',notes:'Install couchbase-spark connector'},
+    GetCouchbaseKey:{tool:'Couchbase',subtype:'read',dbx:'Couchbase Spark Connector',pri:3,code:'spark.read.format("couchbase.kv").load()',notes:'Install couchbase-spark connector'},
+    // Redis
+    PutDistributedMapCache:{tool:'Redis/NiFi Cache',subtype:'cache-put',dbx:'Delta Lake Cache / Spark Cache',pri:2,code:'df.cache()  # Or persist to Delta lookup table',notes:'Replace distributed cache with Spark caching or Delta lookup'},
+    FetchDistributedMapCache:{tool:'Redis/NiFi Cache',subtype:'cache-fetch',dbx:'Spark Cache / Delta Lookup',pri:2,code:'df_lookup = spark.table("...").cache()',notes:'Use cached Delta table for lookups'},
+    // Database (processor-type)
+    ExecuteSQL:{tool:'Database/SQL',subtype:'execute',dbx:'Spark SQL',pri:1,code:'spark.sql("...")',notes:'Direct Spark SQL equivalent'},
+    ExecuteSQLRecord:{tool:'Database/SQL',subtype:'execute-record',dbx:'Spark SQL',pri:1,code:'spark.sql("...")',notes:'Spark SQL with schema'},
+    PutDatabaseRecord:{tool:'Database/JDBC',subtype:'record-write',dbx:'Spark JDBC Write',pri:1,code:'df.write.format("jdbc")...',notes:'JDBC write'},
+    QueryDatabaseTable:{tool:'Database/JDBC',subtype:'query',dbx:'Spark JDBC Read',pri:1,code:'spark.read.format("jdbc")...',notes:'JDBC read'},
+    QueryDatabaseTableRecord:{tool:'Database/JDBC',subtype:'query-record',dbx:'Spark JDBC Read',pri:1,code:'spark.read.format("jdbc")...',notes:'JDBC record read'},
+    PutSQL:{tool:'Database/SQL',subtype:'put-sql',dbx:'Spark SQL / JDBC',pri:1,code:'spark.sql("INSERT INTO ...")',notes:'SQL write'},
+    ConvertJSONToSQL:{tool:'Database/SQL',subtype:'json-to-sql',dbx:'Spark SQL',pri:1,code:'df.createOrReplaceTempView("t"); spark.sql("SELECT * FROM t")',notes:'JSON → Spark SQL'},
+    GenerateTableFetch:{tool:'Database/JDBC',subtype:'table-fetch',dbx:'Spark JDBC Incremental',pri:1,code:'spark.read.format("jdbc").option("dbtable","(SELECT * FROM t WHERE id > ?) t")...',notes:'Incremental JDBC fetch'},
+    // Custom code
+    ExecuteScript:{tool:'Custom Script',subtype:'script',dbx:'Databricks Notebook',pri:2,code:'# Translate script logic to PySpark',notes:'Manual translation required'},
+    ExecuteGroovyScript:{tool:'Custom Script',subtype:'groovy',dbx:'Databricks Notebook',pri:3,code:'# Translate Groovy to PySpark/Python',notes:'Manual translation required'},
+    // NiFi utilities (still track these for completeness)
+    Wait:{tool:'NiFi Orchestration',subtype:'wait',dbx:'Databricks Workflows',pri:1,code:'# Use Job task dependencies',notes:'Replace Wait/Notify with workflow DAG'},
+    Notify:{tool:'NiFi Orchestration',subtype:'notify',dbx:'Databricks Workflows',pri:1,code:'dbutils.notebook.exit("SUCCESS")',notes:'Signal via notebook exit'},
+    ControlRate:{tool:'NiFi Orchestration',subtype:'rate-control',dbx:'Streaming Trigger Interval',pri:1,code:'.trigger(processingTime="...")',notes:'Use structured streaming trigger'},
+    DistributeLoad:{tool:'NiFi Orchestration',subtype:'load-balance',dbx:'Spark Partitioning',pri:1,code:'df.repartition(n)',notes:'Spark handles distribution natively'},
+    DetectDuplicate:{tool:'NiFi Orchestration',subtype:'dedup',dbx:'DataFrame dropDuplicates',pri:1,code:'df.dropDuplicates(["key"])',notes:'Native dedup in Spark'},
+    ValidateRecord:{tool:'NiFi Orchestration',subtype:'validate',dbx:'DLT Expectations',pri:1,code:'@dlt.expect("rule","expr")',notes:'Use Delta Live Tables expectations'},
+    UpdateRecord:{tool:'NiFi Orchestration',subtype:'update-record',dbx:'DataFrame API',pri:1,code:'df.withColumn("col", expr)',notes:'Map to withColumn transformations'},
+    LookupRecord:{tool:'NiFi Orchestration',subtype:'lookup',dbx:'DataFrame Join',pri:1,code:'df.join(df_lookup, on="key", how="left")',notes:'Use DataFrame join with cached lookup table'}
+  };
+  // JDBC URL → database type mapping
+  const JDBC_TYPE_MAP = {oracle:'Oracle DB',mysql:'MySQL',postgresql:'PostgreSQL',sqlserver:'SQL Server',mariadb:'MariaDB',db2:'IBM DB2',hive2:'Hive/Impala',teradata:'Teradata',sybase:'Sybase',informix:'Informix',h2:'H2',hsqldb:'HSQLDB',derby:'Derby',sqlite:'SQLite',redshift:'Amazon Redshift',snowflake:'Snowflake',presto:'Presto',trino:'Trino',clickhouse:'ClickHouse',vertica:'Vertica',phoenix:'Apache Phoenix',sap:'SAP HANA',netezza:'Netezza',greenplum:'Greenplum',cockroachdb:'CockroachDB',yugabytedb:'YugabyteDB',memsql:'MemSQL/SingleStore',timescale:'TimescaleDB',questdb:'QuestDB',duckdb:'DuckDB'};
+  function _processProcessorBatch(batch) {
+    batch.forEach(p => {
+      const vals = Object.values(p.properties);
+      const keys = Object.keys(p.properties);
+      // ── Phase A: SQL extraction from all property values ──
+      for (let vi = 0; vi < vals.length; vi++) {
+        const v = vals[vi];
+        if (!v || typeof v !== 'string') continue;
+        const vLen = v.length;
+        // DDL detection
+        if (vLen > 10 && _RE.createTable.test(v)) {
+          try { const r = parseDDL(v, p.name); tables.push(...r.tables); } catch(e) {}
+        }
+        // SQL table references
+        if (vLen > 4 && _RE.sqlKeyword.test(v)) {
+          _RE.sqlTableRef.lastIndex = 0;
+          const tblRefs = v.match(_RE.sqlTableRef);
+          if (tblRefs) {
+            for (let ti = 0; ti < tblRefs.length; ti++) {
+              const m = tblRefs[ti];
+              const tn = m.replace(/^(FROM|JOIN|INTO|TABLE|UPDATE)\s+/i,'').trim();
+              const role = _RE.sqlWriteRole.test(m) ? 'write' : 'read';
+              addSqlTableMeta(tn, role, p.name, v.substring(0, 300));
+            }
+            if (_RE.selectInsert.test(v)) {
+              const cols = extractColumnsFromSQL(v);
+              if (cols.size > 0) {
+                for (let ti = 0; ti < tblRefs.length; ti++) {
+                  const tn = tblRefs[ti].replace(/^(FROM|JOIN|INTO|TABLE|UPDATE)\s+/i,'').trim().replace(/^["'`]+|["'`]+$/g, '');
+                  if (sqlTableMeta[tn]) cols.forEach(c => sqlTableMeta[tn].columns.add(c));
+                }
+              }
+            }
+          }
+        }
+        // ── Phase B: Deep property scanning ──
+        // File paths
+        if (vLen > 3 && v.includes('/')) {
+          const paths = v.match(_RE.filePath);
+          if (paths) paths.forEach(fp => {
+            if (fp.length > 3 && !/^\/\//.test(fp)) { // skip protocol slashes
+              if (!deepPropertyInventory.filePaths[fp]) deepPropertyInventory.filePaths[fp] = [];
+              deepPropertyInventory.filePaths[fp].push({ processor: p.name, group: p.group, property: keys[vi] });
+            }
+          });
+        }
+        // URLs
+        if (vLen > 8 && /https?:/.test(v)) {
+          const urls = v.match(_RE.urlPattern);
+          if (urls) urls.forEach(u => {
+            if (!deepPropertyInventory.urls[u]) deepPropertyInventory.urls[u] = [];
+            deepPropertyInventory.urls[u].push({ processor: p.name, group: p.group, property: keys[vi] });
+          });
+        }
+        // JDBC URLs
+        if (vLen > 10 && v.startsWith('jdbc:')) {
+          const jdbcs = v.match(_RE.jdbcUrl);
+          if (jdbcs) jdbcs.forEach(j => {
+            if (!deepPropertyInventory.jdbcUrls[j]) deepPropertyInventory.jdbcUrls[j] = [];
+            deepPropertyInventory.jdbcUrls[j].push({ processor: p.name, group: p.group, property: keys[vi] });
+            // Detect database type from JDBC URL
+            const dbType = j.split(':')[1];
+            if (dbType && JDBC_TYPE_MAP[dbType]) {
+              clouderaTools.push({ tool: JDBC_TYPE_MAP[dbType], subtype: 'jdbc-' + dbType, processor: p.name, group: p.group, command: j.replace(/password=[^&;]+/gi,'password=***').substring(0,200),
+                dbx_equivalent: 'Spark JDBC / Unity Catalog External Connection', dbx_priority: 1, dbx_code: `spark.read.format("jdbc").option("url","${j.split('?')[0]}").option("dbtable","<table>").load()`, dbx_notes: `${JDBC_TYPE_MAP[dbType]} via JDBC → Spark JDBC read/write; store credentials in Secret Scopes` });
+            }
+          });
+        }
+        // NiFi Expression Language patterns
+        if (vLen > 3 && v.includes('${')) {
+          const els = v.match(_RE.nifiEL);
+          if (els) els.forEach(el => {
+            const inner = el.slice(2, -1);
+            if (!deepPropertyInventory.nifiEL[inner]) deepPropertyInventory.nifiEL[inner] = [];
+            deepPropertyInventory.nifiEL[inner].push({ processor: p.name, group: p.group, property: keys[vi] });
+          });
+        }
+        // CRON expressions
+        if (vLen > 8 && _RE.cronExpr.test(v)) {
+          if (!deepPropertyInventory.cronExprs[v.trim()]) deepPropertyInventory.cronExprs[v.trim()] = [];
+          deepPropertyInventory.cronExprs[v.trim()].push({ processor: p.name, group: p.group, property: keys[vi] });
+        }
+        // Credential references
+        if (_RE.credentialKey.test(keys[vi])) {
+          const sanitized = v.length > 3 ? v.substring(0,2) + '***' + v.substring(v.length-1) : '***';
+          if (!deepPropertyInventory.credentialRefs[keys[vi]]) deepPropertyInventory.credentialRefs[keys[vi]] = [];
+          deepPropertyInventory.credentialRefs[keys[vi]].push({ processor: p.name, group: p.group, value: sanitized });
+        }
+        // Host:port patterns
+        if (vLen > 5) {
+          _RE.hostPort.lastIndex = 0;
+          let hm;
+          while ((hm = _RE.hostPort.exec(v)) !== null) {
+            const hp = hm[2] ? hm[1] + ':' + hm[2] : hm[1];
+            if (!/\.(css|js|html|png|jpg|gif|svg|ico|woff|ttf|eot)$/i.test(hp) && !/^(www\.|http|example\.com|localhost)/i.test(hm[1])) {
+              if (!deepPropertyInventory.hostPorts[hp]) deepPropertyInventory.hostPorts[hp] = [];
+              deepPropertyInventory.hostPorts[hp].push({ processor: p.name, group: p.group, property: keys[vi] });
+            }
+          }
+        }
+        // Data format detection
+        if (_RE.dataFormat.test(v)) {
+          const fmts = v.match(_RE.dataFormat);
+          if (fmts) fmts.forEach(f => deepPropertyInventory.dataFormats.add(f.toLowerCase()));
+        }
+      }
+      // ── Phase C: NiFi processor-specific table extraction ──
+      const tblNameProps = ['Table Name','table-name','put-db-record-table-name','Table','table','hbase-table','cassandra-table','collection','Collection','mongo-collection','topic','Topic Name','Kafka Topic','Queue Name','queue-name','index','Index','es.index.auto.create','Bucket','S3 Bucket','Container Name','File System'];
+      for (let ki = 0; ki < tblNameProps.length; ki++) {
+        if (p.properties[tblNameProps[ki]]) addSqlTableMeta(p.properties[tblNameProps[ki]], 'write', p.name);
+      }
+      // Scheduling info capture
+      if (p.schedulingStrategy === 'CRON_DRIVEN' && p.schedulingPeriod) {
+        if (!deepPropertyInventory.cronExprs[p.schedulingPeriod]) deepPropertyInventory.cronExprs[p.schedulingPeriod] = [];
+        deepPropertyInventory.cronExprs[p.schedulingPeriod].push({ processor: p.name, group: p.group, property: 'schedulingPeriod' });
+      }
+      // ── Phase D: Processor-type-based external system detection ──
+      const sysEntry = PROC_TYPE_SYSTEM_MAP[p.type];
+      if (sysEntry) {
+        clouderaTools.push({ tool: sysEntry.tool, subtype: sysEntry.subtype, processor: p.name, group: p.group, command: Object.values(p.properties).filter(v => v && typeof v === 'string').slice(0,3).join(' | ').substring(0,200),
+          dbx_equivalent: sysEntry.dbx, dbx_priority: sysEntry.pri, dbx_code: sysEntry.code, dbx_notes: sysEntry.notes });
+      }
+      // ── Phase E: ExecuteStreamCommand deep analysis (Cloudera + general) ──
+      if (p.type === 'ExecuteStreamCommand') {
+        const cmd = (p.properties['Command'] || '').toLowerCase();
+        const args = p.properties['Command Arguments'] || '';
+        const allCmd = cmd + ' ' + args.toLowerCase();
+        if (_RE.impalaCmd.test(allCmd)) {
+          const serverMatch = args.match(/-i\s*;?\s*([^\s;]+)/);
+          const queryMatch = args.match(/-q\s*;?\s*"?([^"]*)"?/i) || args.match(/--query\s*=\s*"?([^"]*)"?/i);
+          clouderaTools.push({ tool:'Impala', subtype:'impala-shell', processor: p.name, group: p.group, command: args.substring(0,200), server: serverMatch ? serverMatch[1] : '', query: queryMatch ? queryMatch[1].substring(0,200) : '',
+            dbx_equivalent:'Spark SQL', dbx_priority:1, dbx_code:'spark.sql("...")', dbx_notes:'Impala SQL → Spark SQL; INVALIDATE METADATA → spark.catalog.refreshTable(); COMPUTE STATS → ANALYZE TABLE' });
+          const ipalaTblMatch = args.match(/(?:refresh|invalidate\s+metadata|compute\s+stats|from|join|into)\s+([\w.${}]+)/gi);
+          if (ipalaTblMatch) ipalaTblMatch.forEach(m => {
+            const tn = m.replace(/^(refresh|invalidate\s+metadata|compute\s+stats|from|join|into)\s+/i,'').trim().replace(/[";]/g,'');
+            addSqlTableMeta(tn, 'write', p.name, 'Impala: ' + args.substring(0,200));
+          });
+        }
+        if (_RE.hdfsCmd.test(allCmd)) {
+          const op = args.match(/(-mkdir|-put|-get|-cp|-mv|-rm|-ls|-cat|-chmod|-chown|-touchz)/);
+          clouderaTools.push({ tool:'HDFS', subtype: op ? op[1] : 'dfs', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'DBFS / Unity Catalog Volumes', dbx_priority:1, dbx_code:'dbutils.fs.' + (op && op[1]==='-mkdir'?'mkdirs':op && op[1]==='-put'?'cp':op && op[1]==='-rm'?'rm':'ls') + '("dbfs:/...")', dbx_notes:'HDFS → /Volumes/<catalog>/<schema>/<volume>/ or dbfs:/' });
+        }
+        if (_RE.kerberosCmd.test(allCmd)) {
+          const keytabMatch = args.match(/-kt\s*;?\s*([^\s;]+)/);
+          const principalMatch = args.match(/([^\s;]+)\s*$/);
+          clouderaTools.push({ tool:'Kerberos', subtype: /kinit/.test(allCmd)?'kinit': /klist/.test(allCmd)?'klist':'kdestroy', processor: p.name, group: p.group, command: args.substring(0,200),
+            keytab: keytabMatch ? keytabMatch[1] : '', principal: principalMatch ? principalMatch[1] : '',
+            dbx_equivalent:'Unity Catalog + Secret Scopes', dbx_priority:1, dbx_code:'# No Kerberos needed — Unity Catalog handles auth\n# dbutils.secrets.get(scope="...", key="...")', dbx_notes:'Unity Catalog identity federation; no kinit required' });
+        }
+        if (_RE.hiveCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Hive', subtype: /beeline/.test(allCmd)?'beeline':'hive-cli', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Spark SQL', dbx_priority:1, dbx_code:'spark.sql("...")', dbx_notes:'HiveQL is Spark SQL compatible' });
+        }
+        if (_RE.kuduCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Kudu', subtype:'kudu-client', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Delta Lake', dbx_priority:1, dbx_code:'spark.read.format("delta").table("...")', dbx_notes:'Kudu → Delta Lake' });
+        }
+        if (_RE.sqoopCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Sqoop', subtype:'sqoop', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Spark JDBC', dbx_priority:2, dbx_code:'spark.read.format("jdbc")...', dbx_notes:'Sqoop → Spark JDBC' });
+        }
+        if (_RE.oozieCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Oozie', subtype:'oozie', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Databricks Workflows', dbx_priority:1, dbx_code:'# Databricks Jobs/Workflows', dbx_notes:'Oozie → Databricks Workflows' });
+        }
+        if (_RE.flumeCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Flume', subtype:'flume', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Auto Loader / Structured Streaming', dbx_priority:1, dbx_code:'spark.readStream.format("cloudFiles")...', dbx_notes:'Flume → Auto Loader' });
+        }
+        if (_RE.hbaseCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'HBase', subtype:'hbase', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Delta Lake', dbx_priority:1, dbx_code:'spark.read.format("delta").table("...")', dbx_notes:'HBase → Delta Lake' });
+        }
+        if (_RE.sparkCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Spark Submit', subtype:'spark-submit', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Databricks Jobs / Notebook', dbx_priority:1, dbx_code:'# Submit as Databricks Job or convert to notebook', dbx_notes:'Spark submit → Databricks Job with JAR/wheel task' });
+        }
+        if (_RE.pigCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Pig', subtype:'pig-script', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'PySpark', dbx_priority:2, dbx_code:'# Translate Pig Latin to PySpark DataFrame operations', dbx_notes:'Pig Latin → PySpark (manual translation)' });
+        }
+        if (_RE.mapreduceCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'MapReduce', subtype:'mr-job', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Spark Job', dbx_priority:1, dbx_code:'# Convert MapReduce to Spark DataFrame operations', dbx_notes:'MapReduce → Spark (significant rewrite)' });
+        }
+        if (_RE.kafkaCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Kafka', subtype:'kafka-cli', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Structured Streaming', dbx_priority:1, dbx_code:'spark.readStream.format("kafka")...', dbx_notes:'Kafka CLI → Structured Streaming' });
+        }
+        if (_RE.solrCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Solr', subtype:'solr-cli', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Solr Spark Connector', dbx_priority:3, dbx_code:'# Use pysolr or solr-spark connector', dbx_notes:'Solr CLI → pysolr' });
+        }
+        if (_RE.zookeeperCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'ZooKeeper', subtype:'zk-cli', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Unity Catalog / Databricks State', dbx_priority:1, dbx_code:'# ZooKeeper coordination replaced by Databricks internal state management', dbx_notes:'ZK → not needed in Databricks (managed coordination)' });
+        }
+        if (_RE.rangerCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Ranger', subtype:'ranger', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Unity Catalog ACLs', dbx_priority:1, dbx_code:'# GRANT SELECT ON TABLE ... TO ...', dbx_notes:'Ranger policies → Unity Catalog GRANT/REVOKE' });
+        }
+        if (_RE.pythonCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Python Script', subtype:'python', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Databricks Notebook / %python', dbx_priority:2, dbx_code:'# Convert to PySpark where possible', dbx_notes:'Python script → Databricks notebook cell' });
+        }
+        if (_RE.scriptExt.test(cmd)) {
+          const ext = cmd.match(/\.(\w+)$/);
+          const isJar = ext && ext[1] === 'jar';
+          if (!_RE.impalaCmd.test(allCmd) && !_RE.hdfsCmd.test(allCmd) && !_RE.hiveCmd.test(allCmd) && !_RE.sqoopCmd.test(allCmd)) {
+            clouderaTools.push({ tool: isJar ? 'Custom JAR' : 'Shell Script', subtype: cmd.split('/').pop(), processor: p.name, group: p.group, command: cmd + ' ' + args.substring(0,150),
+              dbx_equivalent: isJar ? 'Spark Submit / Library JAR' : 'Databricks Notebook / %sh', dbx_priority: isJar ? 2 : 3, dbx_code: isJar ? '# Upload JAR to Volumes, add to cluster libraries' : '# %sh\n' + cmd + ' ' + args.substring(0,100), dbx_notes: isJar ? 'Upload JAR to Unity Catalog Volumes' : 'Convert shell logic to PySpark; use %sh as fallback' });
+          }
+        }
+      }
+      // ── Phase F: Impala detection from SQL processors ──
+      if (p.type === 'ExecuteSQL' || p.type === 'ExecuteSQLRecord') {
+        const sql = p.properties['SQL select query'] || p.properties['sql-select-query'] || p.properties['SQL pre-query'] || p.properties['SQL post-query'] || '';
+        if (/invalidate\s+metadata|compute\s+stats|refresh\s+/i.test(sql)) {
+          clouderaTools.push({ tool:'Impala', subtype:'impala-sql', processor: p.name, group: p.group, command: sql.substring(0,200),
+            dbx_equivalent:'Spark SQL', dbx_priority:1, dbx_code:'spark.sql("...")', dbx_notes:'Impala DDL → Spark SQL' });
+        }
+      }
+      // ── Phase G: Cloud storage path detection from any processor ──
+      const allVals = vals.filter(v => v && typeof v === 'string').join(' ');
+      if (/s3[an]?:\/\//.test(allVals) && !PROC_TYPE_SYSTEM_MAP[p.type]?.tool?.includes('S3')) {
+        clouderaTools.push({ tool:'AWS S3', subtype:'path-ref', processor: p.name, group: p.group, command: allVals.match(/s3[an]?:\/\/[^\s"',;]+/)?.[0]?.substring(0,200) || '',
+          dbx_equivalent:'Unity Catalog External Location', dbx_priority:1, dbx_code:'spark.read.load("s3://...")', dbx_notes:'S3 path detected in properties' });
+      }
+      if (/wasb[s]?:\/\/|abfss?:\/\//.test(allVals) && !PROC_TYPE_SYSTEM_MAP[p.type]?.tool?.includes('Azure')) {
+        clouderaTools.push({ tool:'Azure Storage', subtype:'path-ref', processor: p.name, group: p.group, command: allVals.match(/(?:wasbs?|abfss?):\/\/[^\s"',;]+/)?.[0]?.substring(0,200) || '',
+          dbx_equivalent:'Unity Catalog External Location', dbx_priority:1, dbx_code:'spark.read.load("abfss://...")', dbx_notes:'Azure storage path detected' });
+      }
+      if (/gs:\/\//.test(allVals) && !PROC_TYPE_SYSTEM_MAP[p.type]?.tool?.includes('GCS')) {
+        clouderaTools.push({ tool:'GCP GCS', subtype:'path-ref', processor: p.name, group: p.group, command: allVals.match(/gs:\/\/[^\s"',;]+/)?.[0]?.substring(0,200) || '',
+          dbx_equivalent:'Unity Catalog External Location', dbx_priority:1, dbx_code:'spark.read.load("gs://...")', dbx_notes:'GCS path detected' });
+      }
+      if (/hdfs:\/\//.test(allVals) && p.type !== 'ExecuteStreamCommand') {
+        clouderaTools.push({ tool:'HDFS', subtype:'path-ref', processor: p.name, group: p.group, command: allVals.match(/hdfs:\/\/[^\s"',;]+/)?.[0]?.substring(0,200) || '',
+          dbx_equivalent:'Unity Catalog Volumes / DBFS', dbx_priority:1, dbx_code:'spark.read.load("/Volumes/...")', dbx_notes:'HDFS path detected in properties' });
+      }
+    }); // end batch forEach
+  } // end _processProcessorBatch
+
+  // For small flows process inline; for large flows defer to async caller
+  if (processors.length <= 30) {
+    _processProcessorBatch(processors);
+  } else {
+    // Attach deferred work so parseInput can run it in async chunks
+    // This prevents blocking the UI thread for large flows (supports 5000+)
+  }
+
+  // Detect JDBC/JAR from controller services
+  (controllerServices || []).forEach(cs => {
+    const props = cs.properties || {};
+    const driverClass = props['Database Driver Class Name'] || props['database-driver-class-name'] || '';
+    const jdbcUrl = props['Database Connection URL'] || props['database-connection-url'] || '';
+    if (driverClass) {
+      clouderaTools.push({ tool:'JDBC Driver', subtype: driverClass.split('.').pop(), processor: cs.name + ' (controller service)', group: '(global)', command: driverClass,
+        dbx_equivalent:'Databricks JDBC / Unity Catalog', dbx_priority:1, dbx_code:'# Use Unity Catalog external connections\n# Or add JDBC driver JAR to cluster libraries', dbx_notes:'Driver: ' + driverClass + (jdbcUrl ? ' | URL: ' + jdbcUrl.replace(/password=[^&;]+/gi,'password=***') : '') });
+    }
+    if (cs.type === 'DistributedMapCacheClientService' || cs.type === 'DistributedMapCacheServer') {
+      clouderaTools.push({ tool:'NiFi Cache', subtype: cs.type, processor: cs.name + ' (controller service)', group: '(global)', command: cs.type,
+        dbx_equivalent:'Delta Lake / Spark Cache', dbx_priority:2, dbx_code:'df.cache()  # or persist to Delta table for distributed cache', dbx_notes:'Replace NiFi distributed map cache with Spark DataFrame caching or Delta table lookup' });
+    }
   });
 
   // Build NiFi flow inventory tables (always — this IS the synthetic env for a NiFi flow)
@@ -2020,21 +2522,189 @@ function parseNiFiXML(doc, sourceName) {
     ], foreign_keys:[]});
   }
 
-  // If SQL references found, add a reference table
-  if (sqlTables.size) {
-    const refs = [...sqlTables];
-    tables.push({name:'nifi_sql_table_refs', schema:'nifi_flow', row_count:refs.length, columns:[
-      {name:'table_reference',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:true,is_unique:true,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
-      {name:'reference_type',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:['table','variable','external_table'],max_length:50,precision:null,scale:null,default_value:null},
-      {name:'referenced_by_processor',data_type:'varchar',raw_type:'string',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null}
-    ], foreign_keys:[]});
+  // Generate FULL table blueprints for every SQL table reference found
+  // (For large flows with deferred work, finalize() handles this instead)
+  const existingTableNames = new Set(tables.map(t => t.name));
+  if (sqlTables.size && processors.length <= 30) {
+    [...sqlTables].forEach(ref => {
+      const meta = sqlTableMeta[ref] || { readers:[], writers:[], columns: new Set(), sqlContexts:[], parameterized: ref.includes('${') };
+      // Determine schema and table name from dotted ref
+      const parts = ref.replace(/\$\{|\}/g,'').split('.');
+      const tblName = parts[parts.length - 1];
+      const schemaName = parts.length >= 2 ? parts[parts.length - 2] : 'nifi_source';
+      if (existingTableNames.has(tblName)) return; // skip if already defined by DDL parse
+      existingTableNames.add(tblName);
+      // Build columns from SQL context + name-based inference
+      const cols = [];
+      const inferredCols = meta.columns.size > 0 ? [...meta.columns] : [];
+      // Always add a primary key
+      const pkName = tblName.replace(/^nifi_/,'').replace(/s$/,'') + '_id';
+      cols.push({name:pkName, data_type:'int', raw_type:'int', nullable:false, is_primary_key:true, is_unique:true, check_constraints:[], max_length:null, precision:null, scale:null, default_value:null});
+      // Add inferred columns from SQL
+      inferredCols.forEach(c => {
+        if (c === pkName) return;
+        const dtype = /date|time|timestamp|created|modified/.test(c) ? 'timestamp' : /count|num|qty|amount|total|size/.test(c) ? 'int' : /price|cost|rate|pct|percent|ratio|score/.test(c) ? 'decimal' : /flag|is_|has_|enabled|active/.test(c) ? 'boolean' : 'varchar';
+        cols.push({name:c, data_type:dtype, raw_type:dtype==='varchar'?'string':dtype, nullable:true, is_primary_key:false, is_unique:false, check_constraints:[], max_length:dtype==='varchar'?200:null, precision:dtype==='decimal'?10:null, scale:dtype==='decimal'?2:null, default_value:null});
+      });
+      // If no columns inferred, add common columns based on table name patterns
+      if (inferredCols.length === 0) {
+        const commonCols = [];
+        if (/load_log/.test(tblName)) commonCols.push('load_timestamp','status','filename','row_count','error_message','duration_ms');
+        else if (/load_token/.test(tblName)) commonCols.push('token_name','acquired_by','acquired_at','released_at','status');
+        else if (/load_depend/.test(tblName)) commonCols.push('parent_load','child_load','dependency_type','status');
+        else if (/experiment/.test(tblName)) commonCols.push('experiment_name','start_date','end_date','status','result');
+        else if (/lot_status/.test(tblName)) commonCols.push('lot_id','wafer_id','status','step_name','update_time');
+        else if (/production_step/.test(tblName)) commonCols.push('lot_id','wafer_id','step_name','measurement','result','operator','meas_time');
+        else if (/scrap/.test(tblName)) commonCols.push('lot_id','wafer_id','scrap_code','scrap_reason','quantity','scrap_date');
+        else if (/metrology/.test(tblName)) commonCols.push('lot_id','wafer_id','site_id','parameter','value','measurement_date');
+        else if (/diamond/.test(tblName)) commonCols.push('lot_id','wafer_id','component_id','measurement','value','timestamp');
+        else if (/e3_sum|e3_uva/.test(tblName)) commonCols.push('lot_id','wafer_id','parameter','value','uva_value','summary_date');
+        else if (/pcm/.test(tblName)) commonCols.push('lot_id','wafer_id','site_id','parameter','value','measurement_date');
+        else if (/overlay/.test(tblName)) commonCols.push('lot_id','wafer_id','tool_id','overlay_x','overlay_y','measurement_date');
+        else if (/qualification/.test(tblName)) commonCols.push('qualification_id','tool_id','recipe','status','qualified_date');
+        else if (/parameter/.test(tblName)) commonCols.push('parameter_name','parameter_value','unit','min_spec','max_spec');
+        else if (/runcard/.test(tblName)) commonCols.push('runcard_id','lot_id','recipe','step_name','status','created_date');
+        else if (/wafer_suffix/.test(tblName)) commonCols.push('wafer_id','suffix','description');
+        else if (/xsite/.test(tblName)) commonCols.push('lot_id','wafer_id','site','state','timestamp');
+        else if (/temptation/.test(tblName)) commonCols.push('lot_id','wafer_id','parameter','value','summary_date');
+        else if (/deviation/.test(tblName)) commonCols.push('parameter_name','deviation_value','lot_id','wafer_id','detection_date');
+        else commonCols.push('name','value','status','created_date','updated_date');
+        commonCols.forEach(c => {
+          const dtype = /date|time|timestamp/.test(c) ? 'timestamp' : /count|qty|quantity|size/.test(c) ? 'int' : /value|measurement|overlay/.test(c) ? 'decimal' : 'varchar';
+          cols.push({name:c, data_type:dtype, raw_type:dtype==='varchar'?'string':dtype, nullable:true, is_primary_key:false, is_unique:false, check_constraints:[], max_length:dtype==='varchar'?200:null, precision:dtype==='decimal'?10:null, scale:dtype==='decimal'?2:null, default_value:null});
+        });
+      }
+      tables.push({
+        name: tblName, schema: schemaName, row_count: 1000,
+        columns: cols, foreign_keys: [],
+        _sql_meta: { full_reference: ref, parameterized: meta.parameterized, readers: meta.readers, writers: meta.writers, sql_contexts: meta.sqlContexts.slice(0,3) }
+      });
+    });
+  }
+
+  // Add external tools inventory table (deferred for large flows)
+  if (clouderaTools.length && processors.length <= 30) {
+    const toolTypes = [...new Set(clouderaTools.map(t=>t.tool))];
+    const dbxEquivs = [...new Set(clouderaTools.map(t=>t.dbx_equivalent))];
+    tables.push({name:'cloudera_tools_inventory', schema:'nifi_flow', row_count: clouderaTools.length, columns:[
+      {name:'tool_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:toolTypes.slice(0,20),max_length:100,precision:null,scale:null,default_value:null},
+      {name:'subtype',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:100,precision:null,scale:null,default_value:null},
+      {name:'processor',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'process_group',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+      {name:'command_snippet',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+      {name:'dbx_equivalent',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:dbxEquivs.slice(0,20),max_length:200,precision:null,scale:null,default_value:null},
+      {name:'dbx_priority',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:['1=Spark SQL','2=PySpark','3=Python/dbutils'],max_length:null,precision:null,scale:null,default_value:null},
+      {name:'dbx_code',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+      {name:'dbx_notes',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}
+    ], foreign_keys:[{fk_column:'processor',referenced_table:'nifi_processors',referenced_column:'processor_name'}]});
   }
 
   const warnings = [];
-  if (sqlTables.size) warnings.push(`Found ${sqlTables.size} SQL table references: ${[...sqlTables].slice(0,10).join(', ')}${sqlTables.size>10?'...':''}`);
+  // For small flows, generate warnings now; for large flows, finalize() handles it
+  if (processors.length <= 30) {
+    const realSqlTables = [...sqlTables].filter(t => !SQL_NOISE.has(t) && !SQL_NOISE.has(t.toLowerCase()));
+    if (realSqlTables.length) warnings.push(`Identified ${realSqlTables.length} SQL/Impala table references — full blueprints generated for each`);
+    if (clouderaTools.length) {
+      const toolSummary = {};
+      clouderaTools.forEach(t => { toolSummary[t.tool] = (toolSummary[t.tool]||0)+1; });
+      warnings.push(`Detected ${clouderaTools.length} Cloudera tool invocations: ${Object.entries(toolSummary).map(([k,v])=>k+'('+v+')').join(', ')} — all mapped to Databricks equivalents`);
+    }
+  }
 
   const result = {source_name:sourceName||'Apache NiFi Flow', source_type:'nifi', tables, input_format:'nifi_xml', parse_warnings:warnings};
-  result._nifi = {processors, connections, controllerServices, processGroups, sqlTables:[...sqlTables]};
+  result._nifi = {processors, connections, controllerServices, processGroups, sqlTables:[...sqlTables], sqlTableMeta, clouderaTools, deepPropertyInventory};
+  // For large flows, attach deferred processor work so caller can run it async
+  if (processors.length > 50) {
+    result._deferredProcessorWork = {
+      processors, batchFn: _processProcessorBatch,
+      finalize: function() {
+        // Rebuild SQL tables and cloudera inventory after async processing
+        const realSqlTables2 = [...sqlTables].filter(t => !SQL_NOISE.has(t) && !SQL_NOISE.has(t.toLowerCase()));
+        if (realSqlTables2.length && !result.parse_warnings.some(w => w.startsWith('Identified'))) {
+          result.parse_warnings.push(`Identified ${realSqlTables2.length} SQL/Impala table references — full blueprints generated for each`);
+        }
+        if (clouderaTools.length && !result.parse_warnings.some(w => w.startsWith('Detected'))) {
+          const ts = {}; clouderaTools.forEach(t => { ts[t.tool] = (ts[t.tool]||0)+1; });
+          result.parse_warnings.push(`Detected ${clouderaTools.length} Cloudera tool invocations: ${Object.entries(ts).map(([k,v])=>k+'('+v+')').join(', ')} — all mapped to Databricks equivalents`);
+        }
+        // Rebuild tables from SQL refs (same logic as inline path)
+        const existingTableNames2 = new Set(tables.map(t => t.name));
+        if (sqlTables.size) {
+          [...sqlTables].forEach(ref => {
+            const meta = sqlTableMeta[ref] || { readers:[], writers:[], columns: new Set(), sqlContexts:[], parameterized: ref.includes('${') };
+            const parts = ref.replace(/\$\{|\}/g,'').split('.');
+            const tblName = parts[parts.length - 1];
+            const schemaName = parts.length >= 2 ? parts[parts.length - 2] : 'nifi_source';
+            if (existingTableNames2.has(tblName)) return;
+            existingTableNames2.add(tblName);
+            const cols = [];
+            const inferredCols = meta.columns.size > 0 ? [...meta.columns] : [];
+            const pkName = tblName.replace(/^nifi_/,'').replace(/s$/,'') + '_id';
+            cols.push({name:pkName, data_type:'int', raw_type:'int', nullable:false, is_primary_key:true, is_unique:true, check_constraints:[], max_length:null, precision:null, scale:null, default_value:null});
+            inferredCols.forEach(c => {
+              if (c === pkName) return;
+              const dtype = /date|time|timestamp|created|modified/.test(c) ? 'timestamp' : /count|num|qty|amount|total|size/.test(c) ? 'int' : /price|cost|rate|pct|percent|ratio|score/.test(c) ? 'decimal' : /flag|is_|has_|enabled|active/.test(c) ? 'boolean' : 'varchar';
+              cols.push({name:c, data_type:dtype, raw_type:dtype==='varchar'?'string':dtype, nullable:true, is_primary_key:false, is_unique:false, check_constraints:[], max_length:dtype==='varchar'?200:null, precision:dtype==='decimal'?10:null, scale:dtype==='decimal'?2:null, default_value:null});
+            });
+            if (inferredCols.length === 0) {
+              const commonCols = [];
+              if (/load_log/.test(tblName)) commonCols.push('load_timestamp','status','filename','row_count','error_message','duration_ms');
+              else if (/load_token/.test(tblName)) commonCols.push('token_name','acquired_by','acquired_at','released_at','status');
+              else if (/load_depend/.test(tblName)) commonCols.push('parent_load','child_load','dependency_type','status');
+              else if (/experiment/.test(tblName)) commonCols.push('experiment_name','start_date','end_date','status','result');
+              else if (/lot_status/.test(tblName)) commonCols.push('lot_id','wafer_id','status','step_name','update_time');
+              else if (/production_step/.test(tblName)) commonCols.push('lot_id','wafer_id','step_name','measurement','result','operator','meas_time');
+              else if (/scrap/.test(tblName)) commonCols.push('lot_id','wafer_id','scrap_code','scrap_reason','quantity','scrap_date');
+              else if (/metrology/.test(tblName)) commonCols.push('lot_id','wafer_id','site_id','parameter','value','measurement_date');
+              else if (/diamond/.test(tblName)) commonCols.push('lot_id','wafer_id','component_id','measurement','value','timestamp');
+              else if (/e3_sum|e3_uva/.test(tblName)) commonCols.push('lot_id','wafer_id','parameter','value','uva_value','summary_date');
+              else if (/pcm/.test(tblName)) commonCols.push('lot_id','wafer_id','site_id','parameter','value','measurement_date');
+              else if (/overlay/.test(tblName)) commonCols.push('lot_id','wafer_id','tool_id','overlay_x','overlay_y','measurement_date');
+              else if (/qualification/.test(tblName)) commonCols.push('qualification_id','tool_id','recipe','status','qualified_date');
+              else if (/parameter/.test(tblName)) commonCols.push('parameter_name','parameter_value','unit','min_spec','max_spec');
+              else if (/runcard/.test(tblName)) commonCols.push('runcard_id','lot_id','recipe','step_name','status','created_date');
+              else if (/wafer_suffix/.test(tblName)) commonCols.push('wafer_id','suffix','description');
+              else if (/xsite/.test(tblName)) commonCols.push('lot_id','wafer_id','site','state','timestamp');
+              else if (/temptation/.test(tblName)) commonCols.push('lot_id','wafer_id','parameter','value','summary_date');
+              else if (/deviation/.test(tblName)) commonCols.push('parameter_name','deviation_value','lot_id','wafer_id','detection_date');
+              else commonCols.push('name','value','status','created_date','updated_date');
+              commonCols.forEach(c => {
+                const dtype = /date|time|timestamp/.test(c) ? 'timestamp' : /count|qty|quantity|size/.test(c) ? 'int' : /value|measurement|overlay/.test(c) ? 'decimal' : 'varchar';
+                cols.push({name:c, data_type:dtype, raw_type:dtype==='varchar'?'string':dtype, nullable:true, is_primary_key:false, is_unique:false, check_constraints:[], max_length:dtype==='varchar'?200:null, precision:dtype==='decimal'?10:null, scale:dtype==='decimal'?2:null, default_value:null});
+              });
+            }
+            tables.push({ name: tblName, schema: schemaName, row_count: 1000, columns: cols, foreign_keys: [],
+              _sql_meta: { full_reference: ref, parameterized: meta.parameterized, readers: meta.readers, writers: meta.writers, sql_contexts: meta.sqlContexts.slice(0,3) }
+            });
+          });
+        }
+        // Rebuild cloudera tools inventory table
+        if (clouderaTools.length) {
+          const existCheck = tables.findIndex(t => t.name === 'cloudera_tools_inventory');
+          if (existCheck === -1) {
+            const toolTypes = [...new Set(clouderaTools.map(t=>t.tool))];
+            const dbxEquivs = [...new Set(clouderaTools.map(t=>t.dbx_equivalent))];
+            tables.push({name:'cloudera_tools_inventory', schema:'nifi_flow', row_count: clouderaTools.length, columns:[
+              {name:'tool_name',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:toolTypes.slice(0,20),max_length:100,precision:null,scale:null,default_value:null},
+              {name:'subtype',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:100,precision:null,scale:null,default_value:null},
+              {name:'processor',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+              {name:'process_group',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:[],max_length:200,precision:null,scale:null,default_value:null},
+              {name:'command_snippet',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+              {name:'dbx_equivalent',data_type:'varchar',raw_type:'string',nullable:false,is_primary_key:false,is_unique:false,check_constraints:dbxEquivs.slice(0,20),max_length:200,precision:null,scale:null,default_value:null},
+              {name:'dbx_priority',data_type:'int',raw_type:'int',nullable:false,is_primary_key:false,is_unique:false,check_constraints:['1=Spark SQL','2=PySpark','3=Python/dbutils'],max_length:null,precision:null,scale:null,default_value:null},
+              {name:'dbx_code',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null},
+              {name:'dbx_notes',data_type:'text',raw_type:'text',nullable:true,is_primary_key:false,is_unique:false,check_constraints:[],max_length:null,precision:null,scale:null,default_value:null}
+            ], foreign_keys:[{fk_column:'processor',referenced_table:'nifi_processors',referenced_column:'processor_name'}]});
+          }
+        }
+        // Refresh _nifi references
+        result._nifi.sqlTables = [...sqlTables];
+        result._nifi.sqlTableMeta = sqlTableMeta;
+        result._nifi.clouderaTools = clouderaTools;
+        result._nifi.deepPropertyInventory = deepPropertyInventory;
+      }
+    };
+  }
   return result;
 }
 
@@ -2130,11 +2800,40 @@ function buildResourceManifest(nifi) {
     } else if (t === 'ExecuteStreamCommand') {
       const cmd = props['Command'] || '';
       const args = props['Command Arguments'] || '';
-      if (cmd) scripts.push({ path: cmd, args, processor: pName });
-      // Check for hdfs/impala/kinit patterns in args
-      if (/hdfs\s+dfs/.test(args)) {
-        const hdfsMatch = args.match(/(?:-cp|-mv|-put|-get|-ls|-rm)\s+(\S+)/);
-        if (hdfsMatch) addDir(hdfsMatch[1], args.includes('-ls') ? 'input' : 'output', pName);
+      if (cmd) scripts.push({ path: cmd, args, processor: pName, _cloudera: null });
+      const allCmd = (cmd + ' ' + args).toLowerCase();
+      // HDFS operations
+      if (/hdfs\s+dfs|dfs;/.test(allCmd) || /^dfs$/.test(cmd.trim())) {
+        const hdfsMatch = args.match(/(?:-cp|-mv|-put|-get|-ls|-rm|-mkdir|-cat|-chmod|-chown|-touchz)\s*;?\s*([^\s;]+)/);
+        if (hdfsMatch) addDir(hdfsMatch[1], /(-ls|-cat|-get)/.test(args) ? 'input' : 'output', pName);
+        // Also extract the destination path for -put/-cp
+        const destMatch = args.match(/(?:-put|-cp)\s*;?\s*[^\s;]+\s*;?\s*([^\s;]+)/);
+        if (destMatch) addDir(destMatch[1], 'output', pName);
+      }
+      // Impala operations — extract SQL table references
+      if (/impala-shell|impala/.test(allCmd)) {
+        const tblMatches = args.match(/(?:refresh|invalidate\s+metadata|compute\s+stats|from|join|into|insert\s+into|insert\s+overwrite)\s+[;]?\s*([\w.${}]+)/gi);
+        if (tblMatches) tblMatches.forEach(m => {
+          const tn = m.replace(/^(refresh|invalidate\s+metadata|compute\s+stats|from|join|into|insert\s+into|insert\s+overwrite)\s+;?\s*/i,'').trim().replace(/[";]/g,'');
+          if (tn && tn.length > 2) addSqlTable(tn, /insert|into/i.test(m) ? 'write' : 'read', pName);
+        });
+      }
+      // Hive/Beeline operations
+      if (/hive|beeline/.test(allCmd)) {
+        const tblMatches = args.match(/(?:from|join|into|table)\s+([\w.]+)/gi);
+        if (tblMatches) tblMatches.forEach(m => {
+          const tn = m.replace(/^(from|join|into|table)\s+/i,'').trim();
+          if (tn && tn.length > 2) addSqlTable(tn, /into/i.test(m) ? 'write' : 'read', pName);
+        });
+      }
+      // Kerberos — mark script as auth-related
+      if (/kinit|keytab|kerberos|klist/.test(allCmd)) {
+        scripts[scripts.length-1]._cloudera = 'kerberos';
+      }
+      // Sqoop — extract table refs
+      if (/sqoop/.test(allCmd)) {
+        const tblMatch = args.match(/--table\s+(\S+)/);
+        if (tblMatch) addSqlTable(tblMatch[1], /export/.test(allCmd) ? 'write' : 'read', pName);
       }
     } else if (t === 'InvokeHTTP') {
       const url = props['Remote URL'] || props['remote-url'] || '';
@@ -2187,16 +2886,21 @@ function buildResourceManifest(nifi) {
     Object.keys(tokens).length + Object.keys(signals).length + httpEndpoints.length + kafkaTopics.length +
     scripts.length + dbConnections.length + counters.length;
 
+  // Collect Cloudera tools from parsed nifi data
+  const clouderaTools = (nifi.clouderaTools || []);
+
   return {
     directories: dirs, files, sqlTables: sqlTbls, tokens, signals,
-    httpEndpoints, kafkaTopics, dbConnections, scripts,
+    httpEndpoints, kafkaTopics, dbConnections, scripts, clouderaTools,
     parameters: uniqueParams, counters, disconnected,
+    disconnectedProcessors: disconnected.map(p => ({name:p.name, type:p.type, group:p.group||'(root)', noInbound:true, noOutbound:true})),
     totalResources,
     warnings: [
       ...disconnected.map(p => `Processor "${p.name}" (${p.type}) has no connections — may never execute`),
       ...uniqueParams.filter(p => !p.resolved).slice(0, 10).map(p => `Unresolved expression ${p.expr} in "${p.processor}"`),
       ...(dbConnections.filter(d => d.type !== 'service').length > 0 && dbConnections.filter(d => d.type === 'service').length === 0 ?
-        ['Processors reference DB connections but no DBCP controller service found'] : [])
+        ['Processors reference DB connections but no DBCP controller service found'] : []),
+      ...(clouderaTools.length ? [`${clouderaTools.length} external system references detected — see External Systems & Tools inventory`] : [])
     ]
   };
 }
@@ -2218,6 +2922,9 @@ function renderManifestHTML(manifest) {
   h += `<div class="manifest-stat"><div class="num">${m.scripts.length}</div><div class="lbl">Scripts</div></div>`;
   h += `<div class="manifest-stat"><div class="num">${m.httpEndpoints.length}</div><div class="lbl">HTTP APIs</div></div>`;
   h += `<div class="manifest-stat"><div class="num">${m.kafkaTopics.length}</div><div class="lbl">Kafka Topics</div></div>`;
+  if (m.clouderaTools && m.clouderaTools.length) {
+    h += `<div class="manifest-stat" style="border-top:3px solid #3B82F6"><div class="num" style="color:#3B82F6">${m.clouderaTools.length}</div><div class="lbl">Cloudera Tools</div></div>`;
+  }
   h += '</div>';
 
   // Directories
@@ -2260,6 +2967,39 @@ function renderManifestHTML(manifest) {
   if (m.dbConnections.length) {
     const rows = m.dbConnections.map(d => [escapeHTML(d.name), escapeHTML(d.url || '—'), escapeHTML(d.processor)]);
     h += '<h4 style="margin:12px 0 4px">Database Connections</h4>' + tableHTML(['Service', 'URL', 'Processor'], rows);
+  }
+  // Cloudera Tools Inventory
+  if (m.clouderaTools && m.clouderaTools.length) {
+    const toolsByType = {};
+    m.clouderaTools.forEach(t => { if (!toolsByType[t.tool]) toolsByType[t.tool] = []; toolsByType[t.tool].push(t); });
+    const toolCount = Object.keys(toolsByType).length;
+    const priorityLabel = p => p === 1 ? '<span style="color:#21C354;font-weight:700">Spark SQL</span>' : p === 2 ? '<span style="color:#3B82F6;font-weight:700">PySpark</span>' : '<span style="color:#EAB308;font-weight:700">Python/dbutils</span>';
+    h += `<h4 style="margin:16px 0 4px;font-size:1rem;border-bottom:1px solid var(--border);padding-bottom:4px">External Systems Inventory (${m.clouderaTools.length} items, ${toolCount} tool types)</h4>`;
+    // Summary badges
+    h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">';
+    Object.entries(toolsByType).forEach(([tool, items]) => {
+      const colors = {Impala:'#3B82F6',HDFS:'#21C354',Kerberos:'#EAB308',Hive:'#FF6B6B',Kudu:'#8B5CF6',Sqoop:'#F97316',Oozie:'#06B6D4','Custom JAR':'#EC4899','Shell Script':'#6B7280','JDBC Driver':'#14B8A6','NiFi Cache':'#A78BFA'};
+      h += `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:${colors[tool]||'var(--surface)'}22;border:1px solid ${colors[tool]||'var(--border)'};border-radius:6px;font-size:0.8rem"><strong>${escapeHTML(tool)}</strong> <span style="color:var(--text2)">${items.length}</span></span>`;
+    });
+    h += '</div>';
+    // Detailed table per tool type
+    Object.entries(toolsByType).forEach(([tool, items]) => {
+      const rows = items.map(t => [
+        escapeHTML(t.subtype || t.tool),
+        escapeHTML(t.processor),
+        escapeHTML(t.group || '—'),
+        `<code style="font-size:0.7rem;word-break:break-all">${escapeHTML((t.command||'').substring(0,120))}</code>`,
+        `<strong>${escapeHTML(t.dbx_equivalent)}</strong>`,
+        priorityLabel(t.dbx_priority),
+        `<code style="font-size:0.7rem">${escapeHTML((t.dbx_code||'').substring(0,100))}</code>`,
+        `<span style="font-size:0.72rem;color:var(--text2)">${escapeHTML((t.dbx_notes||'').substring(0,120))}</span>`
+      ]);
+      h += '<div class="expander"><div class="expander-header" onclick="this.parentElement.classList.toggle(\'open\')">'
+        + `<span><strong>${escapeHTML(tool)}</strong> — ${items.length} invocation${items.length>1?'s':''}</span><span class="expander-arrow">&#9654;</span></div>`
+        + '<div class="expander-body"><div class="table-scroll"><table style="font-size:0.75rem"><thead><tr><th>Subtype</th><th>Processor</th><th>Group</th><th>Command</th><th>DBX Equivalent</th><th>Priority</th><th>DBX Code</th><th>Notes</th></tr></thead><tbody>'
+        + rows.map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('')
+        + '</tbody></table></div></div></div>';
+    });
   }
   // Warnings
   if (m.warnings.length) {
@@ -2486,6 +3226,83 @@ const NIFI_DATABRICKS_MAP = {
   DebugFlow:{cat:'Spark Display',tpl:'display(df_{in})\ndf_{in}.printSchema()',desc:'Debug/inspect data',notes:'display() renders interactive table in Databricks',imp:[],conf:0.90},
   CountText:{cat:'DataFrame API',tpl:'_count = df_{in}.count()\ndisplayHTML(f"<h3>Row count: {_count}</h3>")',desc:'Count rows',notes:'displayHTML renders formatted output in Databricks',imp:[],conf:0.95},
   ControlRate:{cat:'Streaming Trigger',tpl:'# Rate control: use structured streaming trigger interval\n# .trigger(processingTime="{interval}")',desc:'Rate limiting',notes:'Use structured streaming trigger interval',imp:[],conf:0.70},
+  // ── Hive/Hadoop ecosystem ──
+  PutHiveQL:{cat:'Spark SQL',tpl:'spark.sql("""\n{sql}\n""")',desc:'HiveQL write',notes:'HiveQL → Spark SQL direct',imp:[],conf:0.90},
+  SelectHiveQL:{cat:'Spark SQL',tpl:'df_{v} = spark.sql("""\n{sql}\n""")',desc:'HiveQL read',notes:'HiveQL → Spark SQL direct',imp:[],conf:0.90},
+  PutHiveStreaming:{cat:'Delta Streaming',tpl:'(df_{in}.writeStream\n  .format("delta")\n  .outputMode("append")\n  .toTable("{catalog}.{schema}.{table}"))',desc:'Hive streaming → Delta streaming',notes:'Replace Hive ACID streaming with Delta Lake streaming',imp:[],conf:0.85},
+  PutORC:{cat:'Delta Lake Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .saveAsTable("{catalog}.{schema}.{table}"))',desc:'ORC → Delta Lake',notes:'Delta provides ACID on top of Parquet; better than ORC',imp:[],conf:0.90},
+  PutParquet:{cat:'Delta Lake Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .saveAsTable("{catalog}.{schema}.{table}"))',desc:'Parquet → Delta Lake',notes:'Delta adds ACID, time travel, Z-order to Parquet',imp:[],conf:0.90},
+  PutKudu:{cat:'Delta Lake Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .saveAsTable("{catalog}.{schema}.{table}"))',desc:'Kudu → Delta Lake',notes:'Replace Kudu upsert with Delta MERGE',imp:[],conf:0.85},
+  // ── HBase ──
+  PutHBaseCell:{cat:'Delta Lake Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .saveAsTable("{catalog}.{schema}.{table}"))',desc:'HBase cell write → Delta',notes:'Replace HBase cells with Delta columns',imp:[],conf:0.80},
+  PutHBaseJSON:{cat:'Delta Lake Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .saveAsTable("{catalog}.{schema}.{table}"))',desc:'HBase JSON write → Delta',notes:'JSON → Delta with auto-inferred schema',imp:[],conf:0.80},
+  PutHBaseRecord:{cat:'Delta Lake Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .saveAsTable("{catalog}.{schema}.{table}"))',desc:'HBase record write → Delta',notes:'Record-based HBase → Delta table append',imp:[],conf:0.80},
+  GetHBase:{cat:'Delta Lake Read',tpl:'df_{v} = spark.table("{catalog}.{schema}.{table}")',desc:'HBase read → Delta table',notes:'Replace HBase scan with Delta read + filter',imp:[],conf:0.80},
+  ScanHBase:{cat:'Delta Lake Read',tpl:'df_{v} = spark.table("{catalog}.{schema}.{table}").filter("{condition}")',desc:'HBase scan → Delta filter',notes:'HBase row key scan → Delta point lookup or range filter',imp:[],conf:0.75},
+  FetchHBaseRow:{cat:'Delta Lake Read',tpl:'df_{v} = spark.table("{catalog}.{schema}.{table}").filter(col("rowkey") == "{key}")',desc:'HBase row fetch → Delta point lookup',notes:'Use Z-ORDER BY rowkey for fast lookups',imp:[],conf:0.75},
+  // ── HDFS ──
+  GetHDFS:{cat:'Volumes Read',tpl:'df_{v} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/{path}")',desc:'HDFS read → Volumes',notes:'Replace HDFS paths with Unity Catalog Volumes',imp:[],conf:0.85},
+  ListHDFS:{cat:'Volumes List',tpl:'_files = dbutils.fs.ls("/Volumes/{catalog}/{schema}/{path}")\ndf_{v} = spark.createDataFrame(_files)',desc:'HDFS list → Volumes list',notes:'dbutils.fs.ls for file listing',imp:[],conf:0.85},
+  FetchHDFS:{cat:'Volumes Read',tpl:'df_{v} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/{path}")',desc:'HDFS fetch → Volumes read',notes:'Direct file read from Volumes',imp:[],conf:0.85},
+  MoveHDFS:{cat:'dbutils.fs',tpl:'dbutils.fs.mv("/Volumes/{catalog}/{schema}/{source}", "/Volumes/{catalog}/{schema}/{dest}")',desc:'HDFS move → dbutils.fs.mv',notes:'File move between Volumes paths',imp:[],conf:0.85},
+  DeleteHDFS:{cat:'dbutils.fs',tpl:'dbutils.fs.rm("/Volumes/{catalog}/{schema}/{path}", recurse=True)',desc:'HDFS delete → dbutils.fs.rm',notes:'File deletion in Volumes',imp:[],conf:0.85},
+  CreateHadoopSequenceFile:{cat:'Delta Lake Write',tpl:'(df_{in}.write\n  .format("delta")\n  .saveAsTable("{catalog}.{schema}.{table}"))',desc:'Sequence file → Delta',notes:'Replace Hadoop SequenceFile with Delta Lake',imp:[],conf:0.80},
+  // ── Cassandra ──
+  PutCassandraQL:{cat:'Cassandra Connector',tpl:'(df_{in}.write\n  .format("org.apache.spark.sql.cassandra")\n  .option("keyspace", "{keyspace}")\n  .option("table", "{table}")\n  .mode("append")\n  .save())',desc:'Cassandra write via Spark connector',notes:'Install spark-cassandra-connector library on cluster',imp:[],conf:0.75},
+  QueryCassandra:{cat:'Cassandra Connector',tpl:'df_{v} = (spark.read\n  .format("org.apache.spark.sql.cassandra")\n  .option("keyspace", "{keyspace}")\n  .option("table", "{table}")\n  .load())',desc:'Cassandra read via Spark connector',notes:'Install spark-cassandra-connector library',imp:[],conf:0.75},
+  // ── JMS/AMQP/MQTT ──
+  ConsumeJMS:{cat:'Custom Source',tpl:'# JMS → Custom Spark data source or Python JMS client\n# Use stomp.py or java JMS via spark._jvm\ndf_{v} = spark.createDataFrame([])  # TODO: Implement JMS consumer',desc:'JMS consumer',notes:'No native JMS source; use stomp.py or custom connector',imp:[],conf:0.30},
+  PublishJMS:{cat:'Custom Sink',tpl:'# Publish to JMS\n# Use stomp.py or java JMS via spark._jvm\nfor row in df_{in}.collect(): pass  # TODO: Publish rows',desc:'JMS publisher',notes:'No native JMS sink; use stomp.py or custom connector',imp:[],conf:0.30},
+  ConsumeAMQP:{cat:'Custom Source',tpl:'# AMQP/RabbitMQ → pika library\nimport pika\n# connection = pika.BlockingConnection(pika.ConnectionParameters("{host}"))',desc:'AMQP consumer',notes:'Use pika library for RabbitMQ',imp:[],conf:0.30},
+  PublishAMQP:{cat:'Custom Sink',tpl:'# AMQP/RabbitMQ → pika library\nimport pika\n# channel.basic_publish(exchange="", routing_key="{queue}", body=msg)',desc:'AMQP publisher',notes:'Use pika library for RabbitMQ',imp:[],conf:0.30},
+  ConsumeMQTT:{cat:'Custom Source',tpl:'# MQTT → paho-mqtt\nimport paho.mqtt.client as mqtt\n# client.connect("{host}", {port})\n# client.subscribe("{topic}")',desc:'MQTT subscriber',notes:'Use paho-mqtt library',imp:[],conf:0.30},
+  PublishMQTT:{cat:'Custom Sink',tpl:'# MQTT → paho-mqtt\nimport paho.mqtt.client as mqtt\n# client.publish("{topic}", payload=msg)',desc:'MQTT publisher',notes:'Use paho-mqtt library',imp:[],conf:0.30},
+  // ── AWS-specific processors ──
+  PutSNS:{cat:'AWS boto3',tpl:'import boto3\nsns = boto3.client("sns")\nsns.publish(TopicArn="{topic_arn}", Message=str(msg))',desc:'AWS SNS publish',notes:'Use boto3; store AWS credentials in Secret Scopes',imp:[],conf:0.50},
+  GetSQS:{cat:'AWS boto3',tpl:'import boto3\nsqs = boto3.client("sqs")\nmsgs = sqs.receive_message(QueueUrl="{queue_url}")',desc:'AWS SQS receive',notes:'Use boto3; for streaming use Kinesis instead',imp:[],conf:0.50},
+  PutSQS:{cat:'AWS boto3',tpl:'import boto3\nsqs = boto3.client("sqs")\nsqs.send_message(QueueUrl="{queue_url}", MessageBody=str(msg))',desc:'AWS SQS send',notes:'Use boto3; store credentials in Secret Scopes',imp:[],conf:0.50},
+  PutDynamoDB:{cat:'DynamoDB Connector',tpl:'(df_{in}.write\n  .format("dynamodb")\n  .option("tableName", "{table}")\n  .option("region", "{region}")\n  .save())',desc:'DynamoDB write',notes:'Install emr-dynamodb-connector library',imp:[],conf:0.65},
+  GetDynamoDB:{cat:'DynamoDB Connector',tpl:'df_{v} = (spark.read\n  .format("dynamodb")\n  .option("tableName", "{table}")\n  .option("region", "{region}")\n  .load())',desc:'DynamoDB read',notes:'Install emr-dynamodb-connector library',imp:[],conf:0.65},
+  PutKinesisFirehose:{cat:'Kinesis Connector',tpl:'(df_{in}.writeStream\n  .format("kinesis")\n  .option("streamName", "{stream}")\n  .option("region", "{region}")\n  .start())',desc:'Kinesis Firehose write',notes:'Use kinesis-spark connector',imp:[],conf:0.65},
+  PutLambda:{cat:'AWS boto3',tpl:'import boto3\nlam = boto3.client("lambda")\nlam.invoke(FunctionName="{function}", Payload=json.dumps(payload))',desc:'Lambda invocation',notes:'Use boto3 for Lambda; or replace with Databricks Job',imp:[],conf:0.50},
+  // ── Azure-specific processors ──
+  PutAzureBlobStorage:{cat:'Azure Storage',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .save("wasbs://{container}@{account}.blob.core.windows.net/{path}"))',desc:'Azure Blob write',notes:'Use Unity Catalog external location',imp:[],conf:0.85},
+  FetchAzureBlobStorage:{cat:'Azure Storage',tpl:'df_{v} = spark.read.format("{format}").load("wasbs://{container}@{account}.blob.core.windows.net/{path}")',desc:'Azure Blob read',notes:'Unity Catalog external location',imp:[],conf:0.85},
+  ListAzureBlobStorage:{cat:'Azure Storage',tpl:'_files = dbutils.fs.ls("wasbs://{container}@{account}.blob.core.windows.net/{path}")\ndf_{v} = spark.createDataFrame(_files)',desc:'Azure Blob list',notes:'Use dbutils.fs.ls',imp:[],conf:0.85},
+  PutAzureDataLakeStorage:{cat:'Azure ADLS',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .save("abfss://{container}@{account}.dfs.core.windows.net/{path}"))',desc:'ADLS Gen2 write',notes:'Unity Catalog external location',imp:[],conf:0.85},
+  PutAzureEventHub:{cat:'Event Hubs Connector',tpl:'(df_{in}.writeStream\n  .format("eventhubs")\n  .option("eventhubs.connectionString", dbutils.secrets.get(scope="{scope}", key="eh-conn-string"))\n  .start())',desc:'Event Hubs write',notes:'Install azure-eventhubs-spark library',imp:[],conf:0.75},
+  ConsumeAzureEventHub:{cat:'Event Hubs Connector',tpl:'df_{v} = (spark.readStream\n  .format("eventhubs")\n  .option("eventhubs.connectionString", dbutils.secrets.get(scope="{scope}", key="eh-conn-string"))\n  .load())',desc:'Event Hubs read',notes:'Install azure-eventhubs-spark library',imp:[],conf:0.75},
+  // ── GCP-specific processors ──
+  ListGCSBucket:{cat:'GCS',tpl:'_files = dbutils.fs.ls("gs://{bucket}/{prefix}")\ndf_{v} = spark.createDataFrame(_files)',desc:'GCS list',notes:'Unity Catalog external location for GCS',imp:[],conf:0.85},
+  FetchGCSObject:{cat:'GCS',tpl:'df_{v} = spark.read.format("{format}").load("gs://{bucket}/{key}")',desc:'GCS read',notes:'Unity Catalog external location',imp:[],conf:0.85},
+  PutGCSObject:{cat:'GCS',tpl:'(df_{in}.write\n  .format("delta")\n  .save("gs://{bucket}/{key}"))',desc:'GCS write',notes:'Unity Catalog external location',imp:[],conf:0.85},
+  PutBigQueryBatch:{cat:'BigQuery Connector',tpl:'(df_{in}.write\n  .format("bigquery")\n  .option("table", "{project}.{dataset}.{table}")\n  .save())',desc:'BigQuery write',notes:'Install spark-bigquery-connector',imp:[],conf:0.75},
+  // ── Monitoring / Observability ──
+  PutSlack:{cat:'Webhook',tpl:'import requests\nrequests.post("{webhook_url}", json={"text": f"Pipeline update: {msg}"})',desc:'Slack notification',notes:'Use Slack webhook URL; store in Secret Scopes',imp:[],conf:0.70},
+  PutSyslog:{cat:'Python Logging',tpl:'import syslog\nsyslog.syslog(syslog.LOG_INFO, f"Pipeline: {msg}")',desc:'Syslog send',notes:'Use Python syslog module or Databricks logging',imp:[],conf:0.60},
+  ListenSyslog:{cat:'Streaming Socket',tpl:'df_{v} = (spark.readStream\n  .format("socket")\n  .option("host", "{host}")\n  .option("port", "{port}")\n  .load())',desc:'Syslog listener',notes:'Use socket source or external syslog collector',imp:[],conf:0.40},
+  ParseSyslog:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("parsed", regexp_extract(col("value"), "{pattern}", 0))',desc:'Syslog parsing',notes:'Use regex to parse syslog format',imp:[],conf:0.75},
+  PutSplunk:{cat:'Splunk HEC',tpl:'import requests\nrequests.post("{hec_url}", headers={"Authorization":"Splunk {token}"}, json={"event":data})',desc:'Splunk HEC write',notes:'Use Splunk HTTP Event Collector',imp:[],conf:0.60},
+  PutInfluxDB:{cat:'InfluxDB Client',tpl:'from influxdb_client import InfluxDBClient\nclient = InfluxDBClient(url="{url}", token="{token}", org="{org}")\nclient.write_api().write(bucket="{bucket}", record=data)',desc:'InfluxDB write',notes:'Install influxdb-client-python',imp:[],conf:0.60},
+  // ── Network ──
+  PutTCP:{cat:'Python Socket',tpl:'import socket\ns = socket.socket()\ns.connect(("{host}", {port}))\ns.send(data.encode())',desc:'TCP send',notes:'Use Python socket module',imp:[],conf:0.50},
+  ListenTCP:{cat:'Streaming Socket',tpl:'df_{v} = (spark.readStream\n  .format("socket")\n  .option("host", "0.0.0.0")\n  .option("port", "{port}")\n  .load())',desc:'TCP listener',notes:'Use Spark socket source',imp:[],conf:0.40},
+  // ── Additional data processing ──
+  UpdateRecord:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.withColumn("{field}", expr("{expression}"))',desc:'Record field update',notes:'Map UpdateRecord field expressions to withColumn',imp:[],conf:0.80},
+  LookupRecord:{cat:'DataFrame Join',tpl:'df_lookup = spark.table("{catalog}.{schema}.{lookup_table}").cache()\ndf_{v} = df_{in}.join(df_lookup, on="{key}", how="left")',desc:'Record lookup via cached join',notes:'Cache lookup table for performance',imp:[],conf:0.85},
+  ValidateRecord:{cat:'DLT Expectations',tpl:'# Data quality validation\n# @dlt.expect_or_drop("{rule}", "{expression}")\ndf_{v} = df_{in}.filter("{expression}")',desc:'Record validation via DLT expectations',notes:'Best implemented as DLT expectations',imp:[],conf:0.85},
+  PartitionRecord:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.repartition("{partition_field}")',desc:'Record partitioning',notes:'Spark handles partitioning natively',imp:[],conf:0.90},
+  QueryRecord:{cat:'Spark SQL',tpl:'df_{in}.createOrReplaceTempView("tmp_{v}")\ndf_{v} = spark.sql("{sql}")',desc:'SQL query on records',notes:'Register DataFrame as temp view then query',imp:[],conf:0.85},
+  ConvertAvroToJSON:{cat:'DataFrame API',tpl:'from pyspark.sql.avro.functions import from_avro\ndf_{v} = df_{in}.select(from_avro("value", _schema).alias("data")).select("data.*")',desc:'Avro to JSON',notes:'Spark handles Avro natively',imp:[],conf:0.85},
+  ConvertJSONToAvro:{cat:'DataFrame API',tpl:'from pyspark.sql.avro.functions import to_avro\ndf_{v} = df_{in}.select(to_avro(struct("*")).alias("value"))',desc:'JSON to Avro',notes:'Use Spark Avro functions',imp:[],conf:0.85},
+  GenerateTableFetch:{cat:'JDBC Incremental',tpl:'df_{v} = (spark.read\n  .format("jdbc")\n  .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))\n  .option("dbtable", "(SELECT * FROM {table} WHERE {column} > ?) subq")\n  .load())',desc:'Incremental JDBC fetch',notes:'Use query pushdown for incremental reads',imp:[],conf:0.80},
+  // ── Redis/Couchbase/Solr ──
+  PutDistributedMapCache:{cat:'Spark Cache',tpl:'df_{v} = df_{in}.cache()  # Or persist to Delta lookup table\n# For distributed cache: spark.table("{catalog}.{schema}.cache_table")',desc:'Distributed cache write',notes:'Replace NiFi cache with Spark caching or Delta lookup table',imp:[],conf:0.70},
+  FetchDistributedMapCache:{cat:'Spark Cache',tpl:'df_lookup = spark.table("{catalog}.{schema}.cache_table").cache()\ndf_{v} = df_{in}.join(df_lookup, on="{key}", how="left")',desc:'Distributed cache read',notes:'Use cached Delta table for fast lookups',imp:[],conf:0.70},
+  PutCouchbaseKey:{cat:'Couchbase Connector',tpl:'# Install couchbase-spark-connector\n(df_{in}.write\n  .format("couchbase.kv")\n  .option("couchbase.bucket", "{bucket}")\n  .save())',desc:'Couchbase write',notes:'Install couchbase-spark connector',imp:[],conf:0.60},
+  GetCouchbaseKey:{cat:'Couchbase Connector',tpl:'df_{v} = (spark.read\n  .format("couchbase.kv")\n  .option("couchbase.bucket", "{bucket}")\n  .load())',desc:'Couchbase read',notes:'Install couchbase-spark connector',imp:[],conf:0.60},
+  PutSolrContentStream:{cat:'Solr Connector',tpl:'# Install solr-spark connector or use pysolr\nimport pysolr\nsolr = pysolr.Solr("{url}")\nsolr.add([row.asDict() for row in df_{in}.collect()])',desc:'Solr write',notes:'Use pysolr or solr-spark connector',imp:[],conf:0.50},
+  QuerySolr:{cat:'Solr Connector',tpl:'# Use pysolr or solr-spark connector\nimport pysolr\nsolr = pysolr.Solr("{url}")\nresults = solr.search("{query}")',desc:'Solr query',notes:'Use pysolr for queries',imp:[],conf:0.50},
 };
 
 function sanitizeVarName(name) {
@@ -2537,19 +3354,54 @@ function mapNiFiToDatabricks(nifi) {
         const cmd = props['Command'] || props['command'] || '';
         const args = props['Command Arguments'] || props['command_arguments'] || '';
         const full = (cmd + ' ' + args).trim();
-        if (/hdfs\s+dfs|hadoop\s+fs/i.test(full)) {
-          const op = /-cp\b/.test(full)?'cp':/-mv\b/.test(full)?'mv':/-mkdir/.test(full)?'mkdirs':/-rm/.test(full)?'rm':/-ls/.test(full)?'ls':'head';
-          code = `# HDFS operation → dbutils.fs.${op}()\n# Original: ${full.substring(0,120)}\ndbutils.fs.${op}("/Volumes/<catalog>/<schema>/<path>")`;
+        const allLower = full.toLowerCase();
+        if (/hdfs\s+dfs|hadoop\s+fs|^dfs;/i.test(full)) {
+          const op = /-cp\b/.test(full)?'cp':/-mv\b/.test(full)?'mv':/-mkdir/.test(full)?'mkdirs':/-rm/.test(full)?'rm':/-ls/.test(full)?'ls':/-put/.test(full)?'cp':/-get/.test(full)?'cp':/-cat/.test(full)?'head':'head';
+          const pathMatch = full.match(/(?:\/[\w${}./-]+)/);
+          code = `# HDFS → DBFS/Volumes\n# Original: ${full.substring(0,120)}\ndbutils.fs.${op}("${pathMatch?pathMatch[0].replace(/\$\{[^}]*\}/g,'<param>'):'/Volumes/<catalog>/<schema>/<path>'}")`;
           conf = 0.80;
-        } else if (/kinit/i.test(full)) {
-          code = `# Kerberos kinit → Not needed in Databricks\n# Original: ${full.substring(0,120)}\n# Unity Catalog handles authentication natively\nprint("[INFO] Kerberos auth handled by Unity Catalog")`;
+        } else if (/kinit|klist|kdestroy|keytab/i.test(allLower)) {
+          code = `# Kerberos → Unity Catalog (no kinit needed)\n# Original: ${full.substring(0,120)}\n# Unity Catalog handles identity federation natively\n# Credentials stored in: dbutils.secrets.get(scope="<scope>", key="<key>")\nprint("[AUTH] Kerberos auth handled by Unity Catalog identity federation")`;
           conf = 0.95;
-        } else if (/impala/i.test(full)) {
-          const sq = full.match(/-q\s+["'](.+?)["']/i);
-          code = `# Impala → Spark SQL\n# Original: ${full.substring(0,120)}\nspark.sql("${sq?sq[1].replace(/"/g,'\\"'):'REFRESH TABLE <table>'}")`;
+        } else if (/impala-shell|impala/i.test(allLower)) {
+          // Extract SQL from -q;"..." or --query="..." patterns (semicolon-delimited NiFi style)
+          let sq = args.match(/-q\s*;?\s*"([^"]+)"/i) || args.match(/--query\s*=\s*"([^"]+)"/i) || args.match(/-q\s*;?\s*([^;]+(?:;[^;]+)*)\s*$/i);
+          const sqlStr = sq ? sq[1].trim().replace(/^"|"$/g,'') : '';
+          if (/refresh\s+/i.test(sqlStr)) {
+            const tbl = sqlStr.match(/refresh\s+([\w.]+)/i);
+            code = `# Impala REFRESH → Spark SQL\nspark.catalog.refreshTable("${tbl?tbl[1]:'<table>'}")\n# Original: ${sqlStr.substring(0,100)}`;
+            conf = 0.90;
+          } else if (/invalidate\s+metadata/i.test(sqlStr)) {
+            const tbl = sqlStr.match(/invalidate\s+metadata\s+([\w.]+)/i);
+            code = `# Impala INVALIDATE METADATA → Spark SQL\nspark.catalog.refreshTable("${tbl?tbl[1]:'<table>'}")\nspark.sql("REFRESH TABLE ${tbl?tbl[1]:'<table>'}")\n# Original: ${sqlStr.substring(0,100)}`;
+            conf = 0.90;
+          } else if (/compute\s+stats/i.test(sqlStr)) {
+            const tbl = sqlStr.match(/compute\s+stats\s+([\w.]+)/i);
+            code = `# Impala COMPUTE STATS → Spark SQL ANALYZE TABLE\nspark.sql("ANALYZE TABLE ${tbl?tbl[1]:'<table>'} COMPUTE STATISTICS")\n# Original: ${sqlStr.substring(0,100)}`;
+            conf = 0.90;
+          } else if (/select/i.test(sqlStr)) {
+            code = `# Impala SELECT → Spark SQL\ndf_${varName} = spark.sql("""\n${sqlStr.replace(/"/g,'\\"').substring(0,200)}\n""")\n# Note: Impala SQL is mostly Spark-compatible`;
+            conf = 0.85;
+          } else if (/insert/i.test(sqlStr)) {
+            code = `# Impala INSERT → Spark SQL\nspark.sql("""\n${sqlStr.replace(/"/g,'\\"').substring(0,200)}\n""")\n# Note: Ensure target table exists in Unity Catalog`;
+            conf = 0.85;
+          } else {
+            code = `# Impala → Spark SQL\n# Original: ${full.substring(0,150)}\nspark.sql("${sqlStr.replace(/"/g,'\\"').substring(0,150) || 'REFRESH TABLE <table>'}")`;
+            conf = 0.85;
+          }
+        } else if (/hive|beeline/i.test(allLower)) {
+          const sq = args.match(/-e\s*;?\s*"([^"]+)"/i) || args.match(/--query\s*=\s*"([^"]+)"/i);
+          code = `# Hive/Beeline → Spark SQL\nspark.sql("""\n${sq?sq[1].replace(/"/g,'\\"').substring(0,200):'<hive_query>'}\n""")\n# Original: ${full.substring(0,100)}`;
           conf = 0.85;
+        } else if (/sqoop/i.test(allLower)) {
+          const tblMatch = args.match(/--table\s+(\S+)/);
+          code = `# Sqoop → Spark JDBC\ndf_${varName} = (spark.read.format("jdbc")\n  .option("url", dbutils.secrets.get(scope="<scope>", key="jdbc-url"))\n  .option("dbtable", "${tblMatch?tblMatch[1]:'<table>'}")\n  .load())\n# Original: ${full.substring(0,100)}`;
+          conf = 0.80;
+        } else if (/\.jar\b/i.test(allLower)) {
+          code = `# JAR execution → Spark Submit or cluster library\n# Original: ${full.substring(0,120)}\n# Upload JAR to /Volumes/<catalog>/<schema>/jars/ and add to cluster libraries\n# spark._jvm.com.example.MainClass.run(args)`;
+          conf = 0.50;
         } else if (full) {
-          code = `# Shell command → %sh magic cell\n# Original: ${full.substring(0,120)}\n# Use %sh in a separate cell or dbutils.notebook.run()\nprint("[CMD] ${full.replace(/"/g,'\\"').substring(0,80)}")`;
+          code = `# Shell command → %sh or dbutils\n# Original: ${full.substring(0,120)}\n# Use %sh in a separate cell or dbutils.notebook.run()\nprint("[CMD] ${full.replace(/"/g,'\\"').substring(0,80)}")`;
           conf = 0.50;
         }
       }
@@ -4504,9 +5356,11 @@ function runMedallion(tables, bp) {
       const nums = vals.map(Number).filter(v=>!isNaN(v));
       const row = {column:c, non_null:vals.length, nulls:src-vals.length};
       if (nums.length > src*0.5) {
-        row.min = Math.round(Math.min(...nums)*100)/100;
-        row.max = Math.round(Math.max(...nums)*100)/100;
-        row.mean = Math.round(nums.reduce((a,b)=>a+b,0)/nums.length*100)/100;
+        let mn = Infinity, mx = -Infinity, sum = 0;
+        for (let j = 0; j < nums.length; j++) { if (nums[j] < mn) mn = nums[j]; if (nums[j] > mx) mx = nums[j]; sum += nums[j]; }
+        row.min = Math.round(mn*100)/100;
+        row.max = Math.round(mx*100)/100;
+        row.mean = Math.round(sum/nums.length*100)/100;
       } else {
         const freq = {}; vals.forEach(v=>{freq[v]=(freq[v]||0)+1;});
         row.distinct = Object.keys(freq).length;
@@ -4649,16 +5503,95 @@ function dataPreviewHTML(data, maxRows=15) {
 // ================================================================
 // STEP HANDLERS
 // ================================================================
-function parseInput() {
+// Progress bar helper for inline parse status
+function _parseProgress(pct, status, sub) {
+  const el = document.getElementById('parseProgress');
+  const bar = document.getElementById('parsePBar');
+  const pctEl = document.getElementById('parsePPct');
+  const statusEl = document.getElementById('parsePStatus');
+  if (!el) return;
+  el.style.display = 'flex';
+  bar.style.width = pct + '%';
+  if (pct >= 100) bar.style.background = 'var(--green)';
+  else bar.style.background = 'var(--primary)';
+  pctEl.textContent = Math.round(pct) + '%';
+  statusEl.textContent = status + (sub ? ' — ' + sub : '');
+}
+function _parseProgressHide() {
+  const el = document.getElementById('parseProgress');
+  if (el) el.style.display = 'none';
+}
+// Yield to UI so progress bar updates render
+function _uiYield() { return new Promise(r => setTimeout(r, 0)); }
+
+async function parseInput() {
   const content = uploadedContent || document.getElementById('pasteInput').value.trim();
   if (!content) { alert('Upload a file or paste text first.'); return; }
+  const btn = document.getElementById('parseBtn');
+  if (btn) btn.disabled = true;
   setTabStatus('parse', 'processing');
-  // Use smart parse cascade
+  _parseProgress(0, 'Initializing parser...');
+  await _uiYield();
+
+  // Phase 1: Format detection & XML parsing (5%)
+  _parseProgress(2, 'Detecting format...');
+  await _uiYield();
+
   let parsed;
   try {
+    // Pre-check: if NiFi XML, count processors for progress estimation
+    const isNifi = /<flowController|<processGroup|<processors/i.test(content);
+    const procEstimate = isNifi ? (content.match(/<processor>/gi) || []).length : 0;
+    if (isNifi && procEstimate > 50) {
+      _parseProgress(3, `NiFi flow detected (${procEstimate} processors)`, 'Parsing XML structure...');
+      await _uiYield();
+    }
+    console.time('[SEG] smartParse');
     parsed = smartParse(content, uploadedName || null);
-  } catch(e) { setTabStatus('parse', 'ready'); alert('Parse error: '+e.message); return; }
+    console.timeEnd('[SEG] smartParse');
+    console.log('[SEG] Parsed:', parsed ? parsed.tables?.length + ' tables' : 'null', parsed?._nifi ? ', ' + parsed._nifi.processors.length + ' processors' : '');
+    _parseProgress(15, `XML parsed`, parsed._nifi ? `${parsed._nifi.processors.length} processors found` : '');
+    await _uiYield();
+  } catch(e) { _parseProgressHide(); if (btn) btn.disabled = false; setTabStatus('parse', 'ready'); alert('Parse error: '+e.message); return; }
+
+  // Phase 2: Async processor scanning for large flows (15-65%)
+  if (parsed && parsed._deferredProcessorWork) {
+    console.time('[SEG] deferredProcessorWork');
+    const dw = parsed._deferredProcessorWork;
+    const procs = dw.processors;
+    // Adaptive batch size: smaller batches for larger flows to keep UI responsive
+    const BATCH_SIZE = procs.length > 5000 ? 10 : procs.length > 2000 ? 15 : procs.length > 500 ? 25 : 50;
+    console.log('[SEG] Deferred work:', procs.length, 'processors, batch size:', BATCH_SIZE);
+    const totalBatches = Math.ceil(procs.length / BATCH_SIZE);
+    for (let i = 0; i < procs.length; i += BATCH_SIZE) {
+      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+      const batch = procs.slice(i, i + BATCH_SIZE);
+      const pct = 15 + Math.round((i / procs.length) * 40);
+      const toolCount = parsed._nifi.clouderaTools.length;
+      const sqlCount = parsed._nifi.sqlTables.length;
+      _parseProgress(pct, `Scanning processors (${Math.min(i + BATCH_SIZE, procs.length)}/${procs.length})`, `Batch ${batchNum}/${totalBatches} | ${toolCount} systems | ${sqlCount} SQL refs | Batch size: ${BATCH_SIZE}`);
+      await _uiYield();
+      dw.batchFn(batch);
+    }
+    _parseProgress(56, 'Finalizing table blueprints...', `${parsed._nifi.sqlTables.length} SQL refs → generating blueprints`);
+    await _uiYield();
+    console.time('[SEG] finalize');
+    dw.finalize();
+    console.timeEnd('[SEG] finalize');
+    console.timeEnd('[SEG] deferredProcessorWork');
+    const toolTypes = new Set(parsed._nifi.clouderaTools.map(t => t.tool));
+    console.log('[SEG] Results:', parsed.tables.length, 'tables,', parsed._nifi.clouderaTools.length, 'tools,', toolTypes.size, 'types');
+    _parseProgress(62, `${parsed.tables.length} tables generated`, `${parsed._nifi.clouderaTools.length} external systems across ${toolTypes.size} types`);
+    await _uiYield();
+    delete parsed._deferredProcessorWork;
+  } else {
+    _parseProgress(40, `Parsed ${parsed && parsed.tables ? parsed.tables.length : 0} tables`);
+    await _uiYield();
+  }
+
   if (!parsed || !parsed.tables || !parsed.tables.length) {
+    _parseProgressHide();
+    if (btn) btn.disabled = false;
     setTabStatus('parse', 'ready');
     const warnings = parsed && parsed.parse_warnings ? parsed.parse_warnings.join('\n') : '';
     alert('No tables found. Check your input format.' + (warnings ? '\n\n' + warnings : ''));
@@ -4687,14 +5620,15 @@ function parseInput() {
   document.getElementById('reportFinalNotReady').classList.remove('hidden');
   document.getElementById('reportFinalReady').classList.add('hidden');
   document.getElementById('reportFinalResults').innerHTML = '';
-  // Detect source system
+  // Phase 3: Render results (65-90%)
+  _parseProgress(67, 'Detecting source system...');
+  await _uiYield();
   const fmt = parsed.detected_format || parsed.input_format || 'unknown';
   const src = detectSourceSystem(content, fmt);
   const tc = parsed.tables.reduce((a,t)=>a+t.columns.length,0);
   const tf = parsed.tables.reduce((a,t)=>a+t.foreign_keys.length,0);
   let h = '<hr class="divider">';
   h += `<div class="detected-source"><span class="dot"></span><strong>${src.name}</strong>&nbsp;—&nbsp;${src.type}<span style="margin-left:12px;color:var(--text2);font-size:0.85rem">(${fmt.replace(/_/g,' ')})</span></div>`;
-  // Show parse quality info
   if (parsed.parse_attempts && parsed.parse_attempts > 1) h += `<div class="alert alert-info">Smart parser tried ${parsed.parse_attempts} format(s) before finding a match (confidence: ${Math.round((parsed.parse_confidence||0)*100)}%)</div>`;
   h += metricsHTML([['Tables',parsed.tables.length],['Columns',tc],['Foreign Keys',tf],['Source',src.name]]);
   // NiFi-specific details
@@ -4713,9 +5647,11 @@ function parseInput() {
       const byType = {}; nf.processors.forEach(p=>{ byType[p.type]=(byType[p.type]||0)+1; });
       const typeRows = Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([t,c])=>[t,c]);
       let procBody = '<h3 style="margin-top:0">By Type</h3>' + tableHTML(['Processor Type','Count'], typeRows);
-      // Show first 30 processors
-      const pRows = nf.processors.slice(0,30).map(p => [p.name, p.type, p.group, p.state||'', Object.keys(p.properties).length]);
-      procBody += `<h3>Processors (first 30 of ${nf.processors.length})</h3>` + tableHTML(['Name','Type','Group','State','Props'], pRows);
+      // Show first N processors (adaptive for large flows)
+      const showMax = nf.processors.length > 2000 ? 50 : nf.processors.length > 500 ? 40 : 30;
+      const pRows = nf.processors.slice(0,showMax).map(p => [p.name, p.type, p.group, p.state||'', Object.keys(p.properties).length, p.schedulingStrategy||'', p.schedulingPeriod||'']);
+      procBody += `<h3>Processors (first ${showMax} of ${nf.processors.length})</h3>` + tableHTML(['Name','Type','Group','State','Props','Schedule','Period'], pRows);
+      if (nf.processors.length > showMax) procBody += `<p style="color:var(--text2);font-size:0.82rem">...and ${nf.processors.length - showMax} more processors. All ${nf.processors.length} are fully analyzed in the External Systems inventory, SQL table references, and Deep Property Inventory above.</p>`;
       h += expanderHTML(`<strong>Processors</strong> (${nf.processors.length})`, procBody);
     }
     if (nf.connections.length) {
@@ -4726,14 +5662,164 @@ function parseInput() {
       const csRows = nf.controllerServices.map(s => [s.name, s.type, s.state||'', Object.keys(s.properties).length+' props']);
       h += expanderHTML(`<strong>Controller Services</strong> (${nf.controllerServices.length})`, tableHTML(['Service','Type','State','Properties'], csRows));
     }
+    _parseProgress(72, 'Rendering SQL table inventory...', `${nf.sqlTables ? nf.sqlTables.length : 0} references`);
+    await _uiYield();
     if (nf.sqlTables && nf.sqlTables.length) {
-      const stRows = nf.sqlTables.map(t => [t, t.startsWith('$')?'variable':'table']);
-      h += expanderHTML(`<strong>SQL Table References</strong> (${nf.sqlTables.length})`, tableHTML(['Table Reference','Type'], stRows));
+      const meta = nf.sqlTableMeta || {};
+      let sqlHTML = '<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr><th>Table Reference</th><th>Schema</th><th>Type</th><th>Columns</th><th>Readers</th><th>Writers</th><th>Blueprint</th></tr></thead><tbody>';
+      nf.sqlTables.forEach(t => {
+        const m = meta[t] || {};
+        const parts = t.replace(/\$\{|\}/g,'').split('.');
+        const tName = parts[parts.length-1];
+        const schema = parts.length >= 2 ? parts[parts.length-2] : 'nifi_source';
+        const type = t.startsWith('$') ? '<span style="color:#EAB308">parameter</span>' : t.includes('.') ? 'qualified' : 'unqualified';
+        const colCount = m.columns ? m.columns.size : 0;
+        const readers = (m.readers||[]).slice(0,3).join(', ') + ((m.readers||[]).length > 3 ? '...' : '');
+        const writers = (m.writers||[]).slice(0,3).join(', ') + ((m.writers||[]).length > 3 ? '...' : '');
+        const hasBlueprint = parsed.tables.some(tb => tb.name === tName);
+        sqlHTML += `<tr><td><code>${escapeHTML(t)}</code></td><td>${escapeHTML(schema)}</td><td>${type}</td><td>${colCount || '<em>inferred</em>'}</td><td style="font-size:0.72rem">${escapeHTML(readers)||'<em>none</em>'}</td><td style="font-size:0.72rem">${escapeHTML(writers)||'<em>none</em>'}</td><td style="color:${hasBlueprint?'#21C354':'#EF4444'}">${hasBlueprint?'Generated':'—'}</td></tr>`;
+      });
+      sqlHTML += '</tbody></table></div>';
+      h += expanderHTML(`<strong>SQL/Impala Table References</strong> (${nf.sqlTables.length} tables, ${parsed.tables.length} blueprints generated)`, sqlHTML, true);
     }
+    _parseProgress(75, 'Rendering external systems...', `${nf.clouderaTools ? nf.clouderaTools.length : 0} tools detected`);
+    await _uiYield();
+    console.time('[SEG] externalSystemsRender');
+    // External Systems & Tools summary (expanded beyond Cloudera)
+    if (nf.clouderaTools && nf.clouderaTools.length) {
+      const toolSummary = {};
+      const toolsByCategory = {};
+      nf.clouderaTools.forEach(t => {
+        toolSummary[t.tool] = (toolSummary[t.tool]||0)+1;
+        // Categorize tools
+        const cat = /Impala|HDFS|Hive|Kudu|HBase|Kerberos|Oozie|Flume|Sqoop|ZooKeeper|Ranger|Pig|MapReduce|Spark Submit/.test(t.tool) ? 'Cloudera/Hadoop' :
+          /AWS|S3|SQS|SNS|DynamoDB|Kinesis|Lambda/.test(t.tool) ? 'AWS' :
+          /Azure|ADLS|Event Hubs|Cosmos/.test(t.tool) ? 'Azure' :
+          /GCP|GCS|BigQuery/.test(t.tool) ? 'GCP' :
+          /Kafka/.test(t.tool) ? 'Kafka' :
+          /MongoDB|Cassandra|Couchbase|Redis|NiFi Cache/.test(t.tool) ? 'NoSQL' :
+          /Elasticsearch|Solr|Splunk|InfluxDB/.test(t.tool) ? 'Search/Monitoring' :
+          /SFTP|FTP/.test(t.tool) ? 'File Transfer' :
+          /HTTP|REST/.test(t.tool) ? 'HTTP/REST' :
+          /JMS|AMQP|MQTT/.test(t.tool) ? 'Messaging' :
+          /Oracle|MySQL|PostgreSQL|SQL Server|MariaDB|DB2|Teradata|Redshift|Snowflake/.test(t.tool) ? 'Database/JDBC' :
+          /Database|SQL/.test(t.tool) ? 'Database/SQL' :
+          /NiFi Orchestration/.test(t.tool) ? 'NiFi Orchestration' :
+          /Email|Slack|Syslog|SNMP|TCP|UDP/.test(t.tool) ? 'Integration' :
+          /Script|JAR|Shell|Python/.test(t.tool) ? 'Custom Code' : 'Other';
+        if (!toolsByCategory[cat]) toolsByCategory[cat] = [];
+        toolsByCategory[cat].push(t);
+      });
+      // Category badges
+      let ctHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">';
+      Object.entries(toolsByCategory).sort((a,b) => b[1].length - a[1].length).forEach(([cat, tools]) => {
+        const catColor = cat === 'Cloudera/Hadoop' ? '#F97316' : cat === 'AWS' ? '#FF9900' : cat === 'Azure' ? '#0078D4' : cat === 'GCP' ? '#4285F4' : cat === 'Kafka' ? '#231F20' : cat === 'NoSQL' ? '#4DB33D' : cat === 'Database/JDBC' ? '#336791' : cat === 'Database/SQL' ? '#3B82F6' : 'var(--text2)';
+        ctHTML += `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface);border:1px solid ${catColor}40;border-radius:8px;border-left:3px solid ${catColor}"><strong style="color:${catColor}">${escapeHTML(cat)}</strong> <span class="badge badge-amber">${tools.length}</span></span>`;
+      });
+      ctHTML += '</div>';
+      // Individual tool badges
+      ctHTML += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin:8px 0">';
+      Object.entries(toolSummary).sort((a,b) => b[1] - a[1]).forEach(([tool, count]) => {
+        ctHTML += `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;font-size:0.78rem"><strong>${escapeHTML(tool)}</strong> <span style="color:var(--text2)">${count}</span></span>`;
+      });
+      ctHTML += '</div>';
+      ctHTML += '<div class="alert alert-info" style="margin:8px 0;font-size:0.82rem">All external systems mapped to Databricks equivalents. Priority: <strong style="color:#21C354">1=Spark SQL/Native</strong> > <strong style="color:#3B82F6">2=PySpark/Connector</strong> > <strong style="color:#EAB308">3=Python/dbutils</strong></div>';
+      // Per-category expanders with full details
+      Object.entries(toolsByCategory).sort((a,b) => b[1].length - a[1].length).forEach(([cat, tools]) => {
+        const rows = tools.map(t => [escapeHTML(t.tool), escapeHTML(t.subtype), escapeHTML(t.processor), escapeHTML(t.group), `<span style="color:${t.dbx_priority===1?'#21C354':t.dbx_priority===2?'#3B82F6':'#EAB308'}">${t.dbx_priority===1?'Spark/Native':t.dbx_priority===2?'PySpark':t.dbx_priority===3?'Python':t.dbx_priority}</span>`, `<code style="font-size:0.72rem">${escapeHTML(t.dbx_equivalent)}</code>`, `<span style="font-size:0.72rem">${escapeHTML((t.dbx_notes||'').substring(0,80))}</span>`]);
+        ctHTML += expanderHTML(`<strong>${escapeHTML(cat)}</strong> (${tools.length} items)`, tableHTML(['Tool','Subtype','Processor','Group','Priority','DBX Equivalent','Notes'], rows));
+      });
+      h += expanderHTML(`<strong>External Systems & Tools Detected</strong> (${nf.clouderaTools.length} items across ${Object.keys(toolsByCategory).length} categories, ${Object.keys(toolSummary).length} tool types)`, ctHTML, true);
+    }
+    console.timeEnd('[SEG] externalSystemsRender');
+    _parseProgress(78, 'Rendering property inventory...');
+    await _uiYield();
+    console.time('[SEG] deepPropertyInventory');
+    // Deep Property Inventory
+    if (nf.deepPropertyInventory) {
+      const dpi = nf.deepPropertyInventory;
+      let dpiHTML = '';
+      const fpCount = Object.keys(dpi.filePaths).length;
+      const urlCount = Object.keys(dpi.urls).length;
+      const jdbcCount = Object.keys(dpi.jdbcUrls).length;
+      const elCount = Object.keys(dpi.nifiEL).length;
+      const cronCount = Object.keys(dpi.cronExprs).length;
+      const credCount = Object.keys(dpi.credentialRefs).length;
+      const hostCount = Object.keys(dpi.hostPorts).length;
+      const fmtCount = dpi.dataFormats.size;
+      const totalInventory = fpCount + urlCount + jdbcCount + elCount + cronCount + credCount + hostCount + fmtCount;
+      if (totalInventory > 0) {
+        dpiHTML += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">';
+        if (fpCount) dpiHTML += `<span style="padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:0.78rem">File Paths <strong>${fpCount}</strong></span>`;
+        if (urlCount) dpiHTML += `<span style="padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:0.78rem">URLs <strong>${urlCount}</strong></span>`;
+        if (jdbcCount) dpiHTML += `<span style="padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:0.78rem">JDBC Connections <strong>${jdbcCount}</strong></span>`;
+        if (elCount) dpiHTML += `<span style="padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:0.78rem">NiFi Expressions <strong>${elCount}</strong></span>`;
+        if (cronCount) dpiHTML += `<span style="padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:0.78rem">CRON Schedules <strong>${cronCount}</strong></span>`;
+        if (credCount) dpiHTML += `<span style="padding:4px 10px;background:var(--surface);border:1px solid #EF444440;border-radius:6px;font-size:0.78rem;color:#EF4444">Credentials <strong>${credCount}</strong></span>`;
+        if (hostCount) dpiHTML += `<span style="padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:0.78rem">Host:Port <strong>${hostCount}</strong></span>`;
+        if (fmtCount) dpiHTML += `<span style="padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:0.78rem">Data Formats <strong>${fmtCount}</strong></span>`;
+        dpiHTML += '</div>';
+        if (fpCount) {
+          const fpRows = Object.entries(dpi.filePaths).slice(0,100).map(([fp, refs]) => [escapeHTML(fp), refs.length, refs.slice(0,3).map(r => escapeHTML(r.processor)).join(', ') + (refs.length > 3 ? '...' : '')]);
+          dpiHTML += expanderHTML(`<strong>File Paths</strong> (${fpCount})`, tableHTML(['Path','References','Processors'], fpRows) + (fpCount > 100 ? `<p style="color:var(--text2);font-size:0.8rem">...and ${fpCount-100} more</p>` : ''));
+        }
+        if (urlCount) {
+          const urlRows = Object.entries(dpi.urls).slice(0,50).map(([u, refs]) => [`<code style="font-size:0.72rem">${escapeHTML(u.substring(0,120))}</code>`, refs.length, refs.slice(0,3).map(r => escapeHTML(r.processor)).join(', ')]);
+          dpiHTML += expanderHTML(`<strong>URLs</strong> (${urlCount})`, tableHTML(['URL','Refs','Processors'], urlRows));
+        }
+        if (jdbcCount) {
+          const jdbcRows = Object.entries(dpi.jdbcUrls).map(([j, refs]) => [`<code style="font-size:0.72rem">${escapeHTML(j.replace(/password=[^&;]+/gi,'password=***').substring(0,150))}</code>`, refs.length, refs.slice(0,3).map(r => escapeHTML(r.processor)).join(', ')]);
+          dpiHTML += expanderHTML(`<strong>JDBC Connections</strong> (${jdbcCount})`, '<div class="alert alert-warn" style="font-size:0.8rem">These database connections need Databricks Secret Scopes for credentials</div>' + tableHTML(['JDBC URL','Refs','Processors'], jdbcRows));
+        }
+        if (elCount) {
+          const elRows = Object.entries(dpi.nifiEL).slice(0,100).map(([el, refs]) => [`<code>${escapeHTML(el.substring(0,80))}</code>`, refs.length, refs.slice(0,3).map(r => escapeHTML(r.processor)).join(', ')]);
+          dpiHTML += expanderHTML(`<strong>NiFi Expression Language</strong> (${elCount})`, tableHTML(['Expression','Refs','Processors'], elRows) + (elCount > 100 ? `<p style="color:var(--text2);font-size:0.8rem">...and ${elCount-100} more</p>` : ''));
+        }
+        if (cronCount) {
+          const cronRows = Object.entries(dpi.cronExprs).map(([c, refs]) => [`<code>${escapeHTML(c)}</code>`, refs.length, refs.map(r => escapeHTML(r.processor)).join(', ')]);
+          dpiHTML += expanderHTML(`<strong>CRON Schedules</strong> (${cronCount})`, '<div class="alert alert-info" style="font-size:0.8rem">Map CRON expressions to Databricks Job triggers</div>' + tableHTML(['CRON Expression','Refs','Processors'], cronRows));
+        }
+        if (credCount) {
+          const credRows = Object.entries(dpi.credentialRefs).map(([k, refs]) => [`<code style="color:#EF4444">${escapeHTML(k)}</code>`, refs.length, refs.map(r => escapeHTML(r.processor) + ' (' + r.value + ')').join(', ')]);
+          dpiHTML += expanderHTML(`<strong>Credential References</strong> (${credCount})`, '<div class="alert alert-warn" style="font-size:0.8rem">These credentials MUST be migrated to Databricks Secret Scopes — never store in plaintext</div>' + tableHTML(['Property','Refs','Processors (masked value)'], credRows));
+        }
+        if (hostCount) {
+          const hostRows = Object.entries(dpi.hostPorts).slice(0,50).map(([hp, refs]) => [`<code>${escapeHTML(hp)}</code>`, refs.length, refs.slice(0,3).map(r => escapeHTML(r.processor)).join(', ')]);
+          dpiHTML += expanderHTML(`<strong>Host:Port References</strong> (${hostCount})`, tableHTML(['Host:Port','Refs','Processors'], hostRows));
+        }
+        if (fmtCount) {
+          dpiHTML += expanderHTML(`<strong>Data Formats</strong> (${fmtCount})`, '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">' + [...dpi.dataFormats].sort().map(f => `<span style="padding:3px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:0.78rem">${f.toUpperCase()}</span>`).join('') + '</div>');
+        }
+        h += expanderHTML(`<strong>Deep Property Inventory</strong> (${totalInventory} items across ${[fpCount,urlCount,jdbcCount,elCount,cronCount,credCount,hostCount,fmtCount].filter(c=>c>0).length} categories)`, dpiHTML, true);
+      }
+    }
+    console.timeEnd('[SEG] deepPropertyInventory');
     // Build and display Resource Manifest
-    const manifest = buildResourceManifest(nf);
+    _parseProgress(80, 'Building resource manifest...', `${nf.processors.length} processors to scan`);
+    await _uiYield();
+    console.time('[SEG] buildResourceManifest');
+    let manifest;
+    try {
+      manifest = buildResourceManifest(nf);
+      console.timeEnd('[SEG] buildResourceManifest');
+      console.log('[SEG] Manifest:', manifest.totalResources, 'resources,', manifest.warnings.length, 'warnings');
+    } catch(e) {
+      console.timeEnd('[SEG] buildResourceManifest');
+      console.error('[SEG] buildResourceManifest FAILED:', e);
+      manifest = { directories:{}, files:{}, sqlTables:{}, tokens:{}, signals:{}, httpEndpoints:[], kafkaTopics:[], dbConnections:[], scripts:[], clouderaTools:[], parameters:[], counters:[], disconnected:[], disconnectedProcessors:[], totalResources:0, warnings:['Manifest build failed: ' + e.message] };
+    }
     STATE.manifest = manifest;
-    h += expanderHTML(`<strong>Resource Manifest</strong> (${manifest.totalResources} resources)`, renderManifestHTML(manifest), true);
+    _parseProgress(84, 'Rendering resource manifest...', `${manifest.totalResources} resources`);
+    await _uiYield();
+    console.time('[SEG] renderManifestHTML');
+    try {
+      h += expanderHTML(`<strong>Resource Manifest</strong> (${manifest.totalResources} resources)`, renderManifestHTML(manifest), true);
+      console.timeEnd('[SEG] renderManifestHTML');
+    } catch(e) {
+      console.timeEnd('[SEG] renderManifestHTML');
+      console.error('[SEG] renderManifestHTML FAILED:', e);
+      h += `<div class="alert alert-warn">Resource manifest rendering failed: ${escapeHTML(e.message)}</div>`;
+    }
   }
   // Dependency graph-specific details
   if (parsed._dependency) {
@@ -4769,18 +5855,32 @@ function parseInput() {
   if (parsed.parse_warnings && parsed.parse_warnings.length) {
     h += '<div class="alert alert-warn">'+parsed.parse_warnings.join('<br>')+'</div>';
   }
+  _parseProgress(90, 'Rendering table blueprints...', `${parsed.tables.length} tables`);
+  await _uiYield();
+  console.time('[SEG] tableBlueprintRender');
   parsed.tables.forEach(t => {
     const rows = t.columns.map(c=>[c.name, c.data_type, c.raw_type||c.data_type, c.nullable?'Yes':'No', c.is_primary_key?'Y':'', (c.check_constraints||[]).join(', ')]);
     let body = tableHTML(['Column','Type','Raw Type','Nullable','PK','Check'], rows);
     if (t.foreign_keys.length) { body += '<p style="margin-top:8px"><strong>Foreign Keys:</strong></p>'+t.foreign_keys.map(fk=>`<p style="font-size:0.9rem">  <code>${fk.fk_column}</code> → <code>${fk.referenced_table}(${fk.referenced_column})</code></p>`).join(''); }
     h += expanderHTML(`Table: <strong>${t.name}</strong> (${t.columns.length} columns)`, body, true);
   });
+  console.timeEnd('[SEG] tableBlueprintRender');
   h += `<div class="alert alert-success">Parsed <strong>${parsed.tables.length} tables</strong> with <strong>${tc} columns</strong> from <strong>${src.name}</strong> — running full pipeline...</div>`;
+  _parseProgress(95, 'Writing to DOM...', `${(h.length/1024).toFixed(0)} KB HTML`);
+  await _uiYield();
+  console.time('[SEG] DOM innerHTML');
+  console.log('[SEG] HTML size:', (h.length/1024).toFixed(0), 'KB');
   document.getElementById('parseResults').innerHTML = h;
+  console.timeEnd('[SEG] DOM innerHTML');
   document.getElementById('blueprintNotReady').classList.add('hidden');
   document.getElementById('blueprintReady').classList.remove('hidden');
+  _parseProgress(100, 'Complete!', `${parsed.tables.length} tables, ${tc} columns`);
+  await _uiYield();
+  if (btn) btn.disabled = false;
   setTabStatus('parse', 'done');
   unlockTab('blueprint');
+  // Hide progress bar after a brief display of 100%
+  setTimeout(_parseProgressHide, 1500);
   // Auto-run full pipeline
   runFullPipeline();
 }
@@ -4878,77 +5978,160 @@ function downloadEnvironment() {
   a.download = `environment_${STATE.blueprint.blueprint_id.substring(0,8)}.json`; a.click();
 }
 
-function generateData() {
+async function generateData() {
   if (!STATE.blueprint) return;
+  const genBtn = document.querySelector('#generateResults')?.closest('.tab-content')?.querySelector('button[onclick*="generateData"]');
+  if (genBtn) genBtn.disabled = true;
   setTabStatus('generate', 'processing');
-  const seed = parseInt(document.getElementById('seed').value)||42;
-  const rowOverride = parseInt(document.getElementById('rowCount').value)||0;
-  // Apply row override if specified
-  if (rowOverride > 0) {
-    STATE.blueprint.tables.forEach(t => { t.row_count = rowOverride; });
-  }
-  STATE.tables = generateTables(STATE.blueprint, seed);
-  STATE.medallion = STATE.validation = STATE.virtualEnv = null;
-  const tables = STATE.tables;
-  // Build VirtualEnv if NiFi flow is loaded
-  if (STATE.parsed && STATE.parsed._nifi) {
-    const venvResult = buildInitialVirtualEnv(STATE.parsed._nifi, tables, STATE.manifest);
-    // Clone for both engines
-    const nifiEnv = venvResult.env;
-    const dbxJson = JSON.stringify({ filesystem: nifiEnv.filesystem, sqlTables: nifiEnv.sqlTables, tokens: nifiEnv.tokens, signals: nifiEnv.signals, counters: nifiEnv.counters });
-    const dbxEnv = new VirtualEnv();
-    const dbxData = JSON.parse(dbxJson);
-    dbxEnv.filesystem = dbxData.filesystem; dbxEnv.sqlTables = dbxData.sqlTables;
-    dbxEnv.tokens = dbxData.tokens; dbxEnv.signals = dbxData.signals; dbxEnv.counters = dbxData.counters;
-    STATE.virtualEnv = { nifi: nifiEnv, dbx: dbxEnv, seedStats: venvResult.seedStats };
-  }
-  const totalRows = Object.values(tables).reduce((a,d)=>a+(d[Object.keys(d)[0]]||[]).length,0);
-  const totalCols = Object.values(tables).reduce((a,d)=>a+Object.keys(d).length,0);
-  let h = '<hr class="divider">';
-  h += metricsHTML([['Tables Generated',Object.keys(tables).length],['Total Rows',totalRows.toLocaleString()],['Total Columns',totalCols]]);
-  for (const [name, data] of Object.entries(tables)) {
-    const cols = Object.keys(data); const rc = data[cols[0]]?data[cols[0]].length:0;
-    let body = '<strong>Preview</strong> (first 15 rows)' + dataPreviewHTML(data);
-    // Stats
-    body += '<h3 style="margin-top:16px">Column Statistics</h3>';
-    const statRows = cols.map(c => {
-      const vals = data[c].filter(v=>v!=null); const nums = vals.map(Number).filter(v=>!isNaN(v));
-      if (nums.length > vals.length*0.5) {
-        const mn = Math.min(...nums), mx = Math.max(...nums), mean = nums.reduce((a,b)=>a+b,0)/nums.length;
-        return [c, vals.length, data[c].length-vals.length, Math.round(mn*100)/100, Math.round(mx*100)/100, Math.round(mean*100)/100];
+  _parseProgress(0, 'Step 3: Generate', 'Initializing...');
+
+  try {
+    const seed = parseInt(document.getElementById('seed').value)||42;
+    const rowOverride = parseInt(document.getElementById('rowCount').value)||0;
+    if (rowOverride > 0) {
+      STATE.blueprint.tables.forEach(t => { t.row_count = rowOverride; });
+    }
+
+    // Phase 1: Generate tables (can be heavy for many tables with many rows)
+    _parseProgress(5, 'Step 3: Generate', 'Generating synthetic data...');
+    await _uiYield();
+    console.time('[SEG] generateTables');
+    const tableNames = STATE.blueprint.tables.map(t => t.name);
+    const totalTables = tableNames.length;
+    // Generate in batches to avoid UI freeze
+    const rng = new SeededRNG(seed);
+    const tMap = {}; STATE.blueprint.tables.forEach(t => tMap[t.name] = t);
+    const order = [], visited = new Set();
+    function visit(tn) { if (visited.has(tn)) return; visited.add(tn); const ts = tMap[tn]; if (!ts) return; ts.foreign_keys.forEach(fk => visit(fk.references_table)); order.push(tn); }
+    Object.keys(tMap).forEach(visit);
+    const pkPools = {}, results = {};
+    const GEN_BATCH = totalTables > 100 ? 5 : totalTables > 30 ? 10 : 20;
+    for (let i = 0; i < order.length; i++) {
+      const tn = order[i]; const ts = tMap[tn]; if (!ts) continue;
+      const data = {}; const rc = ts.row_count;
+      ts.columns.forEach(c => { data[c.name] = sampleColumn(rng, c, rc); });
+      ts.foreign_keys.forEach(fk => {
+        const pool = (pkPools[fk.references_table]||{})[fk.references_column] || [];
+        if (pool.length && data[fk.column]) { data[fk.column] = data[fk.column].map(()=>rng.choice(pool)); }
+      });
+      pkPools[tn] = {};
+      ts.columns.filter(c=>c.is_primary_key).forEach(c => { pkPools[tn][c.name] = data[c.name].filter(v=>v!=null); });
+      results[tn] = data;
+      if ((i + 1) % GEN_BATCH === 0) {
+        _parseProgress(5 + Math.round((i / order.length) * 25), 'Step 3: Generate', `Table ${i+1}/${totalTables} — ${tn}`);
+        await _uiYield();
       }
-      const uniq = new Set(vals).size;
-      return [c, vals.length, data[c].length-vals.length, '—','—', `${uniq} unique`];
-    });
-    body += tableHTML(['Column','Non-Null','Null','Min','Max','Mean/Distinct'], statRows);
-    h += expanderHTML(`<strong>${name}</strong> — ${rc.toLocaleString()} rows, ${cols.length} columns`, body, true);
+    }
+    STATE.tables = results;
+    console.timeEnd('[SEG] generateTables');
+    console.log(`[SEG] Generated ${totalTables} tables`);
+
+    STATE.medallion = STATE.validation = STATE.virtualEnv = null;
+    const tables = STATE.tables;
+
+    // Phase 2: Build VirtualEnv
+    _parseProgress(35, 'Step 3: Generate', 'Building virtual environment...');
+    await _uiYield();
+    if (STATE.parsed && STATE.parsed._nifi) {
+      console.time('[SEG] buildInitialVirtualEnv');
+      try {
+        const venvResult = buildInitialVirtualEnv(STATE.parsed._nifi, tables, STATE.manifest);
+        const nifiEnv = venvResult.env;
+        const dbxJson = JSON.stringify({ filesystem: nifiEnv.filesystem, sqlTables: nifiEnv.sqlTables, tokens: nifiEnv.tokens, signals: nifiEnv.signals, counters: nifiEnv.counters });
+        const dbxEnv = new VirtualEnv();
+        const dbxData = JSON.parse(dbxJson);
+        dbxEnv.filesystem = dbxData.filesystem; dbxEnv.sqlTables = dbxData.sqlTables;
+        dbxEnv.tokens = dbxData.tokens; dbxEnv.signals = dbxData.signals; dbxEnv.counters = dbxData.counters;
+        STATE.virtualEnv = { nifi: nifiEnv, dbx: dbxEnv, seedStats: venvResult.seedStats };
+      } catch(e) { console.error('[SEG] buildInitialVirtualEnv error:', e); }
+      console.timeEnd('[SEG] buildInitialVirtualEnv');
+    }
+
+    // Phase 3: Build HTML (heavy for many tables)
+    _parseProgress(55, 'Step 3: Generate', 'Computing statistics...');
+    await _uiYield();
+    console.time('[SEG] generateHTML');
+    const totalRows = Object.values(tables).reduce((a,d)=>a+(d[Object.keys(d)[0]]||[]).length,0);
+    const totalCols = Object.values(tables).reduce((a,d)=>a+Object.keys(d).length,0);
+    let h = '<hr class="divider">';
+    h += metricsHTML([['Tables Generated',Object.keys(tables).length],['Total Rows',totalRows.toLocaleString()],['Total Columns',totalCols]]);
+
+    const tableEntries = Object.entries(tables);
+    const RENDER_BATCH = tableEntries.length > 100 ? 5 : tableEntries.length > 30 ? 10 : 20;
+    for (let ti = 0; ti < tableEntries.length; ti++) {
+      const [name, data] = tableEntries[ti];
+      const cols = Object.keys(data); const rc = data[cols[0]]?data[cols[0]].length:0;
+      let body = '<strong>Preview</strong> (first 15 rows)' + dataPreviewHTML(data);
+      body += '<h3 style="margin-top:16px">Column Statistics</h3>';
+      const statRows = cols.map(c => {
+        const vals = data[c].filter(v=>v!=null); const nums = vals.map(Number).filter(v=>!isNaN(v));
+        if (nums.length > vals.length*0.5) {
+          let mn = Infinity, mx = -Infinity, sum = 0;
+          for (let i = 0; i < nums.length; i++) { if (nums[i] < mn) mn = nums[i]; if (nums[i] > mx) mx = nums[i]; sum += nums[i]; }
+          const mean = sum / nums.length;
+          return [c, vals.length, data[c].length-vals.length, Math.round(mn*100)/100, Math.round(mx*100)/100, Math.round(mean*100)/100];
+        }
+        const uniq = new Set(vals).size;
+        return [c, vals.length, data[c].length-vals.length, '—','—', `${uniq} unique`];
+      });
+      body += tableHTML(['Column','Non-Null','Null','Min','Max','Mean/Distinct'], statRows);
+      h += expanderHTML(`<strong>${name}</strong> — ${rc.toLocaleString()} rows, ${cols.length} columns`, body, true);
+      if ((ti + 1) % RENDER_BATCH === 0) {
+        _parseProgress(55 + Math.round(((ti + 1) / tableEntries.length) * 25), 'Step 3: Generate', `Rendering table ${ti+1}/${tableEntries.length} — ${name}`);
+        await _uiYield();
+      }
+    }
+
+    h += `<div style="margin-top:16px"><button class="btn btn-secondary" onclick="downloadCSV()">Download All (CSV ZIP)</button></div>`;
+
+    // Phase 4: VirtualEnv rendering
+    _parseProgress(82, 'Step 3: Generate', 'Rendering virtual environment...');
+    await _uiYield();
+    if (STATE.virtualEnv) {
+      const ss = STATE.virtualEnv.seedStats;
+      const nEnv = STATE.virtualEnv.nifi;
+      h += '<hr class="divider"><h3>Virtual Environment</h3>';
+      h += '<div class="venv-summary">';
+      h += `<div class="venv-stat"><div class="venv-stat-num">${ss.files}</div><div class="venv-stat-label">Files Seeded</div></div>`;
+      h += `<div class="venv-stat"><div class="venv-stat-num">${ss.sqlTables}</div><div class="venv-stat-label">SQL Tables</div></div>`;
+      h += `<div class="venv-stat"><div class="venv-stat-num">${ss.tokens}</div><div class="venv-stat-label">Tokens</div></div>`;
+      h += `<div class="venv-stat"><div class="venv-stat-num">${ss.signals}</div><div class="venv-stat-label">Signals</div></div>`;
+      if (ss.scripts) h += `<div class="venv-stat"><div class="venv-stat-num">${ss.scripts}</div><div class="venv-stat-label">Scripts</div></div>`;
+      if (ss.httpEndpoints) h += `<div class="venv-stat"><div class="venv-stat-num">${ss.httpEndpoints}</div><div class="venv-stat-label">HTTP APIs</div></div>`;
+      if (ss.kafkaTopics) h += `<div class="venv-stat"><div class="venv-stat-num">${ss.kafkaTopics}</div><div class="venv-stat-label">Kafka Topics</div></div>`;
+      h += '</div>';
+      if (ss.manifestTotal) h += `<div style="font-size:0.82rem;color:var(--text2);margin:4px 0">Manifest coverage: <strong>${ss.manifestSeeded}</strong> resources seeded of <strong>${ss.manifestTotal}</strong> identified</div>`;
+      console.time('[SEG] renderVenvTree');
+      try {
+        h += expanderHTML('<strong>Virtual Environment Resources</strong> (files, tables, tokens, signals)', renderVenvTree(nEnv), false);
+      } catch(e) { console.error('[SEG] renderVenvTree error:', e); h += '<div class="alert alert-warning">VirtualEnv tree rendering skipped (too large)</div>'; }
+      console.timeEnd('[SEG] renderVenvTree');
+    }
+    h += `<div class="alert alert-success">Generated <strong>${totalRows.toLocaleString()} rows</strong> across <strong>${Object.keys(tables).length} tables</strong>${STATE.virtualEnv ? ` + <strong>${STATE.virtualEnv.seedStats.files} files</strong>, <strong>${STATE.virtualEnv.seedStats.sqlTables} SQL tables</strong>, <strong>${STATE.virtualEnv.seedStats.tokens} tokens</strong> in VirtualEnv` : ''} — proceed to Step 4</div>`;
+    console.timeEnd('[SEG] generateHTML');
+
+    // Phase 5: DOM update
+    _parseProgress(95, 'Step 3: Generate', 'Updating display...');
+    await _uiYield();
+    console.time('[SEG] generateDOM');
+    document.getElementById('generateResults').innerHTML = h;
+    console.timeEnd('[SEG] generateDOM');
+    console.log(`[SEG] Generate HTML size: ${(h.length/1024).toFixed(0)}KB`);
+
+    document.getElementById('conformNotReady').classList.add('hidden');
+    document.getElementById('conformReady').classList.remove('hidden');
+    try { updateTierDiagramBadges(tables); } catch(e) { console.warn('Badge update error:', e); }
+    _parseProgress(100, 'Step 3: Generate', 'Complete');
+    setTabStatus('generate', 'done');
+    unlockTab('conform');
+  } catch(e) {
+    console.error('[SEG] generateData error:', e);
+    document.getElementById('generateResults').innerHTML = `<div class="alert alert-danger">Generate failed: ${e.message}<br><pre style="font-size:0.75rem;margin-top:8px">${e.stack||''}</pre></div>`;
+    setTabStatus('generate', 'error');
+  } finally {
+    if (genBtn) genBtn.disabled = false;
+    setTimeout(_parseProgressHide, 2000);
   }
-  h += `<div style="margin-top:16px"><button class="btn btn-secondary" onclick="downloadCSV()">Download All (CSV ZIP)</button></div>`;
-  // VirtualEnv summary
-  if (STATE.virtualEnv) {
-    const ss = STATE.virtualEnv.seedStats;
-    const nEnv = STATE.virtualEnv.nifi;
-    h += '<hr class="divider"><h3>Virtual Environment</h3>';
-    h += '<div class="venv-summary">';
-    h += `<div class="venv-stat"><div class="venv-stat-num">${ss.files}</div><div class="venv-stat-label">Files Seeded</div></div>`;
-    h += `<div class="venv-stat"><div class="venv-stat-num">${ss.sqlTables}</div><div class="venv-stat-label">SQL Tables</div></div>`;
-    h += `<div class="venv-stat"><div class="venv-stat-num">${ss.tokens}</div><div class="venv-stat-label">Tokens</div></div>`;
-    h += `<div class="venv-stat"><div class="venv-stat-num">${ss.signals}</div><div class="venv-stat-label">Signals</div></div>`;
-    if (ss.scripts) h += `<div class="venv-stat"><div class="venv-stat-num">${ss.scripts}</div><div class="venv-stat-label">Scripts</div></div>`;
-    if (ss.httpEndpoints) h += `<div class="venv-stat"><div class="venv-stat-num">${ss.httpEndpoints}</div><div class="venv-stat-label">HTTP APIs</div></div>`;
-    if (ss.kafkaTopics) h += `<div class="venv-stat"><div class="venv-stat-num">${ss.kafkaTopics}</div><div class="venv-stat-label">Kafka Topics</div></div>`;
-    h += '</div>';
-    if (ss.manifestTotal) h += `<div style="font-size:0.82rem;color:var(--text2);margin:4px 0">Manifest coverage: <strong>${ss.manifestSeeded}</strong> resources seeded of <strong>${ss.manifestTotal}</strong> identified</div>`;
-    h += expanderHTML('<strong>Virtual Environment Resources</strong> (files, tables, tokens, signals)', renderVenvTree(nEnv), false);
-  }
-  h += `<div class="alert alert-success">Generated <strong>${totalRows.toLocaleString()} rows</strong> across <strong>${Object.keys(tables).length} tables</strong>${STATE.virtualEnv ? ` + <strong>${STATE.virtualEnv.seedStats.files} files</strong>, <strong>${STATE.virtualEnv.seedStats.sqlTables} SQL tables</strong>, <strong>${STATE.virtualEnv.seedStats.tokens} tokens</strong> in VirtualEnv` : ''} — proceed to Step 4</div>`;
-  document.getElementById('generateResults').innerHTML = h;
-  document.getElementById('conformNotReady').classList.add('hidden');
-  document.getElementById('conformReady').classList.remove('hidden');
-  // Update tier diagram with row count badges
-  try { updateTierDiagramBadges(tables); } catch(e) { console.warn('Badge update error:', e); }
-  setTabStatus('generate', 'done');
-  unlockTab('conform');
 }
 
 function downloadCSV() {
@@ -5904,6 +7087,30 @@ function buildInitialVirtualEnv(nifiData, tables, manifest) {
         env.insertRows('SEED', lookupTable, cols);
       }
     }
+    // Seed SQL tables from Impala/Hive/Beeline ExecuteStreamCommand processors
+    if (p.type === 'ExecuteStreamCommand') {
+      const cmd = (props['Command'] || '').toLowerCase();
+      const args = props['Command Arguments'] || '';
+      const allCmd = cmd + ' ' + args.toLowerCase();
+      if (/impala-shell|impala|hive|beeline/.test(allCmd)) {
+        // Resolve parameterized table references in Impala queries
+        let resolvedArgs = args.replace(/\$\{(\w+)\}/g, (m, name) => {
+          const defaults = { external_table: 'ext_data', staging_table: 'stg_data', prod_table: 'prod_data', query: 'SELECT 1', script_parameters: '' };
+          return defaults[name] || name;
+        });
+        const tblMatches = resolvedArgs.match(/(?:refresh|invalidate\s+metadata|compute\s+stats|from|join|into|insert\s+into|insert\s+overwrite)\s+[;]?\s*([\w.]+)/gi);
+        if (tblMatches) tblMatches.forEach(m => {
+          let tName = m.replace(/^(refresh|invalidate\s+metadata|compute\s+stats|from|join|into|insert\s+into|insert\s+overwrite)\s+;?\s*/i,'').trim().replace(/[";]/g,'');
+          if (tName && tName.length > 2 && tName.toLowerCase() !== 'dual' && !env.sqlTables[tName]) {
+            const cols = {};
+            defaultCols.forEach(c => {
+              cols[c] = Array.from({length: 20}, (_, i) => generateSyntheticValue(c, i, inferColumnType(c)));
+            });
+            env.insertRows('SEED', tName, cols);
+          }
+        });
+      }
+    }
   });
   // Also seed from STATE.tables
   if (tables) {
@@ -5987,22 +7194,38 @@ function buildInitialVirtualEnv(nifiData, tables, manifest) {
 
 function renderVenvTree(env) {
   let h = '<div class="venv-tree">';
-  // Files
+  // Files — build dir→files map in O(n) instead of O(n*m)
   const paths = Object.keys(env.filesystem).sort();
-  const dirs = new Set();
-  paths.forEach(p => { const parts = p.split('/'); for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/')); });
-  const sortedDirs = [...dirs].sort();
-  sortedDirs.forEach(d => {
-    const depth = d.split('/').length - 1;
-    const dirFiles = paths.filter(p => p.startsWith(d + '/') && p.split('/').length === d.split('/').length + 1);
-    if (dirFiles.length) {
-      h += `<div style="padding-left:${depth * 16}px"><span class="dir">${d.split('/').pop()}/</span> <span class="venv-badge">${dirFiles.length} files</span></div>`;
+  // Cap file listing to avoid massive DOM (show summary for >500 files)
+  const MAX_FILES_SHOWN = 500;
+  if (paths.length > MAX_FILES_SHOWN) {
+    // Summarize by top-level directory
+    const dirCounts = {};
+    paths.forEach(p => { const top = '/' + (p.split('/')[1] || 'root'); dirCounts[top] = (dirCounts[top] || 0) + 1; });
+    h += `<div style="margin-bottom:8px;font-size:0.82rem;color:var(--text2)"><strong>${paths.length}</strong> files across <strong>${Object.keys(dirCounts).length}</strong> top-level directories (showing summary)</div>`;
+    Object.entries(dirCounts).sort((a,b)=>b[1]-a[1]).forEach(([dir, count]) => {
+      h += `<div style="padding-left:16px"><span class="dir">${dir}/</span> <span class="venv-badge">${count} files</span></div>`;
+    });
+  } else {
+    // Build dirFiles map: parentDir → [filePaths]
+    const dirFilesMap = {};
+    paths.forEach(p => {
+      const lastSlash = p.lastIndexOf('/');
+      const parentDir = lastSlash > 0 ? p.substring(0, lastSlash) : '/';
+      if (!dirFilesMap[parentDir]) dirFilesMap[parentDir] = [];
+      dirFilesMap[parentDir].push(p);
+    });
+    const sortedDirKeys = Object.keys(dirFilesMap).sort();
+    sortedDirKeys.forEach(d => {
+      const depth = d.split('/').length - 1;
+      const dirFiles = dirFilesMap[d];
+      h += `<div style="padding-left:${depth * 16}px"><span class="dir">${d.split('/').pop() || '/'}/</span> <span class="venv-badge">${dirFiles.length} files</span></div>`;
       dirFiles.forEach(f => {
         const entry = env.filesystem[f];
         h += `<div style="padding-left:${(depth + 1) * 16}px"><span class="file">${f.split('/').pop()}</span> <span class="venv-badge">${entry.size}B ${entry.format}</span></div>`;
       });
-    }
-  });
+    });
+  }
   // SQL tables
   if (Object.keys(env.sqlTables).length) {
     h += '<div style="margin-top:8px"><span class="dir">SQL Tables</span></div>';
@@ -7498,7 +8721,50 @@ function buildFinalReportJSON() {
           if (failedOps) recs.push({severity:'high', area:'operations', message:`${failedOps} operations failed during NiFi simulation — review processor configurations`});
         }
       }
+      // Cloudera tools recommendations
+      if (STATE.manifest && STATE.manifest.clouderaTools && STATE.manifest.clouderaTools.length) {
+        const ct = STATE.manifest.clouderaTools;
+        const toolTypes = {};
+        ct.forEach(t => { toolTypes[t.tool] = (toolTypes[t.tool]||0)+1; });
+        recs.push({severity:'info', area:'cloudera', message:`${ct.length} Cloudera tool invocations detected (${Object.entries(toolTypes).map(([k,v])=>k+':'+v).join(', ')}) — all mapped to Databricks equivalents`});
+        const lowPriority = ct.filter(t => t.dbx_priority >= 3);
+        if (lowPriority.length) recs.push({severity:'medium', area:'cloudera', message:`${lowPriority.length} Cloudera operations mapped to Python/dbutils (priority 3) — consider refactoring to Spark SQL or PySpark for better performance`});
+      }
+      // SQL table completeness
+      if (STATE.parsed && STATE.parsed._nifi && STATE.parsed._nifi.sqlTables) {
+        const sqlCount = STATE.parsed._nifi.sqlTables.length;
+        const blueprintCount = STATE.parsed.tables.length;
+        recs.push({severity:'info', area:'sql_tables', message:`${sqlCount} SQL/Impala table references found, ${blueprintCount} table blueprints generated — all tables in the data lifecycle are identified`});
+      }
       return recs;
+    })(),
+    // Section 6b: External Systems Migration Map
+    cloudera_tools: (() => {
+      if (!STATE.manifest || !STATE.manifest.clouderaTools) return [];
+      return STATE.manifest.clouderaTools.map(t => ({
+        tool: t.tool, subtype: t.subtype, processor: t.processor, group: t.group,
+        command: (t.command||'').substring(0,200),
+        dbx_equivalent: t.dbx_equivalent, dbx_priority: t.dbx_priority,
+        dbx_code: t.dbx_code, dbx_notes: t.dbx_notes,
+        server: t.server || null, keytab: t.keytab || null, principal: t.principal || null
+      }));
+    })(),
+    // Section 6c: SQL Table Inventory
+    sql_table_inventory: (() => {
+      if (!STATE.parsed || !STATE.parsed._nifi) return [];
+      const meta = STATE.parsed._nifi.sqlTableMeta || {};
+      return (STATE.parsed._nifi.sqlTables || []).map(ref => {
+        const m = meta[ref] || {};
+        const parts = ref.replace(/\$\{|\}/g,'').split('.');
+        return {
+          reference: ref, table_name: parts[parts.length-1],
+          schema: parts.length >= 2 ? parts[parts.length-2] : 'nifi_source',
+          parameterized: ref.includes('${'),
+          columns_inferred: m.columns ? m.columns.size : 0,
+          readers: (m.readers||[]), writers: (m.writers||[]),
+          has_blueprint: STATE.parsed.tables.some(t => t.name === parts[parts.length-1])
+        };
+      });
     })(),
     // Section 7: VirtualEnv analysis
     virtual_environment: (() => {
@@ -7693,6 +8959,47 @@ async function generateFinalReport() {
           + `<td style="color:#808495">${gProcs.filter(p=>p.verdict==='SKIPPED').length}</td></tr>`;
       }).join('')
       + '</tbody></table></div>', false);
+    await prog(85, 'Building external systems migration map...');
+    // External Systems Migration Map
+    if (report.cloudera_tools && report.cloudera_tools.length) {
+      h += '<hr class="divider">';
+      const ct = report.cloudera_tools;
+      const toolsByType = {};
+      ct.forEach(t => { if (!toolsByType[t.tool]) toolsByType[t.tool] = []; toolsByType[t.tool].push(t); });
+      const priorityLabel = p => p === 1 ? '<span style="color:#21C354;font-weight:700">Spark SQL</span>' : p === 2 ? '<span style="color:#3B82F6;font-weight:700">PySpark</span>' : '<span style="color:#EAB308;font-weight:700">Python</span>';
+      // Summary metrics
+      h += `<h3 style="margin:8px 0">External Systems Migration Map</h3>`;
+      h += '<div class="metrics">';
+      h += `<div class="metric"><div class="label">Tool Invocations</div><div class="value">${ct.length}</div></div>`;
+      h += `<div class="metric"><div class="label">Tool Types</div><div class="value">${Object.keys(toolsByType).length}</div></div>`;
+      h += `<div class="metric"><div class="label">Spark SQL (P1)</div><div class="value" style="color:#21C354">${ct.filter(t=>t.dbx_priority===1).length}</div></div>`;
+      h += `<div class="metric"><div class="label">PySpark (P2)</div><div class="value" style="color:#3B82F6">${ct.filter(t=>t.dbx_priority===2).length}</div></div>`;
+      h += `<div class="metric"><div class="label">Python (P3)</div><div class="value" style="color:#EAB308">${ct.filter(t=>t.dbx_priority===3).length}</div></div>`;
+      h += '</div>';
+      // Per-tool expanders
+      Object.entries(toolsByType).forEach(([tool, items]) => {
+        const rows = items.map(t => `<tr><td>${escapeHTML(t.subtype||tool)}</td><td>${escapeHTML(t.processor)}</td><td>${escapeHTML(t.group||'—')}</td><td><code style="font-size:0.68rem;word-break:break-all">${escapeHTML((t.command||'').substring(0,150))}</code></td><td><strong>${escapeHTML(t.dbx_equivalent)}</strong></td><td>${priorityLabel(t.dbx_priority)}</td><td><code style="font-size:0.68rem">${escapeHTML((t.dbx_code||'').substring(0,120))}</code></td></tr>`).join('');
+        h += expanderHTML(`${escapeHTML(tool)} (${items.length} invocations)`,
+          '<div class="table-scroll"><table style="font-size:0.75rem"><thead><tr><th>Subtype</th><th>Processor</th><th>Group</th><th>Original Command</th><th>Databricks Equivalent</th><th>Priority</th><th>Migration Code</th></tr></thead><tbody>' + rows + '</tbody></table></div>', false);
+      });
+    }
+    await prog(88, 'Building SQL table inventory...');
+    // SQL Table Inventory
+    if (report.sql_table_inventory && report.sql_table_inventory.length) {
+      h += '<hr class="divider">';
+      const inv = report.sql_table_inventory;
+      h += `<h3 style="margin:8px 0">SQL/Impala Table Inventory</h3>`;
+      h += '<div class="metrics">';
+      h += `<div class="metric"><div class="label">Table References</div><div class="value">${inv.length}</div></div>`;
+      h += `<div class="metric"><div class="label">Blueprints Generated</div><div class="value" style="color:#21C354">${inv.filter(t=>t.has_blueprint).length}</div></div>`;
+      h += `<div class="metric"><div class="label">Parameterized</div><div class="value" style="color:#EAB308">${inv.filter(t=>t.parameterized).length}</div></div>`;
+      h += `<div class="metric"><div class="label">Unique Schemas</div><div class="value">${[...new Set(inv.map(t=>t.schema))].length}</div></div>`;
+      h += '</div>';
+      h += expanderHTML(`All Table References (${inv.length})`,
+        '<div class="table-scroll"><table style="font-size:0.75rem"><thead><tr><th>Reference</th><th>Table</th><th>Schema</th><th>Param?</th><th>Cols</th><th>Readers</th><th>Writers</th><th>Blueprint</th></tr></thead><tbody>'
+        + inv.map(t => `<tr><td><code>${escapeHTML(t.reference)}</code></td><td>${escapeHTML(t.table_name)}</td><td>${escapeHTML(t.schema)}</td><td>${t.parameterized?'<span style="color:#EAB308">Yes</span>':'No'}</td><td>${t.columns_inferred||'<em>inferred</em>'}</td><td style="font-size:0.7rem">${escapeHTML(t.readers.slice(0,3).join(', '))}${t.readers.length>3?'...':''}</td><td style="font-size:0.7rem">${escapeHTML(t.writers.slice(0,3).join(', '))}${t.writers.length>3?'...':''}</td><td style="color:${t.has_blueprint?'#21C354':'#EF4444'};font-weight:600">${t.has_blueprint?'Yes':'No'}</td></tr>`).join('')
+        + '</tbody></table></div>', true);
+    }
     await prog(95, 'Preparing downloads...');
     // Download buttons
     h += '<hr class="divider">';
