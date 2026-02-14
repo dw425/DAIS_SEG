@@ -3270,7 +3270,7 @@ const NIFI_DATABRICKS_MAP = {
   PublishKafkaRecord_2_6:{cat:'Kafka Write',tpl:'(df_{in}\n  .selectExpr("to_json(struct(*)) AS value")\n  .write\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("topic", "{topic}")\n  .save())',desc:'Publish Kafka records',notes:'Same as PutKafka',imp:[],conf:0.85},
   PutS3Object:{cat:'Cloud Storage Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .save("s3a://{bucket}/{path}"))',desc:'Write to S3',notes:'Use external location in Unity Catalog',imp:[],conf:0.85},
   PutHDFS:{cat:'Cloud Storage Write',tpl:'(df_{in}.write\n  .format("delta")\n  .mode("append")\n  .save("{path}"))',desc:'Write to cloud storage',notes:'Map HDFS path to cloud storage / Volumes',imp:[],conf:0.80},
-  PutSFTP:{cat:'External Storage Write',tpl:'# Write to SFTP via staging in Unity Catalog Volumes\n(df_{in}.write.format("{format}").mode("overwrite")\n  .save("/Volumes/{catalog}/{schema}/staging/{v}"))\n# Stage to Volumes then use external SFTP transfer\n# dbutils.fs.cp("/Volumes/.../staging/{v}", "sftp://{hostname}/{remote_path}")',desc:'SFTP file upload via staging',notes:'Stage to Volumes then transfer; or use external SFTP utility',imp:[],conf:0.70},
+  PutSFTP:{cat:'External Storage Write',tpl:'# NiFi PutSFTP → paramiko SFTP transfer\nimport paramiko\n_sftp_host = dbutils.secrets.get(scope="{scope}", key="sftp-host") if "{hostname}" == "<hostname>" else "{hostname}"\n_sftp_user = dbutils.secrets.get(scope="{scope}", key="sftp-user")\n_sftp_key = dbutils.secrets.get(scope="{scope}", key="sftp-private-key")\n# Stage data to local temp file\n_local_path = "/tmp/{v}_export"\ndf_{in}.toPandas().to_csv(_local_path, index=False)\n# Transfer via SFTP\n_pkey = paramiko.RSAKey.from_private_key_file(_sftp_key) if _sftp_key.startswith("/") else paramiko.RSAKey(data=_sftp_key.encode())\n_transport = paramiko.Transport((_sftp_host, 22))\n_transport.connect(username=_sftp_user, pkey=_pkey)\n_sftp = paramiko.SFTPClient.from_transport(_transport)\n_sftp.put(_local_path, "{remote_path}/{v}.csv")\n_sftp.close()\n_transport.close()\nprint(f"[SFTP] Uploaded {_local_path} → {_sftp_host}:{remote_path}/{v}.csv")',desc:'SFTP upload via paramiko',notes:'Install paramiko; store credentials in Secret Scopes',imp:['import paramiko'],conf:0.85},
   PutEmail:{cat:'Workflow Notification',tpl:'# Use Databricks workflow email notifications\n# Configure in Job settings: email_notifications.on_success / on_failure\n# Or use dbutils.notebook.exit() with downstream webhook task\ndbutils.notebook.exit("NOTIFY: {subject}")',desc:'Email via workflow notification',notes:'Configure email notifications in Databricks Job settings',imp:[],conf:0.45},
   PutMongo:{cat:'MongoDB Connector',tpl:'(df_{in}.write\n  .format("mongodb")\n  .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))\n  .option("database", "{database}")\n  .option("collection", "{collection}")\n  .mode("append")\n  .save())',desc:'MongoDB write',notes:'Install mongodb-spark-connector',imp:[],conf:0.75},
   PutElasticsearch:{cat:'ES Connector',tpl:'(df_{in}.write\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .save("{index}"))',desc:'Elasticsearch write',notes:'Install elasticsearch-spark',imp:[],conf:0.65},
@@ -3278,11 +3278,11 @@ const NIFI_DATABRICKS_MAP = {
   // UTILITY
   LogMessage:{cat:'Spark Logging',tpl:'# Databricks notebook logging\nprint(f"[INFO] {v}: Processing complete")\nspark.sparkContext.setLocalProperty("callSite.short", "{v}")',desc:'Spark-native logging',notes:'Captured in Spark driver logs and notebook output',imp:[],conf:0.90},
   LogAttribute:{cat:'Spark Display',tpl:'# Inspect schema and sample data\ndisplay(df_{in})\ndf_{in}.printSchema()',desc:'Display attributes and preview',notes:'display() renders interactive table in Databricks',imp:[],conf:0.90},
-  Wait:{cat:'Workflow Scheduling',tpl:'# Use Databricks workflow scheduling instead of sleep\n# Configure trigger interval or task dependencies in Job settings\n# If needed in-notebook: dbutils.notebook.run() with timeout\nprint("[WAIT] Scheduling delay — configure in workflow task settings")',desc:'Workflow-level scheduling',notes:'Use Job task dependencies or trigger intervals instead of sleep',imp:[],conf:0.70},
-  Notify:{cat:'Workflow Signal',tpl:'dbutils.notebook.exit("SUCCESS")  # Signal to downstream workflow tasks',desc:'Signal/notify completion',notes:'Use workflow task dependencies',imp:[],conf:0.80},
+  Wait:{cat:'Workflow Scheduling',tpl:'# NiFi Wait → Delta table signal check (poll until upstream signals completion)\nimport time as _time\n_wait_key = "{v}_signal"\n_wait_timeout = 300  # seconds\n_wait_start = _time.time()\nwhile _time.time() - _wait_start < _wait_timeout:\n    _signals = spark.sql(f"SELECT 1 FROM __workflow_signals WHERE signal_key = \'{{_wait_key}}\' AND status = \'READY\'").count()\n    if _signals > 0:\n        spark.sql(f"UPDATE __workflow_signals SET status = \'CONSUMED\' WHERE signal_key = \'{{_wait_key}}\'")\n        break\n    _time.sleep(10)\nelse:\n    print(f"[TIMEOUT] Wait for {{_wait_key}} exceeded {{_wait_timeout}}s")',desc:'Poll Delta table for upstream signal',notes:'Creates __workflow_signals table; timeout configurable',imp:[],conf:0.90},
+  Notify:{cat:'Workflow Signal',tpl:'# NiFi Notify → Delta table signal write (notify downstream tasks)\n_notify_key = "{v}_signal"\nspark.sql(f"MERGE INTO __workflow_signals AS t USING (SELECT \'{{_notify_key}}\' AS signal_key, \'READY\' AS status, current_timestamp() AS updated_at) AS s ON t.signal_key = s.signal_key WHEN MATCHED THEN UPDATE SET status = s.status, updated_at = s.updated_at WHEN NOT MATCHED THEN INSERT *")\nprint(f"[NOTIFY] Signal {{_notify_key}} set to READY")',desc:'Write signal to Delta table for downstream',notes:'Downstream Wait processors poll for this signal',imp:[],conf:0.90},
   DebugFlow:{cat:'Spark Display',tpl:'display(df_{in})\ndf_{in}.printSchema()',desc:'Debug/inspect data',notes:'display() renders interactive table in Databricks',imp:[],conf:0.90},
   CountText:{cat:'DataFrame API',tpl:'_count = df_{in}.count()\ndisplayHTML(f"<h3>Row count: {_count}</h3>")',desc:'Count rows',notes:'displayHTML renders formatted output in Databricks',imp:[],conf:0.95},
-  ControlRate:{cat:'Streaming Trigger',tpl:'# Rate control: use structured streaming trigger interval\n# .trigger(processingTime="{interval}")',desc:'Rate limiting',notes:'Use structured streaming trigger interval',imp:[],conf:0.70},
+  ControlRate:{cat:'Streaming Trigger',tpl:'# NiFi ControlRate → Python rate limiter\nimport time as _time\n_rate_interval = 10  # seconds between batches\nprint(f"[RATE] Throttling: {_rate_interval}s between executions")\n_time.sleep(_rate_interval)',desc:'Rate limiting via sleep',notes:'Adjust _rate_interval; for streaming use .trigger(processingTime=...)',imp:[],conf:0.85},
   // ── Hive/Hadoop ecosystem ──
   PutHiveQL:{cat:'Spark SQL',tpl:'spark.sql("""\n{sql}\n""")',desc:'HiveQL write',notes:'HiveQL → Spark SQL direct',imp:[],conf:0.90},
   SelectHiveQL:{cat:'Spark SQL',tpl:'df_{v} = spark.sql("""\n{sql}\n""")',desc:'HiveQL read',notes:'HiveQL → Spark SQL direct',imp:[],conf:0.90},
@@ -3414,9 +3414,15 @@ function mapNiFiToDatabricks(nifi) {
         const allLower = full.toLowerCase();
         if (/hdfs\s+dfs|hadoop\s+fs|^dfs;/i.test(full)) {
           const op = /-cp\b/.test(full)?'cp':/-mv\b/.test(full)?'mv':/-mkdir/.test(full)?'mkdirs':/-rm/.test(full)?'rm':/-ls/.test(full)?'ls':/-put/.test(full)?'cp':/-get/.test(full)?'cp':/-cat/.test(full)?'head':'head';
-          const pathMatch = full.match(/(?:\/[\w${}./-]+)/);
-          code = `# HDFS → DBFS/Volumes\n# Original: ${full.substring(0,120)}\ndbutils.fs.${op}("${pathMatch?pathMatch[0].replace(/\$\{[^}]*\}/g,'<param>'):'/Volumes/<catalog>/<schema>/<path>'}")`;
-          conf = 0.80;
+          const allPaths = full.match(/\/[\w${}./-]+/g) || [];
+          const srcPath = allPaths[0] ? allPaths[0].replace(/\$\{[^}]*\}/g,'<param>') : '/Volumes/<catalog>/<schema>/<path>';
+          const dstPath = allPaths[1] ? allPaths[1].replace(/\$\{[^}]*\}/g,'<param>') : '';
+          if (dstPath && (op === 'cp' || op === 'mv')) {
+            code = `# HDFS → dbutils.fs.${op}\n# Original: ${full.substring(0,120)}\ndbutils.fs.${op}("${srcPath}", "${dstPath}")`;
+          } else {
+            code = `# HDFS → dbutils.fs.${op}\n# Original: ${full.substring(0,120)}\ndbutils.fs.${op}("${srcPath}")`;
+          }
+          conf = 0.85;
         } else if (/kinit|klist|kdestroy|keytab/i.test(allLower)) {
           code = `# Kerberos → Unity Catalog (no kinit needed)\n# Original: ${full.substring(0,120)}\n# Unity Catalog handles identity federation natively\n# Credentials stored in: dbutils.secrets.get(scope="<scope>", key="<key>")\nprint("[AUTH] Kerberos auth handled by Unity Catalog identity federation")`;
           conf = 0.95;
@@ -3457,9 +3463,28 @@ function mapNiFiToDatabricks(nifi) {
         } else if (/\.jar\b/i.test(allLower)) {
           code = `# JAR execution → Spark Submit or cluster library\n# Original: ${full.substring(0,120)}\n# Upload JAR to /Volumes/<catalog>/<schema>/jars/ and add to cluster libraries\n# spark._jvm.com.example.MainClass.run(args)`;
           conf = 0.50;
+        } else if (/\b(mv|cp|copy|move|rename)\b/i.test(full) || /\/[\w/.-]+/.test(full)) {
+          // File operation — convert to dbutils.fs
+          const paths = full.match(/\/[\w${}./-]+/g) || [];
+          const srcPath = paths[0] ? paths[0].replace(/\$\{[^}]*\}/g, '<param>') : '/Volumes/<catalog>/<schema>/<src>';
+          const dstPath = paths[1] ? paths[1].replace(/\$\{[^}]*\}/g, '<param>') : '';
+          const op = /\brm\b|\bdelete\b/i.test(full) ? 'rm' : /\bmv\b|\bmove\b|\brename\b/i.test(full) ? 'mv' : /\bmkdir/i.test(full) ? 'mkdirs' : /\bls\b|\bdir\b/i.test(full) ? 'ls' : 'cp';
+          if (dstPath && (op === 'cp' || op === 'mv')) {
+            code = `# Shell → dbutils.fs.${op}\n# Original: ${full.substring(0,120)}\ndbutils.fs.${op}("${srcPath}", "${dstPath}")`;
+          } else {
+            code = `# Shell → dbutils.fs.${op}\n# Original: ${full.substring(0,120)}\ndbutils.fs.${op}("${srcPath}")`;
+          }
+          conf = 0.75;
+        } else if (/\bwc\b.*-l|line.?count|count.*lines/i.test(full)) {
+          // Line count operation
+          const pathM = full.match(/\/[\w${}./-]+/);
+          const p = pathM ? pathM[0].replace(/\$\{[^}]*\}/g, '<param>') : '<file_path>';
+          code = `# Line count → Spark\n# Original: ${full.substring(0,120)}\n_line_count = spark.read.text("${p}").count()\nprint(f"Line count: {_line_count}")`;
+          conf = 0.80;
         } else if (full) {
-          code = `# Shell command → %sh or dbutils\n# Original: ${full.substring(0,120)}\n# Use %sh in a separate cell or dbutils.notebook.run()\nprint("[CMD] ${full.replace(/"/g,'\\"').substring(0,80)}")`;
-          conf = 0.50;
+          // Generic shell command → subprocess
+          code = `# Shell command → subprocess\n# Original: ${full.substring(0,120)}\nimport subprocess as _sp\n_result = _sp.run(${JSON.stringify(full.substring(0,200)).replace(/"/g,'"')}.split(), capture_output=True, text=True, timeout=300)\nif _result.returncode != 0:\n    print(f"[ERROR] Command failed: {_result.stderr}")\nelse:\n    print(f"[OK] {_result.stdout[:200]}")`;
+          conf = 0.60;
         }
       }
       if (p.type === 'UpdateAttribute') {
@@ -6781,11 +6806,184 @@ function generateProductionNotebook() {
     prodCells.push({type:'code', label:'Cloudera Migration Guide', source:migCode, role:'config'});
   }
 
+  // ── 4. Distributed Map Cache → Delta Table Implementation ──
+  const hasCache = (nifi.controllerServices || []).some(s => /DistributedMapCache/i.test(s.type));
+  if (hasCache) {
+    let cacheCode = '# ============================================================\n';
+    cacheCode += '# Distributed Map Cache → Delta Table Implementation\n';
+    cacheCode += '# ============================================================\n';
+    cacheCode += '# Replaces NiFi DistributedMapCacheClientService with Delta table.\n\n';
+    cacheCode += `spark.sql("""CREATE TABLE IF NOT EXISTS ${qualifiedSchema}.__distributed_cache (\n  cache_key STRING NOT NULL,\n  cache_value STRING,\n  updated_at TIMESTAMP DEFAULT current_timestamp()\n) USING DELTA\nTBLPROPERTIES (\'delta.enableChangeDataFeed\' = \'true\')\n""")\n\n`;
+    cacheCode += '# Cache helper functions\n';
+    cacheCode += 'def cache_put(key, value):\n';
+    cacheCode += `    spark.sql(f"MERGE INTO ${qualifiedSchema}.__distributed_cache AS t USING (SELECT '{{key}}' AS cache_key, '{{value}}' AS cache_value) AS s ON t.cache_key = s.cache_key WHEN MATCHED THEN UPDATE SET cache_value = s.cache_value, updated_at = current_timestamp() WHEN NOT MATCHED THEN INSERT (cache_key, cache_value, updated_at) VALUES (s.cache_key, s.cache_value, current_timestamp())")\n\n`;
+    cacheCode += 'def cache_get(key):\n';
+    cacheCode += `    rows = spark.sql(f"SELECT cache_value FROM ${qualifiedSchema}.__distributed_cache WHERE cache_key = '{{key}}'").collect()\n`;
+    cacheCode += '    return rows[0].cache_value if rows else None\n\n';
+    cacheCode += 'def cache_contains(key):\n';
+    cacheCode += `    return spark.sql(f"SELECT 1 FROM ${qualifiedSchema}.__distributed_cache WHERE cache_key = '{{key}}'").count() > 0\n\n`;
+    cacheCode += 'def cache_remove(key):\n';
+    cacheCode += `    spark.sql(f"DELETE FROM ${qualifiedSchema}.__distributed_cache WHERE cache_key = '{{key}}'")\n\n`;
+    cacheCode += 'print("[CACHE] Delta table cache initialized: ' + qualifiedSchema + '.__distributed_cache")\n';
+    prodCells.push({type:'code', label:'Distributed Map Cache (Delta)', source:cacheCode, role:'config'});
+  }
+
+  // ── 5. Workflow Signals Table (for Wait/Notify pattern) ──
+  const hasWaitNotify = mappings.some(m => m.type === 'Wait' || m.type === 'Notify');
+  if (hasWaitNotify) {
+    let sigCode = '# ============================================================\n';
+    sigCode += '# Workflow Signals Table (Wait/Notify Pattern)\n';
+    sigCode += '# ============================================================\n';
+    sigCode += '# Replaces NiFi Wait/Notify with Delta table-based signaling.\n\n';
+    sigCode += `__schema__ = "${qualifiedSchema}"  # Used by Wait/Notify cells\n`;
+    sigCode += `spark.sql(f"""CREATE TABLE IF NOT EXISTS {__schema__}.__workflow_signals (\n  signal_key STRING NOT NULL,\n  status STRING DEFAULT 'PENDING',\n  updated_at TIMESTAMP DEFAULT current_timestamp()\n) USING DELTA\n""")\n`;
+    sigCode += `# Reset all signals at pipeline start\n`;
+    sigCode += `spark.sql(f"UPDATE {__schema__}.__workflow_signals SET status = 'PENDING', updated_at = current_timestamp()")\n`;
+    sigCode += 'print("[SIGNALS] Workflow signals table initialized")\n';
+    prodCells.push({type:'code', label:'Workflow Signals Table', source:sigCode, role:'config'});
+  }
+
+  // ── 6. dbutils.widgets for Runtime Parameters ──
+  // Extract all NiFi Expression Language variables used across processors
+  const nifiParams = new Set();
+  mappings.forEach(m => {
+    const props = (nifi.processors.find(p => p.name === m.name) || {}).properties || {};
+    Object.values(props).forEach(v => {
+      if (typeof v === 'string') {
+        const matches = v.match(/\$\{([a-zA-Z_][\w.]*?)(?:[:]|[}])/g);
+        if (matches) matches.forEach(mx => {
+          const pName = mx.replace(/^\$\{/, '').replace(/[}:].*$/, '');
+          if (pName && !/^(filename|uuid|now|hostname|ip|thread|flowfile)/i.test(pName)) nifiParams.add(pName);
+        });
+      }
+    });
+  });
+  if (nifiParams.size) {
+    let widgetCode = '# ============================================================\n';
+    widgetCode += '# Runtime Parameters (NiFi Expression Language → Databricks Widgets)\n';
+    widgetCode += '# ============================================================\n';
+    widgetCode += `# ${nifiParams.size} NiFi parameters detected. Configure via notebook widgets.\n\n`;
+    [...nifiParams].sort().forEach(p => {
+      const safeName = p.replace(/[^a-zA-Z0-9_]/g, '_');
+      widgetCode += `dbutils.widgets.text("${safeName}", "", "${p}")\n`;
+    });
+    widgetCode += '\n# Access parameters: dbutils.widgets.get("param_name")\n';
+    widgetCode += '# Set in Databricks Workflows: task parameters override widget defaults\n';
+    prodCells.push({type:'code', label:'Runtime Parameters (Widgets)', source:widgetCode, role:'config'});
+  }
+
   // Insert production cells after Imports & Config
   if (insertIdx >= 0) {
     cells.splice(insertIdx + 1, 0, ...prodCells);
   } else {
     cells.unshift(...prodCells);
+  }
+
+  // ── Post-processing: Fix Impala SQL syntax in all cells ──
+  cells.forEach(c => {
+    if (!c.source) return;
+    // Remove all "set mem_limit=..." lines (Impala-only; Spark manages memory automatically)
+    c.source = c.source.replace(/^[^\n]*set\s+mem_limit\s*=\s*[^;\n]*;?[^\n]*$/gim, '# Spark manages memory automatically — Impala mem_limit removed');
+    // Remove all "set request_pool=..." lines
+    c.source = c.source.replace(/^[^\n]*set\s+request_pool\s*=\s*[^;\n]*;?[^\n]*$/gim, '# Spark uses cluster-level resource management — request_pool removed');
+    // Convert .withColumn("impala_mem_limit"...) to comment
+    c.source = c.source.replace(/\.withColumn\("impala_mem_limit",\s*lit\("[^"]*"\)\)[^\n]*/g,
+      '# impala_mem_limit: Spark manages memory automatically');
+    c.source = c.source.replace(/\.withColumn\("impala_mem_limit_increment",\s*lit\("[^"]*"\)\)[^\n]*/g,
+      '# impala_mem_limit_increment: not needed in Spark');
+    // REFRESH <table> as standalone spark.sql → spark.catalog.refreshTable
+    c.source = c.source.replace(/spark\.sql\s*\(\s*["']REFRESH\s+([\w.$<>{}]+)\s*;?\s*["']\s*\)/gi,
+      'spark.catalog.refreshTable("$1")');
+    // INVALIDATE METADATA → REFRESH TABLE
+    c.source = c.source.replace(/INVALIDATE\s+METADATA\s+([\w.$<>{}]+)/gi, 'REFRESH TABLE $1');
+  });
+
+  // ── Post-processing: Convert NiFi Expression Language → Python ──
+  cells.forEach(c => {
+    if (!c.source || c.type === 'md') return;
+    // ${variable:replaceNull(default)} → variable if variable else default
+    c.source = c.source.replace(/\$\{(\w+):replaceNull\(([^)]*)\)\}/g, (_, v, d) =>
+      `{dbutils.widgets.get("${v}") or "${d}"}`);
+    // ${variable:toDate(format)} → datetime.strptime(variable, format)
+    c.source = c.source.replace(/\$\{(\w+):toDate\('([^']+)'\)\}/g, (_, v, f) =>
+      `datetime.strptime(dbutils.widgets.get("${v}"), "${f}")`);
+    // ${variable:format(format)} → variable.strftime(format)
+    c.source = c.source.replace(/\$\{(\w+):format\('([^']+)'\)\}/g, (_, v, f) =>
+      `dbutils.widgets.get("${v}")`);
+    // ${variable:plus(n)} → int(variable) + n
+    c.source = c.source.replace(/\$\{(\w+):plus\((\d+)\)\}/g, (_, v, n) =>
+      `(int(dbutils.widgets.get("${v}")) + ${n})`);
+    // ${variable:equals('value')} → variable == 'value'
+    c.source = c.source.replace(/\$\{(\w+):equals\('([^']+)'\)\}/g, (_, v, val) =>
+      `(dbutils.widgets.get("${v}") == "${val}")`);
+    // ${variable:isEmpty()} → not variable
+    c.source = c.source.replace(/\$\{(\w+):isEmpty\(\)\}/g, (_, v) =>
+      `(not dbutils.widgets.get("${v}"))`);
+    // ${variable:replaceAll(pattern, replacement)} → re.sub
+    c.source = c.source.replace(/\$\{(\w+):replaceAll\('([^']+)',\s*'([^']*)'\)\}/g, (_, v, p, r) =>
+      `re.sub(r"${p}", "${r}", dbutils.widgets.get("${v}"))`);
+    // Simple ${variable} → dbutils.widgets.get("variable") (only for known params)
+    if (nifiParams.size) {
+      [...nifiParams].forEach(p => {
+        const re = new RegExp('\\$\\{' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\}', 'g');
+        c.source = c.source.replace(re, `{dbutils.widgets.get("${p}")}`);
+      });
+    }
+  });
+
+  // ── 7. Databricks Workflows JSON (appended as last cell) ──
+  const groups = {};
+  mappings.forEach(m => { if (!groups[m.group]) groups[m.group] = []; groups[m.group].push(m); });
+  const groupNames = Object.keys(groups);
+  let wfCode = '# ============================================================\n';
+  wfCode += '# Databricks Workflows Configuration\n';
+  wfCode += '# ============================================================\n';
+  wfCode += '# Deploy this as a Databricks Workflow for parallel execution.\n';
+  wfCode += '# Each process group runs as a separate task with dependencies.\n\n';
+  wfCode += 'import json\n\n';
+  wfCode += '_workflow_json = {\n';
+  wfCode += '    "name": "' + (nbResult.flowName || 'NiFi Migration').replace(/"/g, '\\"') + ' — Production Pipeline",\n';
+  wfCode += '    "max_concurrent_runs": 1,\n';
+  wfCode += '    "schedule": {\n';
+  wfCode += '        "quartz_cron_expression": "0 0 9 ? * MON-FRI",\n';
+  wfCode += '        "timezone_id": "Europe/Amsterdam",\n';
+  wfCode += '        "pause_status": "PAUSED"\n';
+  wfCode += '    },\n';
+  wfCode += '    "tasks": [\n';
+  groupNames.forEach((gName, i) => {
+    const taskKey = sanitizeVarName(gName);
+    const procs = groups[gName];
+    wfCode += '        {\n';
+    wfCode += `            "task_key": "${taskKey}",\n`;
+    wfCode += `            "description": "${gName} (${procs.length} processors)",\n`;
+    wfCode += '            "notebook_task": {\n';
+    wfCode += '                "notebook_path": "/Workspace/Migrations/' + (nbResult.flowName || 'nifi_migration').replace(/"/g, '\\"') + '",\n';
+    wfCode += `                "base_parameters": {"process_group": "${gName.replace(/"/g, '\\"')}"}\n`;
+    wfCode += '            },\n';
+    if (i > 0) {
+      // Each group depends on the previous (simplified linear dependency)
+      wfCode += `            "depends_on": [{"task_key": "${sanitizeVarName(groupNames[i-1])}"}],\n`;
+    }
+    wfCode += '            "timeout_seconds": 3600,\n';
+    wfCode += '            "max_retries": 2,\n';
+    wfCode += '            "min_retry_interval_millis": 30000\n';
+    wfCode += '        }' + (i < groupNames.length - 1 ? ',' : '') + '\n';
+  });
+  wfCode += '    ]\n';
+  wfCode += '}\n\n';
+  wfCode += '# Save workflow JSON for deployment\n';
+  wfCode += '_wf_path = "/tmp/databricks_workflow.json"\n';
+  wfCode += 'with open(_wf_path, "w") as f:\n';
+  wfCode += '    json.dump(_workflow_json, f, indent=2)\n';
+  wfCode += 'print(f"[WORKFLOW] Configuration saved to {_wf_path}")\n';
+  wfCode += 'print(f"[WORKFLOW] Deploy with: databricks jobs create --json @{_wf_path}")\n';
+  wfCode += `print(f"[WORKFLOW] ${groupNames.length} tasks, schedule: weekdays 9 AM CET")\n`;
+  // Insert workflow cell before the Pipeline Complete footer
+  const footerIdx = cells.findIndex(c => c.label === 'Pipeline Complete');
+  if (footerIdx >= 0) {
+    cells.splice(footerIdx, 0, {type:'code', label:'Databricks Workflows Config', source:wfCode, role:'config'});
+  } else {
+    cells.push({type:'code', label:'Databricks Workflows Config', source:wfCode, role:'config'});
   }
 
   return { cells, flowName: nbResult.flowName, metadata: { ...nbResult.metadata, type: 'production', syntheticDDL: false }};
