@@ -6571,7 +6571,6 @@ function generateReport() {
   // --- Download ---
   h += '<hr class="divider"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
   h += `<button class="btn" onclick="downloadReport()">Download Report (Markdown)</button>`;
-  h += `<button class="btn btn-primary" onclick="downloadProductionNotebook()">Download Databricks Notebook</button>`;
   h += '</div>';
 
   document.getElementById('reportResults').innerHTML = h;
@@ -9269,6 +9268,7 @@ async function generateFinalReport() {
     h += '<button class="btn btn-primary" onclick="downloadFinalReport(\'json\')">Download Full Report (JSON)</button>';
     h += '<button class="btn" onclick="downloadFinalReport(\'summary\')">Download Summary (JSON)</button>';
     h += '<button class="btn" onclick="downloadFinalReport(\'gaps\')">Download Gap Analysis (JSON)</button>';
+    h += '<button class="btn btn-primary" onclick="downloadProductionNotebook()" style="margin-left:8px">Download Databricks Notebook (.py)</button>';
     h += '</div>';
     h += '<div style="font-size:0.75rem;color:var(--text2);margin-top:4px">Full report includes all per-processor simulation data for external analysis</div>';
     await prog(100, 'Report complete');
