@@ -2094,6 +2094,14 @@ function parseNiFiXML(doc, sourceName) {
     atlasCmd: /atlas/,
     kafkaCmd: /kafka/,
     nifiCmd: /nifi/,
+    yarnCmd: /yarn\s+(application|jar|logs|node|queue|rmadmin)/,
+    phoenixCmd: /sqlline\.py|phoenix/,
+    prestoCmd: /presto-cli|presto|trino-cli|trino/,
+    flinkCmd: /flink\s+(run|list|stop|cancel|savepoint)/,
+    stormCmd: /storm\s+(jar|list|kill|activate|deactivate)/,
+    airflowCmd: /airflow\s+(trigger_dag|dags|tasks|unpause|pause)/,
+    knoxCmd: /knoxcli|knox/,
+    livyCmd: /livy|curl.*livy/,
     pythonCmd: /python[23]?|pip\b/,
     rCmd: /\bRscript\b|\bR\s+--/,
     scriptExt: /\.sh$|\.py$|\.pl$|\.rb$|\.groovy$|\.jar$|\.bat$|\.ps1$/,
@@ -2264,7 +2272,68 @@ function parseNiFiXML(doc, sourceName) {
     DetectDuplicate:{tool:'NiFi Orchestration',subtype:'dedup',dbx:'DataFrame dropDuplicates',pri:1,code:'df.dropDuplicates(["key"])',notes:'Native dedup in Spark'},
     ValidateRecord:{tool:'NiFi Orchestration',subtype:'validate',dbx:'DLT Expectations',pri:1,code:'@dlt.expect("rule","expr")',notes:'Use Delta Live Tables expectations'},
     UpdateRecord:{tool:'NiFi Orchestration',subtype:'update-record',dbx:'DataFrame API',pri:1,code:'df.withColumn("col", expr)',notes:'Map to withColumn transformations'},
-    LookupRecord:{tool:'NiFi Orchestration',subtype:'lookup',dbx:'DataFrame Join',pri:1,code:'df.join(df_lookup, on="key", how="left")',notes:'Use DataFrame join with cached lookup table'}
+    LookupRecord:{tool:'NiFi Orchestration',subtype:'lookup',dbx:'DataFrame Join',pri:1,code:'df.join(df_lookup, on="key", how="left")',notes:'Use DataFrame join with cached lookup table'},
+    // Snowflake
+    PutSnowflake:{tool:'Snowflake',subtype:'write',dbx:'Snowflake Spark Connector / Lakehouse Federation',pri:1,code:'df.write.format("snowflake").option("sfUrl","...").option("dbtable","...").save()',notes:'Install spark-snowflake connector; or use Lakehouse Federation'},
+    GetSnowflake:{tool:'Snowflake',subtype:'read',dbx:'Snowflake Spark Connector / Lakehouse Federation',pri:1,code:'spark.read.format("snowflake").option("sfUrl","...").option("dbtable","...").load()',notes:'Install spark-snowflake connector'},
+    // Neo4j
+    PutCypher:{tool:'Neo4j',subtype:'write',dbx:'Neo4j Spark Connector',pri:2,code:'df.write.format("org.neo4j.spark.DataSource").option("url","...").save()',notes:'Install neo4j-spark-connector'},
+    GetCypher:{tool:'Neo4j',subtype:'read',dbx:'Neo4j Spark Connector',pri:2,code:'spark.read.format("org.neo4j.spark.DataSource").option("query","...").load()',notes:'Install neo4j-spark-connector'},
+    // Druid
+    PutDruidRecord:{tool:'Druid',subtype:'write',dbx:'Druid Spark Connector',pri:3,code:'df.write.format("druid").save()',notes:'Install druid-spark connector'},
+    QueryDruid:{tool:'Druid',subtype:'read',dbx:'Druid Spark Connector',pri:3,code:'spark.read.format("druid").load()',notes:'Install druid-spark connector'},
+    // ClickHouse
+    PutClickHouse:{tool:'ClickHouse',subtype:'write',dbx:'ClickHouse JDBC',pri:2,code:'df.write.format("jdbc").option("url","jdbc:clickhouse://...").save()',notes:'Use ClickHouse JDBC driver'},
+    QueryClickHouse:{tool:'ClickHouse',subtype:'read',dbx:'ClickHouse JDBC',pri:2,code:'spark.read.format("jdbc").option("url","jdbc:clickhouse://...").load()',notes:'Use ClickHouse JDBC driver'},
+    // Apache Iceberg
+    PutIceberg:{tool:'Iceberg',subtype:'write',dbx:'Iceberg via UniForm / Delta Lake',pri:1,code:'df.writeTo("catalog.schema.table").using("iceberg").append()',notes:'Databricks supports Iceberg via UniForm; prefer Delta Lake'},
+    // Apache Hudi
+    PutHudi:{tool:'Hudi',subtype:'write',dbx:'Hudi / Delta Lake',pri:1,code:'df.write.format("hudi").option("hoodie.table.name","...").save()',notes:'Databricks supports Hudi; prefer Delta Lake'},
+    // NiFi Site-to-Site
+    SendNiFiSiteToSite:{tool:'NiFi Site-to-Site',subtype:'send',dbx:'Unity Catalog Sharing',pri:3,code:'# Use Delta Sharing for cross-workspace data flow',notes:'NiFi S2S → Unity Catalog sharing'},
+    // Redis
+    PutRedis:{tool:'Redis',subtype:'write',dbx:'Delta Lake Cache / redis-py',pri:2,code:'import redis; r.set(key, value)',notes:'Use redis-py or Delta table cache'},
+    GetRedis:{tool:'Redis',subtype:'read',dbx:'Delta Lake Cache / redis-py',pri:2,code:'import redis; r.get(key)',notes:'Use redis-py or Delta table cache'},
+    // Phoenix
+    PutPhoenix:{tool:'Phoenix',subtype:'write',dbx:'Spark SQL / JDBC',pri:1,code:'df.write.format("jdbc").option("url","jdbc:phoenix:...").save()',notes:'Phoenix JDBC → Spark JDBC; migrate to Delta'},
+    QueryPhoenix:{tool:'Phoenix',subtype:'read',dbx:'Spark SQL / JDBC',pri:1,code:'spark.read.format("jdbc").option("url","jdbc:phoenix:...").load()',notes:'Phoenix JDBC → Spark SQL'},
+    // Teradata
+    PutTeradata:{tool:'Teradata',subtype:'write',dbx:'Spark JDBC',pri:1,code:'df.write.format("jdbc").option("url","jdbc:teradata://...").save()',notes:'Install Teradata JDBC driver'},
+    QueryTeradata:{tool:'Teradata',subtype:'read',dbx:'Spark JDBC',pri:1,code:'spark.read.format("jdbc").option("url","jdbc:teradata://...").load()',notes:'Install Teradata JDBC driver'},
+    // Oracle
+    PutOracle:{tool:'Oracle',subtype:'write',dbx:'Spark JDBC',pri:1,code:'df.write.format("jdbc").option("url","jdbc:oracle:thin:@...").save()',notes:'Install Oracle JDBC driver (ojdbc8.jar)'},
+    QueryOracle:{tool:'Oracle',subtype:'read',dbx:'Spark JDBC',pri:1,code:'spark.read.format("jdbc").option("url","jdbc:oracle:thin:@...").load()',notes:'Install Oracle JDBC driver'},
+    // SAP HANA
+    PutSAPHANA:{tool:'SAP HANA',subtype:'write',dbx:'Spark JDBC',pri:2,code:'df.write.format("jdbc").option("url","jdbc:sap://...").save()',notes:'Install SAP HANA JDBC driver'},
+    // Vertica
+    PutVertica:{tool:'Vertica',subtype:'write',dbx:'Spark JDBC / Vertica Connector',pri:2,code:'df.write.format("jdbc").option("url","jdbc:vertica://...").save()',notes:'Install Vertica JDBC driver'},
+    // Presto/Trino
+    QueryPresto:{tool:'Presto',subtype:'query',dbx:'Spark SQL',pri:1,code:'spark.sql("...")',notes:'Presto queries → Spark SQL'},
+    QueryTrino:{tool:'Trino',subtype:'query',dbx:'Spark SQL',pri:1,code:'spark.sql("...")',notes:'Trino queries → Spark SQL'},
+    // Greenplum
+    PutGreenplum:{tool:'Greenplum',subtype:'write',dbx:'Spark JDBC',pri:2,code:'df.write.format("jdbc").option("url","jdbc:postgresql://...").save()',notes:'Greenplum uses PostgreSQL JDBC'},
+    // CockroachDB
+    PutCockroachDB:{tool:'CockroachDB',subtype:'write',dbx:'Spark JDBC',pri:2,code:'df.write.format("jdbc").option("url","jdbc:postgresql://...").save()',notes:'CockroachDB uses PostgreSQL protocol'},
+    // TimescaleDB
+    PutTimescaleDB:{tool:'TimescaleDB',subtype:'write',dbx:'Spark JDBC',pri:2,code:'df.write.format("jdbc").option("url","jdbc:postgresql://...").save()',notes:'TimescaleDB uses PostgreSQL JDBC'},
+    // InfluxDB
+    PutInfluxDB:{tool:'InfluxDB',subtype:'write',dbx:'influxdb-client-python',pri:3,code:'from influxdb_client import InfluxDBClient; client.write_api().write(...)',notes:'Use influxdb-client-python'},
+    QueryInfluxDB:{tool:'InfluxDB',subtype:'read',dbx:'influxdb-client-python',pri:3,code:'client.query_api().query(...)',notes:'Use influxdb-client-python'},
+    // Prometheus
+    PutPrometheusRemoteWrite:{tool:'Prometheus',subtype:'remote-write',dbx:'Databricks Monitoring',pri:3,code:'# Use Databricks built-in monitoring or prometheus_client',notes:'Use Databricks monitoring; or prometheus_client'},
+    // Datadog
+    PutDatadog:{tool:'Datadog',subtype:'metrics',dbx:'Datadog Databricks Integration',pri:3,code:'# Use Databricks Datadog integration',notes:'Configure Databricks Datadog integration'},
+    // Grafana
+    PutGrafanaAnnotation:{tool:'Grafana',subtype:'annotation',dbx:'Grafana REST API',pri:3,code:'requests.post(grafana_url + "/api/annotations", ...)',notes:'Use Grafana REST API'},
+    // Flink
+    ExecuteFlinkSQL:{tool:'Flink',subtype:'flink-sql',dbx:'Spark SQL / Structured Streaming',pri:1,code:'spark.sql("...")',notes:'Flink SQL → Spark SQL'},
+    // Airflow
+    TriggerAirflowDag:{tool:'Airflow',subtype:'trigger',dbx:'Databricks Workflows',pri:1,code:'# Use Databricks Workflows instead',notes:'Airflow DAG → Databricks Workflow'},
+    // Schema Registry
+    ConfluentSchemaRegistry:{tool:'Schema Registry',subtype:'confluent',dbx:'Unity Catalog Schema',pri:2,code:'# Use Unity Catalog for schema management',notes:'Schema Registry → UC schema governance'},
+    HortonworksSchemaRegistry:{tool:'Schema Registry',subtype:'hortonworks',dbx:'Unity Catalog Schema',pri:2,code:'# Migrate to Unity Catalog schema management',notes:'Hortonworks SR → UC schema governance'},
+    // Excel
+    ConvertExcelToCSVProcessor:{tool:'Excel',subtype:'convert',dbx:'spark-excel library',pri:2,code:'spark.read.format("com.crealytics.spark.excel").load("...")',notes:'Install spark-excel library'}
   };
   // JDBC URL → database type mapping
   const JDBC_TYPE_MAP = {oracle:'Oracle DB',mysql:'MySQL',postgresql:'PostgreSQL',sqlserver:'SQL Server',mariadb:'MariaDB',db2:'IBM DB2',hive2:'Hive/Impala',teradata:'Teradata',sybase:'Sybase',informix:'Informix',h2:'H2',hsqldb:'HSQLDB',derby:'Derby',sqlite:'SQLite',redshift:'Amazon Redshift',snowflake:'Snowflake',presto:'Presto',trino:'Trino',clickhouse:'ClickHouse',vertica:'Vertica',phoenix:'Apache Phoenix',sap:'SAP HANA',netezza:'Netezza',greenplum:'Greenplum',cockroachdb:'CockroachDB',yugabytedb:'YugabyteDB',memsql:'MemSQL/SingleStore',timescale:'TimescaleDB',questdb:'QuestDB',duckdb:'DuckDB'};
@@ -2469,6 +2538,46 @@ function parseNiFiXML(doc, sourceName) {
         if (_RE.rangerCmd.test(allCmd)) {
           clouderaTools.push({ tool:'Ranger', subtype:'ranger', processor: p.name, group: p.group, command: args.substring(0,200),
             dbx_equivalent:'Unity Catalog ACLs', dbx_priority:1, dbx_code:'# GRANT SELECT ON TABLE ... TO ...', dbx_notes:'Ranger policies → Unity Catalog GRANT/REVOKE' });
+        }
+        if (_RE.sentryCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Sentry', subtype:'sentry', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Unity Catalog ACLs', dbx_priority:1, dbx_code:'# GRANT/REVOKE via Unity Catalog', dbx_notes:'Sentry policies → Unity Catalog ACLs (GRANT/REVOKE)' });
+        }
+        if (_RE.atlasCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Atlas', subtype:'atlas', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Unity Catalog Lineage', dbx_priority:1, dbx_code:'# Unity Catalog provides automatic lineage tracking', dbx_notes:'Atlas metadata/lineage → Unity Catalog lineage (automatic)' });
+        }
+        if (_RE.yarnCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'YARN', subtype:'yarn-cli', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Databricks Clusters', dbx_priority:1, dbx_code:'# Databricks manages compute clusters natively\n# No YARN resource management needed', dbx_notes:'YARN → Databricks cluster management (autoscaling, pools)' });
+        }
+        if (_RE.phoenixCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Phoenix', subtype:'phoenix-cli', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Spark SQL', dbx_priority:1, dbx_code:'spark.sql("...")', dbx_notes:'Phoenix SQL → Spark SQL; data from HBase → Delta Lake' });
+        }
+        if (_RE.prestoCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Presto/Trino', subtype: /trino/.test(allCmd) ? 'trino-cli' : 'presto-cli', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Spark SQL', dbx_priority:1, dbx_code:'spark.sql("...")', dbx_notes:'Presto/Trino queries → Spark SQL (native in Databricks)' });
+        }
+        if (_RE.flinkCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Flink', subtype:'flink-cli', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Structured Streaming / Spark Job', dbx_priority:1, dbx_code:'# Convert Flink job to Structured Streaming or Spark batch', dbx_notes:'Flink → Structured Streaming for stream processing; Spark for batch' });
+        }
+        if (_RE.stormCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Storm', subtype:'storm-cli', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Structured Streaming', dbx_priority:1, dbx_code:'spark.readStream.format(...)...', dbx_notes:'Storm topology → Structured Streaming pipeline' });
+        }
+        if (_RE.airflowCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Airflow', subtype:'airflow-cli', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Databricks Workflows', dbx_priority:1, dbx_code:'# Use Databricks Workflows for orchestration\n# Or: from databricks.sdk import WorkspaceClient\n# w.jobs.run_now(job_id=<job_id>)', dbx_notes:'Airflow DAG → Databricks Workflows (native orchestration)' });
+        }
+        if (_RE.knoxCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Knox', subtype:'knox', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Databricks Networking', dbx_priority:1, dbx_code:'# Knox gateway replaced by Databricks workspace networking\n# Use Private Link, VNet injection, or IP access lists', dbx_notes:'Knox gateway → Databricks workspace networking (Private Link / VNet)' });
+        }
+        if (_RE.livyCmd.test(allCmd)) {
+          clouderaTools.push({ tool:'Livy', subtype:'livy', processor: p.name, group: p.group, command: args.substring(0,200),
+            dbx_equivalent:'Databricks Jobs API', dbx_priority:1, dbx_code:'# from databricks.sdk import WorkspaceClient\n# w = WorkspaceClient()\n# w.jobs.submit(...)', dbx_notes:'Livy REST API → Databricks Jobs API (REST or SDK)' });
         }
         if (_RE.pythonCmd.test(allCmd)) {
           clouderaTools.push({ tool:'Python Script', subtype:'python', processor: p.name, group: p.group, command: args.substring(0,200),
@@ -2891,6 +3000,22 @@ function buildResourceManifest(nifi) {
       if (/sqoop/.test(allCmd)) {
         const tblMatch = args.match(/--table\s+(\S+)/);
         if (tblMatch) addSqlTable(tblMatch[1], /export/.test(allCmd) ? 'write' : 'read', pName);
+      }
+      // Phoenix — extract table refs
+      if (/sqlline\.py|phoenix/.test(allCmd)) {
+        const tblMatches = args.match(/(?:from|into|table|upsert\s+into)\s+([\w.]+)/gi);
+        if (tblMatches) tblMatches.forEach(m => {
+          const tn = m.replace(/^(from|into|table|upsert\s+into)\s+/i,'').trim();
+          if (tn && tn.length > 2) addSqlTable(tn, /into|upsert/i.test(m) ? 'write' : 'read', pName);
+        });
+      }
+      // Presto/Trino — extract table refs
+      if (/presto|trino/.test(allCmd)) {
+        const tblMatches = args.match(/(?:from|join|into)\s+([\w.]+)/gi);
+        if (tblMatches) tblMatches.forEach(m => {
+          const tn = m.replace(/^(from|join|into)\s+/i,'').trim();
+          if (tn && tn.length > 2) addSqlTable(tn, /into/i.test(m) ? 'write' : 'read', pName);
+        });
       }
     } else if (t === 'InvokeHTTP') {
       const url = props['Remote URL'] || props['remote-url'] || '';
@@ -3385,6 +3510,127 @@ const NIFI_DATABRICKS_MAP = {
   GeoEnrichIPRecord:{cat:'Python Library',tpl:'# GeoIP enrichment\n# Install geoip2 and download MaxMind GeoLite2 database\nimport geoip2.database\n_reader = geoip2.database.Reader("/Volumes/{catalog}/{schema}/geoip/GeoLite2-City.mmdb")\nfrom pyspark.sql.functions import pandas_udf\nimport pandas as pd\n@pandas_udf("string")\ndef _geo_lookup(ips: pd.Series) -> pd.Series:\n    return ips.apply(lambda ip: str(_reader.city(ip).country.name) if ip else None)\ndf_{v} = df_{in}.withColumn("geo_country", _geo_lookup(col("{ip_field}")))',desc:'GeoIP enrichment',notes:'Install geoip2; download MaxMind database to Volumes',imp:[],conf:0.60},
   PublishKafka_1_0:{cat:'Kafka Write',tpl:'(df_{in}\n  .selectExpr("to_json(struct(*)) AS value")\n  .write\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("topic", "{topic}")\n  .save())',desc:'Publish to Kafka 1.0',notes:'Same as PublishKafka',imp:[],conf:0.85},
   ConsumeKafka_1_0:{cat:'Structured Streaming',tpl:'df_{v} = (spark.readStream\n  .format("kafka")\n  .option("kafka.bootstrap.servers", "{brokers}")\n  .option("subscribe", "{topic}")\n  .load())',desc:'Consume from Kafka 1.0',notes:'Same as ConsumeKafka',imp:[],conf:0.90},
+  // ── AWS Additional ──
+  DeleteS3Object:{cat:'Cloud Storage',tpl:'dbutils.fs.rm("s3a://{bucket}/{key}", recurse=False)',desc:'Delete S3 object',notes:'Use Unity Catalog external location',imp:[],conf:0.85},
+  TagS3Object:{cat:'AWS boto3',tpl:'import boto3\ns3 = boto3.client("s3")\ns3.put_object_tagging(Bucket="{bucket}", Key="{key}", Tagging={"TagSet":[{"Key":"{tag_key}","Value":"{tag_value}"}]})',desc:'Tag S3 object',notes:'Use boto3 for S3 tagging',imp:[],conf:0.50},
+  PutKinesisStream:{cat:'Kinesis Connector',tpl:'(df_{in}.writeStream\n  .format("kinesis")\n  .option("streamName", "{stream}")\n  .option("region", "{region}")\n  .option("endpointUrl", "https://kinesis.{region}.amazonaws.com")\n  .start())',desc:'Kinesis stream write',notes:'Use kinesis-spark connector',imp:[],conf:0.65},
+  GetKinesisStream:{cat:'Kinesis Connector',tpl:'df_{v} = (spark.readStream\n  .format("kinesis")\n  .option("streamName", "{stream}")\n  .option("region", "{region}")\n  .option("initialPosition", "TRIM_HORIZON")\n  .load())',desc:'Kinesis stream read',notes:'Use kinesis-spark connector',imp:[],conf:0.65},
+  // ── Azure Additional ──
+  DeleteAzureBlobStorage:{cat:'Azure Storage',tpl:'dbutils.fs.rm("wasbs://{container}@{account}.blob.core.windows.net/{path}")',desc:'Delete Azure Blob',notes:'Use dbutils.fs.rm',imp:[],conf:0.85},
+  FetchAzureDataLakeStorage:{cat:'Azure ADLS',tpl:'df_{v} = spark.read.format("{format}").load("abfss://{container}@{account}.dfs.core.windows.net/{path}")',desc:'ADLS Gen2 read',notes:'Unity Catalog external location',imp:[],conf:0.85},
+  ListAzureDataLakeStorage:{cat:'Azure ADLS',tpl:'_files = dbutils.fs.ls("abfss://{container}@{account}.dfs.core.windows.net/{path}")\ndf_{v} = spark.createDataFrame(_files)',desc:'ADLS Gen2 list',notes:'dbutils.fs.ls for ADLS',imp:[],conf:0.85},
+  DeleteAzureDataLakeStorage:{cat:'Azure ADLS',tpl:'dbutils.fs.rm("abfss://{container}@{account}.dfs.core.windows.net/{path}")',desc:'Delete ADLS Gen2 object',notes:'dbutils.fs.rm',imp:[],conf:0.85},
+  PutAzureCosmosDB:{cat:'Cosmos DB',tpl:'(df_{in}.write\n  .format("cosmos.oltp")\n  .option("spark.cosmos.accountEndpoint", dbutils.secrets.get(scope="{scope}", key="cosmos-endpoint"))\n  .option("spark.cosmos.accountKey", dbutils.secrets.get(scope="{scope}", key="cosmos-key"))\n  .option("spark.cosmos.database", "{database}")\n  .option("spark.cosmos.container", "{container}")\n  .mode("append")\n  .save())',desc:'Cosmos DB write',notes:'Install azure-cosmos-spark library',imp:[],conf:0.70},
+  PutAzureCosmosDBRecord:{cat:'Cosmos DB',tpl:'(df_{in}.write\n  .format("cosmos.oltp")\n  .option("spark.cosmos.accountEndpoint", dbutils.secrets.get(scope="{scope}", key="cosmos-endpoint"))\n  .option("spark.cosmos.accountKey", dbutils.secrets.get(scope="{scope}", key="cosmos-key"))\n  .option("spark.cosmos.database", "{database}")\n  .option("spark.cosmos.container", "{container}")\n  .mode("append")\n  .save())',desc:'Cosmos DB record write',notes:'Install azure-cosmos-spark',imp:[],conf:0.70},
+  GetAzureEventHub:{cat:'Event Hubs Connector',tpl:'df_{v} = (spark.readStream\n  .format("eventhubs")\n  .option("eventhubs.connectionString", dbutils.secrets.get(scope="{scope}", key="eh-conn-string"))\n  .load())',desc:'Event Hubs batch read',notes:'Install azure-eventhubs-spark library',imp:[],conf:0.75},
+  PutAzureQueueStorage:{cat:'Azure Queue',tpl:'from azure.storage.queue import QueueClient\n_queue = QueueClient.from_connection_string(dbutils.secrets.get(scope="{scope}", key="azure-storage-conn"), "{queue}")\n_queue.send_message(str(data))',desc:'Azure Queue Storage write',notes:'Install azure-storage-queue',imp:[],conf:0.55},
+  GetAzureQueueStorage:{cat:'Azure Queue',tpl:'from azure.storage.queue import QueueClient\n_queue = QueueClient.from_connection_string(dbutils.secrets.get(scope="{scope}", key="azure-storage-conn"), "{queue}")\n_msgs = _queue.receive_messages()',desc:'Azure Queue Storage read',notes:'Install azure-storage-queue',imp:[],conf:0.55},
+  // ── GCP Additional ──
+  DeleteGCSObject:{cat:'GCS',tpl:'dbutils.fs.rm("gs://{bucket}/{key}")',desc:'Delete GCS object',notes:'dbutils.fs.rm for GCS',imp:[],conf:0.85},
+  PutBigQueryStreaming:{cat:'BigQuery Connector',tpl:'(df_{in}.writeStream\n  .format("bigquery")\n  .option("table", "{project}.{dataset}.{table}")\n  .start())',desc:'BigQuery streaming write',notes:'Install spark-bigquery-connector',imp:[],conf:0.70},
+  // ── Snowflake ──
+  PutSnowflake:{cat:'Snowflake Connector',tpl:'(df_{in}.write\n  .format("snowflake")\n  .option("sfUrl", dbutils.secrets.get(scope="{scope}", key="sf-url"))\n  .option("sfUser", dbutils.secrets.get(scope="{scope}", key="sf-user"))\n  .option("sfPassword", dbutils.secrets.get(scope="{scope}", key="sf-password"))\n  .option("sfDatabase", "{database}")\n  .option("sfSchema", "{sf_schema}")\n  .option("dbtable", "{table}")\n  .mode("append")\n  .save())',desc:'Snowflake write',notes:'Install spark-snowflake connector; store credentials in Secret Scopes',imp:[],conf:0.80},
+  GetSnowflake:{cat:'Snowflake Connector',tpl:'df_{v} = (spark.read\n  .format("snowflake")\n  .option("sfUrl", dbutils.secrets.get(scope="{scope}", key="sf-url"))\n  .option("sfUser", dbutils.secrets.get(scope="{scope}", key="sf-user"))\n  .option("sfPassword", dbutils.secrets.get(scope="{scope}", key="sf-password"))\n  .option("sfDatabase", "{database}")\n  .option("sfSchema", "{sf_schema}")\n  .option("dbtable", "{table}")\n  .load())',desc:'Snowflake read',notes:'Install spark-snowflake connector',imp:[],conf:0.80},
+  // ── Neo4j ──
+  PutCypher:{cat:'Neo4j Connector',tpl:'# Neo4j write via neo4j-spark-connector\n(df_{in}.write\n  .format("org.neo4j.spark.DataSource")\n  .option("url", dbutils.secrets.get(scope="{scope}", key="neo4j-url"))\n  .option("authentication.basic.username", dbutils.secrets.get(scope="{scope}", key="neo4j-user"))\n  .option("authentication.basic.password", dbutils.secrets.get(scope="{scope}", key="neo4j-pass"))\n  .option("labels", "{label}")\n  .mode("append")\n  .save())',desc:'Neo4j graph write',notes:'Install neo4j-spark-connector',imp:[],conf:0.60},
+  GetCypher:{cat:'Neo4j Connector',tpl:'df_{v} = (spark.read\n  .format("org.neo4j.spark.DataSource")\n  .option("url", dbutils.secrets.get(scope="{scope}", key="neo4j-url"))\n  .option("authentication.basic.username", dbutils.secrets.get(scope="{scope}", key="neo4j-user"))\n  .option("authentication.basic.password", dbutils.secrets.get(scope="{scope}", key="neo4j-pass"))\n  .option("query", "{cypher_query}")\n  .load())',desc:'Neo4j graph read',notes:'Install neo4j-spark-connector',imp:[],conf:0.60},
+  // ── Druid ──
+  PutDruidRecord:{cat:'Druid Connector',tpl:'# Apache Druid write via druid-spark connector\n(df_{in}.write\n  .format("druid")\n  .option("druid.datasource", "{datasource}")\n  .option("druid.broker", "{broker_host}:{broker_port}")\n  .mode("append")\n  .save())',desc:'Druid record write',notes:'Install druid-spark connector or use Druid ingestion API',imp:[],conf:0.50},
+  QueryDruid:{cat:'Druid Connector',tpl:'# Apache Druid query via druid-spark connector\ndf_{v} = (spark.read\n  .format("druid")\n  .option("druid.datasource", "{datasource}")\n  .option("druid.broker", "{broker_host}:{broker_port}")\n  .load())',desc:'Druid query',notes:'Install druid-spark connector',imp:[],conf:0.50},
+  // ── ClickHouse ──
+  PutClickHouse:{cat:'ClickHouse Connector',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "jdbc:clickhouse://{host}:{port}/{database}")\n  .option("dbtable", "{table}")\n  .option("driver", "com.clickhouse.jdbc.ClickHouseDriver")\n  .mode("append")\n  .save())',desc:'ClickHouse write via JDBC',notes:'Install ClickHouse JDBC driver',imp:[],conf:0.75},
+  QueryClickHouse:{cat:'ClickHouse Connector',tpl:'df_{v} = (spark.read\n  .format("jdbc")\n  .option("url", "jdbc:clickhouse://{host}:{port}/{database}")\n  .option("dbtable", "{table}")\n  .option("driver", "com.clickhouse.jdbc.ClickHouseDriver")\n  .load())',desc:'ClickHouse read via JDBC',notes:'Install ClickHouse JDBC driver',imp:[],conf:0.75},
+  // ── Apache Iceberg ──
+  PutIceberg:{cat:'Iceberg',tpl:'(df_{in}.writeTo("{catalog}.{schema}.{table}")\n  .using("iceberg")\n  .append())',desc:'Iceberg table write',notes:'Databricks supports Iceberg via UniForm; prefer Delta Lake',imp:[],conf:0.80},
+  // ── Apache Hudi ──
+  PutHudi:{cat:'Hudi',tpl:'(df_{in}.write\n  .format("hudi")\n  .option("hoodie.table.name", "{table}")\n  .option("hoodie.datasource.write.recordkey.field", "{record_key}")\n  .option("hoodie.datasource.write.precombine.field", "{precombine_field}")\n  .mode("append")\n  .save("/Volumes/{catalog}/{schema}/{table}"))',desc:'Hudi table write',notes:'Databricks supports Hudi; prefer Delta Lake for native features',imp:[],conf:0.70},
+  // ── Elasticsearch Additional ──
+  PutElasticsearchHttp:{cat:'ES Connector',tpl:'(df_{in}.write\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .save("{index}"))',desc:'Elasticsearch HTTP write',notes:'Install elasticsearch-spark',imp:[],conf:0.65},
+  PutElasticsearchHttpRecord:{cat:'ES Connector',tpl:'(df_{in}.write\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .save("{index}"))',desc:'Elasticsearch HTTP record write',notes:'Install elasticsearch-spark',imp:[],conf:0.65},
+  PutElasticsearchRecord:{cat:'ES Connector',tpl:'(df_{in}.write\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .save("{index}"))',desc:'Elasticsearch record write',notes:'Install elasticsearch-spark',imp:[],conf:0.65},
+  FetchElasticsearchHttp:{cat:'ES Connector',tpl:'df_{v} = (spark.read\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .option("es.resource", "{index}")\n  .load())',desc:'Elasticsearch HTTP fetch',notes:'Install elasticsearch-spark',imp:[],conf:0.65},
+  JsonQueryElasticsearch:{cat:'ES Connector',tpl:'df_{v} = (spark.read\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .option("es.query", "{query}")\n  .load("{index}"))',desc:'Elasticsearch JSON query',notes:'Install elasticsearch-spark; pass query DSL',imp:[],conf:0.60},
+  ScrollElasticsearchHttp:{cat:'ES Connector',tpl:'df_{v} = (spark.read\n  .format("org.elasticsearch.spark.sql")\n  .option("es.nodes", "{host}")\n  .option("es.scroll.size", "1000")\n  .load("{index}"))',desc:'Elasticsearch scroll read',notes:'Install elasticsearch-spark; Spark handles pagination',imp:[],conf:0.65},
+  // ── MongoDB Additional ──
+  PutMongoRecord:{cat:'MongoDB Connector',tpl:'(df_{in}.write\n  .format("mongodb")\n  .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))\n  .option("database", "{database}")\n  .option("collection", "{collection}")\n  .mode("append")\n  .save())',desc:'MongoDB record write',notes:'Install mongodb-spark-connector',imp:[],conf:0.75},
+  DeleteMongo:{cat:'MongoDB Connector',tpl:'# MongoDB delete via pymongo\nfrom pymongo import MongoClient\n_client = MongoClient(dbutils.secrets.get(scope="{scope}", key="mongo-uri"))\n_db = _client["{database}"]\n_result = _db["{collection}"].delete_many({filter})\nprint(f"[MONGO] Deleted {_result.deleted_count} documents")',desc:'MongoDB delete',notes:'Install pymongo; use for targeted deletes',imp:[],conf:0.60},
+  // ── Cassandra Additional ──
+  PutCassandraRecord:{cat:'Cassandra Connector',tpl:'(df_{in}.write\n  .format("org.apache.spark.sql.cassandra")\n  .option("keyspace", "{keyspace}")\n  .option("table", "{table}")\n  .mode("append")\n  .save())',desc:'Cassandra record write',notes:'Install spark-cassandra-connector',imp:[],conf:0.75},
+  // ── Solr Additional ──
+  PutSolrRecord:{cat:'Solr Connector',tpl:'# Solr record write via pysolr or solr-spark connector\nimport pysolr\nsolr = pysolr.Solr("{url}")\nsolr.add([row.asDict() for row in df_{in}.collect()])',desc:'Solr record write',notes:'Install pysolr or solr-spark connector',imp:[],conf:0.50},
+  GetSolr:{cat:'Solr Connector',tpl:'# Solr read via pysolr\nimport pysolr\nsolr = pysolr.Solr("{url}")\nresults = solr.search("*:*", rows=10000)',desc:'Solr read',notes:'Use pysolr or solr-spark connector',imp:[],conf:0.50},
+  // ── SFTP/FTP Additional ──
+  ListSFTP:{cat:'External Storage',tpl:'# SFTP directory listing via paramiko\nimport paramiko\n_transport = paramiko.Transport(("{host}", 22))\n_transport.connect(username=dbutils.secrets.get(scope="{scope}", key="sftp-user"))\n_sftp = paramiko.SFTPClient.from_transport(_transport)\n_files = _sftp.listdir("{remote_path}")\n_sftp.close(); _transport.close()\ndf_{v} = spark.createDataFrame([(f,) for f in _files], ["filename"])',desc:'SFTP directory listing',notes:'Install paramiko; store credentials in Secret Scopes',imp:['import paramiko'],conf:0.60},
+  FetchSFTP:{cat:'External Storage',tpl:'# SFTP file fetch via paramiko\nimport paramiko\n_transport = paramiko.Transport(("{host}", 22))\n_transport.connect(username=dbutils.secrets.get(scope="{scope}", key="sftp-user"))\n_sftp = paramiko.SFTPClient.from_transport(_transport)\n_sftp.get("{remote_path}/{filename}", "/tmp/{v}_download")\n_sftp.close(); _transport.close()\ndf_{v} = spark.read.format("{format}").load("/tmp/{v}_download")',desc:'SFTP file fetch',notes:'Install paramiko; downloads to local then reads',imp:['import paramiko'],conf:0.55},
+  ListFTP:{cat:'External Storage',tpl:'# FTP directory listing via ftplib\nimport ftplib\n_ftp = ftplib.FTP("{hostname}")\n_ftp.login(dbutils.secrets.get(scope="{scope}", key="ftp-user"), dbutils.secrets.get(scope="{scope}", key="ftp-pass"))\n_files = _ftp.nlst("{remote_path}")\n_ftp.quit()\ndf_{v} = spark.createDataFrame([(f,) for f in _files], ["filename"])',desc:'FTP directory listing',notes:'Use ftplib; store credentials in Secret Scopes',imp:[],conf:0.55},
+  FetchFTP:{cat:'External Storage',tpl:'# FTP file fetch via ftplib\nimport ftplib\n_ftp = ftplib.FTP("{hostname}")\n_ftp.login(dbutils.secrets.get(scope="{scope}", key="ftp-user"), dbutils.secrets.get(scope="{scope}", key="ftp-pass"))\nwith open("/tmp/{v}_download", "wb") as f:\n    _ftp.retrbinary("RETR {remote_path}/{filename}", f.write)\n_ftp.quit()\ndf_{v} = spark.read.format("{format}").load("/tmp/{v}_download")',desc:'FTP file fetch',notes:'Use ftplib; downloads to local then reads',imp:[],conf:0.50},
+  // ── Email Additional ──
+  GetPOP3:{cat:'Email',tpl:'# POP3 email retrieval\nimport poplib\n_pop = poplib.POP3_SSL("{host}")\n_pop.user(dbutils.secrets.get(scope="{scope}", key="pop3-user"))\n_pop.pass_(dbutils.secrets.get(scope="{scope}", key="pop3-pass"))\n_count = len(_pop.list()[1])\nprint(f"[POP3] {_count} messages available")\n_pop.quit()',desc:'POP3 email retrieval',notes:'Use poplib; store credentials in Secret Scopes',imp:[],conf:0.40},
+  GetIMAP:{cat:'Email',tpl:'# IMAP email retrieval\nimport imaplib\n_mail = imaplib.IMAP4_SSL("{host}")\n_mail.login(dbutils.secrets.get(scope="{scope}", key="imap-user"), dbutils.secrets.get(scope="{scope}", key="imap-pass"))\n_mail.select("INBOX")\n_status, _msgs = _mail.search(None, "ALL")\nprint(f"[IMAP] {len(_msgs[0].split())} messages")\n_mail.logout()',desc:'IMAP email retrieval',notes:'Use imaplib; store credentials in Secret Scopes',imp:[],conf:0.40},
+  // ── Network Additional ──
+  ListenUDP:{cat:'Python Socket',tpl:'# UDP listener — not ideal for Databricks\nimport socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.bind(("0.0.0.0", {port}))\ndata, addr = s.recvfrom(4096)',desc:'UDP listener',notes:'Use external UDP collector; ingest to Delta',imp:[],conf:0.25},
+  GetTCP:{cat:'Python Socket',tpl:'# TCP get via Python socket\nimport socket\ns = socket.socket()\ns.connect(("{host}", {port}))\ndata = s.recv(4096)\ns.close()',desc:'TCP receive',notes:'Use Python socket module',imp:[],conf:0.40},
+  PutUDP:{cat:'Python Socket',tpl:'import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.sendto(data.encode(), ("{host}", {port}))',desc:'UDP send',notes:'Use Python socket module',imp:[],conf:0.40},
+  // ── SNMP ──
+  GetSNMP:{cat:'SNMP',tpl:'# SNMP get via pysnmp\nfrom pysnmp.hlapi import *\n_errorIndication, _errorStatus, _errorIndex, _varBinds = next(\n    getCmd(SnmpEngine(), CommunityData("{community}"), UdpTransportTarget(("{host}", 161)), ContextData(), ObjectType(ObjectIdentity("{oid}"))))\nif _errorIndication: print(f"[SNMP ERROR] {_errorIndication}")\nelse: print(f"[SNMP] {_varBinds}")',desc:'SNMP get request',notes:'Install pysnmp library',imp:[],conf:0.45},
+  SetSNMP:{cat:'SNMP',tpl:'# SNMP set via pysnmp\nfrom pysnmp.hlapi import *\nnext(setCmd(SnmpEngine(), CommunityData("{community}"), UdpTransportTarget(("{host}", 161)), ContextData(), ObjectType(ObjectIdentity("{oid}"), {value})))',desc:'SNMP set request',notes:'Install pysnmp library',imp:[],conf:0.40},
+  // ── Splunk Additional ──
+  GetSplunk:{cat:'Splunk Connector',tpl:'# Splunk search via REST API\nimport requests\n_resp = requests.get("{splunk_url}/services/search/jobs/export", params={"search":"search {query}","output_mode":"json"}, auth=(dbutils.secrets.get(scope="{scope}",key="splunk-user"), dbutils.secrets.get(scope="{scope}",key="splunk-pass")), verify=False)\ndf_{v} = spark.read.json(spark.sparkContext.parallelize([_resp.text]))',desc:'Splunk search read',notes:'Use Splunk REST API or splunk-spark connector',imp:[],conf:0.50},
+  QuerySplunkIndexingStatus:{cat:'Splunk Connector',tpl:'# Splunk indexing status query\nimport requests\n_resp = requests.get("{splunk_url}/services/data/indexes", auth=(dbutils.secrets.get(scope="{scope}",key="splunk-user"), dbutils.secrets.get(scope="{scope}",key="splunk-pass")), verify=False)\nprint(f"[SPLUNK] Status: {_resp.status_code}")',desc:'Splunk indexing status',notes:'Use Splunk REST API',imp:[],conf:0.40},
+  // ── InfluxDB Additional ──
+  QueryInfluxDB:{cat:'InfluxDB Client',tpl:'from influxdb_client import InfluxDBClient\nclient = InfluxDBClient(url="{url}", token=dbutils.secrets.get(scope="{scope}", key="influxdb-token"), org="{org}")\n_query = \'from(bucket:"{bucket}") |> range(start: -1h)\'\n_tables = client.query_api().query(_query)\ndf_{v} = spark.createDataFrame([dict(r) for t in _tables for r in t.records])',desc:'InfluxDB query',notes:'Install influxdb-client-python',imp:[],conf:0.55},
+  // ── Prometheus ──
+  PutPrometheusRemoteWrite:{cat:'Monitoring',tpl:'# Prometheus remote write — use Databricks monitoring instead\n# Databricks provides built-in metrics via Ganglia and Spark UI\nprint(f"[PROMETHEUS] Use Databricks built-in monitoring or configure Prometheus remote write endpoint")\n# For custom metrics: import prometheus_client',desc:'Prometheus remote write',notes:'Use Databricks built-in monitoring; or prometheus_client',imp:[],conf:0.35},
+  // ── NiFi Site-to-Site ──
+  SendNiFiSiteToSite:{cat:'Deprecated',tpl:'# NiFi Site-to-Site — NOT needed in Databricks.\n# Data flows are handled within the Databricks workspace.\n# If cross-workspace transfer is needed, use Unity Catalog sharing.\nprint("[MIGRATION] NiFi Site-to-Site replaced by Unity Catalog cross-workspace sharing")',desc:'NiFi Site-to-Site sender',notes:'Not needed — use UC sharing for cross-workspace data flow',imp:[],conf:0.20},
+  // ── Schema Registry ──
+  ConfluentSchemaRegistry:{cat:'Schema Registry',tpl:'# Confluent Schema Registry integration via Spark\nfrom confluent_kafka.schema_registry import SchemaRegistryClient\n_sr_client = SchemaRegistryClient({"url": "{schema_registry_url}"})\n_schema = _sr_client.get_latest_version("{subject}").schema\nprint(f"[SCHEMA] Retrieved schema for {subject}: version {_schema.version}")',desc:'Confluent Schema Registry',notes:'Install confluent-kafka; use for Kafka schema evolution',imp:[],conf:0.60},
+  HortonworksSchemaRegistry:{cat:'Schema Registry',tpl:'# Hortonworks/Cloudera Schema Registry → Confluent Schema Registry or Unity Catalog\n# Unity Catalog provides schema governance natively.\nprint("[MIGRATION] Hortonworks Schema Registry → Unity Catalog schema management")',desc:'Hortonworks Schema Registry',notes:'Migrate to Unity Catalog or Confluent Schema Registry',imp:[],conf:0.50},
+  // ── Redis ──
+  PutRedis:{cat:'Redis',tpl:'# Redis write via redis-py\nimport redis\n_r = redis.Redis(host="{host}", port={port}, password=dbutils.secrets.get(scope="{scope}", key="redis-pass"))\nfor row in df_{in}.limit(10000).collect():\n    _r.set(row["{key_field}"], str(row.asDict()))',desc:'Redis write',notes:'Install redis library; for large datasets use RDD mapPartitions',imp:[],conf:0.55},
+  GetRedis:{cat:'Redis',tpl:'# Redis read via redis-py\nimport redis\n_r = redis.Redis(host="{host}", port={port}, password=dbutils.secrets.get(scope="{scope}", key="redis-pass"))\n_keys = _r.keys("*")\n_data = [{k.decode(): _r.get(k).decode()} for k in _keys[:10000]]\ndf_{v} = spark.createDataFrame(_data)',desc:'Redis read',notes:'Install redis library; for large datasets use scan_iter',imp:[],conf:0.50},
+  // ── Apache Phoenix ──
+  PutPhoenix:{cat:'Phoenix/JDBC',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "jdbc:phoenix:{zookeeper_quorum}")\n  .option("dbtable", "{table}")\n  .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver")\n  .mode("append")\n  .save())',desc:'Phoenix write via JDBC',notes:'Phoenix → Spark SQL via JDBC; consider migrating to Delta Lake',imp:[],conf:0.70},
+  QueryPhoenix:{cat:'Phoenix/JDBC',tpl:'df_{v} = (spark.read\n  .format("jdbc")\n  .option("url", "jdbc:phoenix:{zookeeper_quorum}")\n  .option("dbtable", "{table}")\n  .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver")\n  .load())',desc:'Phoenix read via JDBC',notes:'Phoenix → Spark SQL read; migrate to Delta Lake',imp:[],conf:0.70},
+  // ── Teradata ──
+  PutTeradata:{cat:'Teradata JDBC',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "jdbc:teradata://{host}/DATABASE={database}")\n  .option("dbtable", "{table}")\n  .option("driver", "com.teradata.jdbc.TeraDriver")\n  .option("user", dbutils.secrets.get(scope="{scope}", key="td-user"))\n  .option("password", dbutils.secrets.get(scope="{scope}", key="td-pass"))\n  .mode("append")\n  .save())',desc:'Teradata write',notes:'Install Teradata JDBC driver; store credentials in Secret Scopes',imp:[],conf:0.75},
+  QueryTeradata:{cat:'Teradata JDBC',tpl:'df_{v} = (spark.read\n  .format("jdbc")\n  .option("url", "jdbc:teradata://{host}/DATABASE={database}")\n  .option("dbtable", "{table}")\n  .option("driver", "com.teradata.jdbc.TeraDriver")\n  .option("user", dbutils.secrets.get(scope="{scope}", key="td-user"))\n  .option("password", dbutils.secrets.get(scope="{scope}", key="td-pass"))\n  .load())',desc:'Teradata read',notes:'Install Teradata JDBC driver',imp:[],conf:0.75},
+  // ── Oracle-specific ──
+  PutOracle:{cat:'Oracle JDBC',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "jdbc:oracle:thin:@{host}:{port}:{sid}")\n  .option("dbtable", "{table}")\n  .option("driver", "oracle.jdbc.driver.OracleDriver")\n  .option("user", dbutils.secrets.get(scope="{scope}", key="ora-user"))\n  .option("password", dbutils.secrets.get(scope="{scope}", key="ora-pass"))\n  .mode("append")\n  .save())',desc:'Oracle database write',notes:'Install Oracle JDBC driver (ojdbc8.jar)',imp:[],conf:0.80},
+  QueryOracle:{cat:'Oracle JDBC',tpl:'df_{v} = (spark.read\n  .format("jdbc")\n  .option("url", "jdbc:oracle:thin:@{host}:{port}:{sid}")\n  .option("dbtable", "{table}")\n  .option("driver", "oracle.jdbc.driver.OracleDriver")\n  .option("user", dbutils.secrets.get(scope="{scope}", key="ora-user"))\n  .option("password", dbutils.secrets.get(scope="{scope}", key="ora-pass"))\n  .load())',desc:'Oracle database read',notes:'Install Oracle JDBC driver',imp:[],conf:0.80},
+  // ── SAP HANA ──
+  PutSAPHANA:{cat:'SAP HANA JDBC',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "jdbc:sap://{host}:{port}")\n  .option("dbtable", "{table}")\n  .option("driver", "com.sap.db.jdbc.Driver")\n  .option("user", dbutils.secrets.get(scope="{scope}", key="sap-user"))\n  .option("password", dbutils.secrets.get(scope="{scope}", key="sap-pass"))\n  .mode("append")\n  .save())',desc:'SAP HANA write',notes:'Install SAP HANA JDBC driver (ngdbc.jar)',imp:[],conf:0.70},
+  // ── Vertica ──
+  PutVertica:{cat:'Vertica JDBC',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "jdbc:vertica://{host}:{port}/{database}")\n  .option("dbtable", "{table}")\n  .option("driver", "com.vertica.jdbc.Driver")\n  .option("user", dbutils.secrets.get(scope="{scope}", key="vertica-user"))\n  .option("password", dbutils.secrets.get(scope="{scope}", key="vertica-pass"))\n  .mode("append")\n  .save())',desc:'Vertica write',notes:'Install Vertica JDBC driver',imp:[],conf:0.70},
+  // ── Presto/Trino ──
+  QueryPresto:{cat:'Presto/Trino JDBC',tpl:'df_{v} = (spark.read\n  .format("jdbc")\n  .option("url", "jdbc:presto://{host}:{port}/{catalog}")\n  .option("dbtable", "{table}")\n  .option("driver", "com.facebook.presto.jdbc.PrestoDriver")\n  .load())',desc:'Presto query via JDBC',notes:'Consider migrating Presto queries to Spark SQL',imp:[],conf:0.70},
+  QueryTrino:{cat:'Presto/Trino JDBC',tpl:'df_{v} = (spark.read\n  .format("jdbc")\n  .option("url", "jdbc:trino://{host}:{port}/{catalog}")\n  .option("dbtable", "{table}")\n  .option("driver", "io.trino.jdbc.TrinoDriver")\n  .load())',desc:'Trino query via JDBC',notes:'Consider migrating Trino queries to Spark SQL',imp:[],conf:0.70},
+  // ── Greenplum ──
+  PutGreenplum:{cat:'Greenplum JDBC',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "jdbc:postgresql://{host}:{port}/{database}")\n  .option("dbtable", "{table}")\n  .option("driver", "org.postgresql.Driver")\n  .mode("append")\n  .save())',desc:'Greenplum write via JDBC',notes:'Greenplum uses PostgreSQL JDBC driver',imp:[],conf:0.75},
+  // ── CockroachDB ──
+  PutCockroachDB:{cat:'CockroachDB JDBC',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "jdbc:postgresql://{host}:{port}/{database}")\n  .option("dbtable", "{table}")\n  .option("driver", "org.postgresql.Driver")\n  .mode("append")\n  .save())',desc:'CockroachDB write via JDBC',notes:'CockroachDB uses PostgreSQL wire protocol',imp:[],conf:0.75},
+  // ── TimescaleDB ──
+  PutTimescaleDB:{cat:'TimescaleDB JDBC',tpl:'(df_{in}.write\n  .format("jdbc")\n  .option("url", "jdbc:postgresql://{host}:{port}/{database}")\n  .option("dbtable", "{table}")\n  .option("driver", "org.postgresql.Driver")\n  .mode("append")\n  .save())',desc:'TimescaleDB write via JDBC',notes:'TimescaleDB uses PostgreSQL JDBC driver',imp:[],conf:0.75},
+  // ── DataDog ──
+  PutDatadog:{cat:'Monitoring',tpl:'# Datadog metrics via API\nimport requests\nrequests.post("https://api.datadoghq.com/api/v2/series", headers={"DD-API-KEY": dbutils.secrets.get(scope="{scope}", key="dd-api-key")}, json={"series":[{"metric":"{metric_name}","points":[[int(__import__("time").time()), {value}]]}]})',desc:'Datadog metrics',notes:'Use Datadog API; or configure Databricks Datadog integration',imp:[],conf:0.50},
+  // ── Grafana ──
+  PutGrafanaAnnotation:{cat:'Monitoring',tpl:'# Grafana annotation via API\nimport requests\nrequests.post("{grafana_url}/api/annotations", headers={"Authorization":f"Bearer {dbutils.secrets.get(scope=\\"{scope}\\", key=\\"grafana-token\\")}"}, json={"text":"{annotation_text}","tags":["{tag}"]})',desc:'Grafana annotation',notes:'Use Grafana REST API',imp:[],conf:0.45},
+  // ── Apache Flink (NiFi → Flink → Databricks) ──
+  ExecuteFlinkSQL:{cat:'Spark SQL',tpl:'# Flink SQL → Spark SQL (mostly compatible)\ndf_{v} = spark.sql("""\n{sql}\n""")',desc:'Flink SQL → Spark SQL',notes:'Most Flink SQL syntax is compatible with Spark SQL',imp:[],conf:0.70},
+  // ── Airflow trigger ──
+  TriggerAirflowDag:{cat:'Workflows',tpl:'# Airflow DAG trigger → Databricks Workflows\n# Use Databricks Workflows for orchestration instead of Airflow\nprint("[MIGRATION] Airflow DAG trigger → Databricks Workflows job trigger")\n# To trigger a Databricks Job programmatically:\n# from databricks.sdk import WorkspaceClient\n# w = WorkspaceClient()\n# w.jobs.run_now(job_id=<job_id>)',desc:'Airflow DAG trigger',notes:'Replace Airflow with Databricks Workflows',imp:[],conf:0.50},
+  // ── NiFi ExecuteProcess variants ──
+  ExecuteProcessBash:{cat:'subprocess',tpl:'# Execute bash process\nimport subprocess as _sp\n_result = _sp.run(["/bin/bash", "-c", "{command}"], capture_output=True, text=True, timeout=300)\nif _result.returncode != 0:\n    print(f"[ERROR] {_result.stderr[:200]}")\nelse:\n    print(f"[OK] {_result.stdout[:200]}")',desc:'Bash process execution',notes:'Review script for Databricks compatibility',imp:[],conf:0.50},
+  // ── Apache NiFi Record processors ──
+  ConvertCSVToAvro:{cat:'DataFrame API',tpl:'from pyspark.sql.avro.functions import to_avro\ndf_{v} = df_{in}.select(to_avro(struct("*")).alias("value"))',desc:'CSV to Avro conversion',notes:'Spark handles format conversion natively via DataFrame API',imp:[],conf:0.85},
+  ConvertExcelToCSVProcessor:{cat:'DataFrame API',tpl:'# Excel to CSV conversion\ndf_{v} = spark.read.format("com.crealytics.spark.excel")\n  .option("header", "true")\n  .option("inferSchema", "true")\n  .load("/Volumes/{catalog}/{schema}/{path}")',desc:'Excel to DataFrame',notes:'Install spark-excel library (com.crealytics)',imp:[],conf:0.65},
+  // ── Apache NiFi utilities ──
+  EnforceOrder:{cat:'DataFrame API',tpl:'df_{v} = df_{in}.orderBy("{order_column}")',desc:'Enforce ordering',notes:'Use orderBy for deterministic ordering',imp:[],conf:0.85},
+  GenerateRecord:{cat:'Test Data',tpl:'df_{v} = spark.range({count}).toDF("id")\n# Add test columns as needed',desc:'Generate test records',notes:'Replace with actual test data generation',imp:[],conf:0.60},
+  ListenFTP:{cat:'External Storage',tpl:'# FTP listener → poll-based approach\n# No native FTP listener in Databricks\n# Use Auto Loader on a staged landing zone instead\ndf_{v} = spark.readStream.format("cloudFiles").option("cloudFiles.format", "{format}").load("/Volumes/{catalog}/{schema}/ftp_landing/")',desc:'FTP listener → Auto Loader',notes:'Stage FTP files to Volumes; use Auto Loader for pickup',imp:[],conf:0.50},
+  // ── Data quality ──
+  ValidateCSV:{cat:'DLT Expectations',tpl:'# CSV validation via DLT expectations\n# @dlt.expect_or_drop("valid_csv", "col1 IS NOT NULL")\ndf_{v} = df_{in}.filter(col("{validation_col}").isNotNull())',desc:'CSV validation',notes:'Use DLT expectations for data quality',imp:[],conf:0.80},
+  ValidateXml:{cat:'DataFrame API',tpl:'# XML validation — check structure\nfrom pyspark.sql.functions import length\ndf_{v} = df_{in}.filter(length(col("value")) > 0)',desc:'XML validation',notes:'Use spark-xml for structured parsing',imp:[],conf:0.60},
 };
 
 function sanitizeVarName(name) {
@@ -6814,8 +7060,242 @@ function generateProductionNotebook() {
       } else if (/sqoop/i.test(tool)) {
         migCode += '# MIGRATION: Sqoop → JDBC source with spark.read.format("jdbc").\n';
         migCode += '# Use Auto Loader for incremental ingestion from JDBC sources.\n';
+        migCode += '#   sqoop import → spark.read.format("jdbc").option("dbtable","...").load()\n';
+        migCode += '#   sqoop export → df.write.format("jdbc").option("dbtable","...").save()\n';
+      } else if (/pig/i.test(tool)) {
+        migCode += '# MIGRATION: Pig Latin → PySpark DataFrame operations.\n';
+        migCode += '# Key translations:\n';
+        migCode += '#   LOAD → spark.read.format(...).load(...)\n';
+        migCode += '#   FILTER → df.filter(...)\n';
+        migCode += '#   FOREACH GENERATE → df.select(...) / df.withColumn(...)\n';
+        migCode += '#   GROUP BY → df.groupBy(...).agg(...)\n';
+        migCode += '#   JOIN → df1.join(df2, on="key")\n';
+        migCode += '#   ORDER BY → df.orderBy(...)\n';
+        migCode += '#   STORE → df.write.format(...).save(...)\n';
+        migCode += '#   DISTINCT → df.distinct()\n';
+        migCode += '#   LIMIT → df.limit(n)\n';
+      } else if (/oozie/i.test(tool)) {
+        migCode += '# MIGRATION: Oozie → Databricks Workflows.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   Oozie coordinator → Databricks Workflow schedule\n';
+        migCode += '#   Oozie bundle → Multiple Databricks Workflows\n';
+        migCode += '#   Oozie fork/join → Parallel tasks in Databricks Workflow\n';
+        migCode += '#   Oozie decision → Conditional task logic (if_else)\n';
+        migCode += '#   workflow.xml → JSON job definition via Databricks CLI\n';
+        migCode += '#   Deploy: databricks jobs create --json @workflow.json\n';
+      } else if (/mapreduce|mr[-_]?job/i.test(tool)) {
+        migCode += '# MIGRATION: MapReduce → Spark (significant rewrite required).\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   Mapper class → df.map() / df.withColumn() / df.select()\n';
+        migCode += '#   Reducer class → df.groupBy().agg()\n';
+        migCode += '#   Combiner → Spark handles automatically\n';
+        migCode += '#   InputFormat → spark.read.format("...").load("...")\n';
+        migCode += '#   OutputFormat → df.write.format("...").save("...")\n';
+        migCode += '#   hadoop jar ... → Databricks Job with notebook_task\n';
+      } else if (/yarn/i.test(tool)) {
+        migCode += '# MIGRATION: YARN → Databricks Clusters (no action needed).\n';
+        migCode += '# Databricks manages compute resources natively:\n';
+        migCode += '#   YARN queues → Databricks cluster pools\n';
+        migCode += '#   YARN resource allocation → Autoscaling policies\n';
+        migCode += '#   YARN node management → Managed by Databricks\n';
+        migCode += '#   yarn application -kill → Terminate Databricks cluster/job\n';
+        migCode += '# Action: Remove all YARN commands — Databricks handles resource management.\n';
+      } else if (/zookeeper|zk/i.test(tool)) {
+        migCode += '# MIGRATION: ZooKeeper → Not needed in Databricks.\n';
+        migCode += '# Databricks handles coordination and state management internally.\n';
+        migCode += '#   ZK for leader election → Databricks single-driver model\n';
+        migCode += '#   ZK for config storage → Databricks workspace config / widgets\n';
+        migCode += '#   ZK for distributed locks → Delta table MERGE for state\n';
+        migCode += '# Action: Remove all ZooKeeper references.\n';
+      } else if (/ranger/i.test(tool)) {
+        migCode += '# MIGRATION: Ranger → Unity Catalog ACLs.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   Ranger table policy → GRANT SELECT ON TABLE <table> TO <user/group>\n';
+        migCode += '#   Ranger column masking → Dynamic column masking in Unity Catalog\n';
+        migCode += '#   Ranger row-level filter → Row-level security with row filters\n';
+        migCode += '#   Deploy: databricks unity-catalog permissions update\n';
+      } else if (/sentry/i.test(tool)) {
+        migCode += '# MIGRATION: Sentry → Unity Catalog ACLs.\n';
+        migCode += '# Sentry privileges map directly to Unity Catalog GRANT/REVOKE:\n';
+        migCode += '#   GRANT SELECT ON TABLE → GRANT SELECT ON TABLE\n';
+        migCode += '#   GRANT ALL ON DATABASE → GRANT ALL PRIVILEGES ON SCHEMA\n';
+        migCode += '#   Sentry roles → Unity Catalog groups\n';
+      } else if (/atlas/i.test(tool)) {
+        migCode += '# MIGRATION: Atlas → Unity Catalog Lineage (automatic).\n';
+        migCode += '# Unity Catalog provides automatic lineage tracking:\n';
+        migCode += '#   Atlas entity classification → Unity Catalog tags\n';
+        migCode += '#   Atlas lineage graph → UC lineage (auto-captured from Spark queries)\n';
+        migCode += '#   Atlas search/discovery → UC data search and browse\n';
+        migCode += '# Action: No manual lineage setup needed — UC captures it automatically.\n';
+      } else if (/knox/i.test(tool)) {
+        migCode += '# MIGRATION: Knox → Databricks Workspace Networking.\n';
+        migCode += '# Knox gateway functions replaced by:\n';
+        migCode += '#   Knox SSO → Databricks SSO (SAML/SCIM/OAuth)\n';
+        migCode += '#   Knox proxy → Databricks Private Link / VNet injection\n';
+        migCode += '#   Knox topology → IP access lists / network policies\n';
+        migCode += '# Action: Configure Databricks networking; remove Knox references.\n';
+      } else if (/livy/i.test(tool)) {
+        migCode += '# MIGRATION: Livy → Databricks Jobs API.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   POST /batches → databricks.sdk.WorkspaceClient().jobs.submit()\n';
+        migCode += '#   POST /sessions → Interactive cluster via Databricks Connect\n';
+        migCode += '#   GET /batches/{id} → w.jobs.get_run(run_id=...)\n';
+        migCode += '#   Livy REST API → Databricks REST API (/api/2.1/jobs/...)\n';
+      } else if (/phoenix/i.test(tool)) {
+        migCode += '# MIGRATION: Apache Phoenix → Spark SQL + Delta Lake.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   Phoenix tables (on HBase) → Delta Lake tables\n';
+        migCode += '#   Phoenix SQL → Spark SQL (mostly compatible)\n';
+        migCode += '#   sqlline.py → Databricks SQL Editor / notebook\n';
+        migCode += '#   UPSERT INTO → MERGE INTO (Delta Lake)\n';
+      } else if (/flume/i.test(tool)) {
+        migCode += '# MIGRATION: Flume → Auto Loader / Structured Streaming.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   Flume source → spark.readStream.format("cloudFiles")...\n';
+        migCode += '#   Flume sink → df.writeStream.format("delta")...\n';
+        migCode += '#   Flume channel → Spark checkpointing handles reliability\n';
+        migCode += '#   Flume interceptor → Spark withColumn() transforms\n';
+      } else if (/spark.*(submit|shell)/i.test(tool)) {
+        migCode += '# MIGRATION: Spark Submit → Databricks Jobs.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   spark-submit --class ... → Databricks Job with spark_jar_task\n';
+        migCode += '#   spark-submit script.py → Databricks Job with spark_python_task\n';
+        migCode += '#   --master yarn → Managed by Databricks (remove)\n';
+        migCode += '#   --conf spark.* → Spark config in cluster/job settings\n';
+        migCode += '#   Deploy: databricks jobs create --json @job.json\n';
+      } else if (/kudu/i.test(tool)) {
+        migCode += '# MIGRATION: Apache Kudu → Delta Lake.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   Kudu table → Delta Lake table (ACID, upserts, time travel)\n';
+        migCode += '#   Kudu INSERT/UPSERT → Delta MERGE INTO\n';
+        migCode += '#   Kudu scan with predicates → Delta table with Z-ORDER\n';
+        migCode += '#   Kudu master → Unity Catalog metadata\n';
+      } else if (/flink/i.test(tool)) {
+        migCode += '# MIGRATION: Apache Flink → Structured Streaming.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   Flink streaming job → Structured Streaming with Delta output\n';
+        migCode += '#   Flink SQL → Spark SQL (compatible)\n';
+        migCode += '#   Flink state backend → Delta table checkpointing\n';
+        migCode += '#   flink run → Databricks Workflow job\n';
+      } else if (/storm/i.test(tool)) {
+        migCode += '# MIGRATION: Apache Storm → Structured Streaming.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   Storm topology → Structured Streaming pipeline\n';
+        migCode += '#   Storm spout → spark.readStream source\n';
+        migCode += '#   Storm bolt → DataFrame transformations\n';
+        migCode += '#   Storm DRPC → Databricks Model Serving\n';
+      } else if (/airflow/i.test(tool)) {
+        migCode += '# MIGRATION: Apache Airflow → Databricks Workflows.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   Airflow DAG → Databricks Workflow\n';
+        migCode += '#   Airflow operators → Workflow task types\n';
+        migCode += '#   Airflow schedule_interval → Workflow cron schedule\n';
+        migCode += '#   Airflow connections → Databricks Secret Scopes\n';
+        migCode += '#   Airflow variables → dbutils.widgets / job parameters\n';
+      } else if (/presto|trino/i.test(tool)) {
+        migCode += '# MIGRATION: Presto/Trino → Spark SQL (native in Databricks).\n';
+        migCode += '# Presto/Trino SQL is mostly compatible with Spark SQL.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   Presto catalogs → Unity Catalog federation\n';
+        migCode += '#   Presto connectors → Spark data sources\n';
+        migCode += '#   presto-cli → Databricks SQL Editor\n';
+      } else if (/hbase/i.test(tool)) {
+        migCode += '# MIGRATION: HBase → Delta Lake.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   HBase table → Delta Lake table\n';
+        migCode += '#   HBase Put → df.write.format("delta").saveAsTable()\n';
+        migCode += '#   HBase Scan → spark.table("...").filter()\n';
+        migCode += '#   HBase shell → Databricks SQL Editor / notebook\n';
+        migCode += '#   Column families → Structured columns in Delta\n';
+      } else if (/solr/i.test(tool)) {
+        migCode += '# MIGRATION: Solr → Spark SQL full-text search or external Solr.\n';
+        migCode += '# Options:\n';
+        migCode += '#   1. Keep external Solr and use pysolr from notebooks\n';
+        migCode += '#   2. Replace with Delta Lake + Spark SQL LIKE/RLIKE queries\n';
+        migCode += '#   3. Use Databricks Vector Search for semantic search\n';
+      } else if (/kafka/i.test(tool)) {
+        migCode += '# MIGRATION: Kafka CLI → Structured Streaming.\n';
+        migCode += '# Kafka CLI tools are NOT needed in Databricks:\n';
+        migCode += '#   kafka-console-consumer → spark.readStream.format("kafka")...\n';
+        migCode += '#   kafka-console-producer → df.write.format("kafka")...\n';
+        migCode += '#   kafka-topics → Managed via Confluent/MSK admin or CLI\n';
+      } else if (/custom\s*jar/i.test(tool)) {
+        migCode += '# MIGRATION: Custom JAR → Databricks Library / Job.\n';
+        migCode += '# Key steps:\n';
+        migCode += '#   1. Upload JAR to Unity Catalog Volumes\n';
+        migCode += '#   2. Add to cluster libraries or job libraries\n';
+        migCode += '#   3. Create Databricks Job with spark_jar_task\n';
+        migCode += '#   4. Or install as workspace-scoped library\n';
+      } else if (/shell\s*script/i.test(tool)) {
+        migCode += '# MIGRATION: Shell Script → Databricks Notebook / %sh.\n';
+        migCode += '# Options:\n';
+        migCode += '#   1. Convert shell logic to PySpark (preferred)\n';
+        migCode += '#   2. Use %sh cell magic for simple shell commands\n';
+        migCode += '#   3. Use init scripts for cluster-level setup\n';
+      } else if (/python\s*script/i.test(tool)) {
+        migCode += '# MIGRATION: Python Script → Databricks Notebook cell.\n';
+        migCode += '# Python scripts run natively in Databricks notebooks.\n';
+        migCode += '# For PySpark-compatible logic, convert to DataFrame operations.\n';
+        migCode += '# For pure Python, use standard library + installed packages.\n';
+      } else if (/jdbc|database|sql/i.test(tool)) {
+        migCode += '# MIGRATION: JDBC/Database → Spark JDBC or Unity Catalog.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   JDBC connection → spark.read.format("jdbc").option("url","...").load()\n';
+        migCode += '#   Store credentials → dbutils.secrets.get(scope="...", key="...")\n';
+        migCode += '#   Connection pooling → Spark manages connections per partition\n';
+      } else if (/nifi.*(cache|orchestration)/i.test(tool)) {
+        migCode += '# MIGRATION: NiFi orchestration (Wait/Notify/ControlRate) → Databricks Workflows.\n';
+        migCode += '# Wait/Notify patterns become DAG task dependencies in Databricks Workflows.\n';
+        migCode += '# ControlRate becomes streaming trigger intervals.\n';
+        migCode += '# Distributed Map Cache → Delta Table or Spark broadcast variable.\n';
+      } else if (/redis/i.test(tool)) {
+        migCode += '# MIGRATION: Redis → Delta Lake cache table or Spark cache.\n';
+        migCode += '# Options:\n';
+        migCode += '#   1. Replace with Delta table for persistent key-value store\n';
+        migCode += '#   2. Use df.cache() / df.persist() for in-memory caching\n';
+        migCode += '#   3. Keep external Redis and use redis-py from notebooks\n';
+      } else if (/snowflake/i.test(tool)) {
+        migCode += '# MIGRATION: Snowflake → Lakehouse Federation or Spark JDBC.\n';
+        migCode += '# Options:\n';
+        migCode += '#   1. Lakehouse Federation: CREATE FOREIGN CATALOG snowflake_cat USING SNOWFLAKE\n';
+        migCode += '#   2. Spark connector: spark.read.format("snowflake").option("sfUrl","...").load()\n';
+        migCode += '#   3. Migrate data to Delta Lake for best performance\n';
+      } else if (/mongodb/i.test(tool)) {
+        migCode += '# MIGRATION: MongoDB → MongoDB Spark Connector.\n';
+        migCode += '# Read: spark.read.format("mongodb").option("connection.uri","...").load()\n';
+        migCode += '# Write: df.write.format("mongodb").mode("append").save()\n';
+        migCode += '# Install: mongodb-spark-connector on cluster\n';
+      } else if (/elasticsearch|es/i.test(tool)) {
+        migCode += '# MIGRATION: Elasticsearch → ES Spark Connector.\n';
+        migCode += '# Read: spark.read.format("org.elasticsearch.spark.sql").load("<index>")\n';
+        migCode += '# Write: df.write.format("org.elasticsearch.spark.sql").save("<index>")\n';
+        migCode += '# Install: elasticsearch-spark library on cluster\n';
+      } else if (/cassandra/i.test(tool)) {
+        migCode += '# MIGRATION: Cassandra → Cassandra Spark Connector.\n';
+        migCode += '# Read: spark.read.format("org.apache.spark.sql.cassandra").load()\n';
+        migCode += '# Write: df.write.format("org.apache.spark.sql.cassandra").save()\n';
+        migCode += '# Install: spark-cassandra-connector on cluster\n';
+      } else if (/aws|s3/i.test(tool)) {
+        migCode += '# MIGRATION: AWS S3 → Unity Catalog External Locations.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   s3://bucket/path → External location in Unity Catalog\n';
+        migCode += '#   AWS credentials → Instance profile or storage credential\n';
+        migCode += '#   Read: spark.read.load("s3://...")\n';
+      } else if (/azure|wasb|abfs/i.test(tool)) {
+        migCode += '# MIGRATION: Azure Storage → Unity Catalog External Locations.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   wasbs://... → External location in Unity Catalog\n';
+        migCode += '#   Azure credentials → Service principal / managed identity\n';
+        migCode += '#   Read: spark.read.load("abfss://...")\n';
+      } else if (/gcp|gcs/i.test(tool)) {
+        migCode += '# MIGRATION: GCS → Unity Catalog External Locations.\n';
+        migCode += '# Key changes:\n';
+        migCode += '#   gs://bucket/path → External location in Unity Catalog\n';
+        migCode += '#   GCP credentials → Service account key\n';
+        migCode += '#   Read: spark.read.load("gs://...")\n';
       } else {
         migCode += `# MIGRATION: Review ${tool} usage and map to Databricks equivalent.\n`;
+        migCode += `# Consult Databricks documentation for ${tool} integration options.\n`;
       }
       // List specific usages (capped at 10 for readability)
       const shown = usages.slice(0, 10);
