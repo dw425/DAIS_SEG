@@ -4,6 +4,8 @@
  * Extracted from index.html lines 7033-7066.
  */
 
+let _clearHandler = null;
+
 /**
  * Show the path trace toast with current multi-select state.
  * Extracted from index.html lines 7033-7050.
@@ -29,9 +31,9 @@ export function showPathToast(ms) {
     `<span class="toast-clear" id="pathTraceToastClear">\u2715 Clear</span>`;
   toast.style.display = 'flex';
   const clearBtn = document.getElementById('pathTraceToastClear');
-  if (clearBtn) {
-    clearBtn.addEventListener('click', () => { toast.style.display = 'none'; });
-  }
+  if (_clearHandler && clearBtn) clearBtn.removeEventListener('click', _clearHandler);
+  _clearHandler = () => { toast.style.display = 'none'; };
+  if (clearBtn) clearBtn.addEventListener('click', _clearHandler);
 }
 
 /**

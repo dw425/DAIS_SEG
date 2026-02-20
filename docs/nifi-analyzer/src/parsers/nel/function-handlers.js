@@ -7,6 +7,16 @@
 import { extractNELFuncArgs, unquoteArg, resolveNELArg } from './arg-resolver.js';
 import { javaDateToPython } from './java-date-format.js';
 
+/** Escape a string for safe embedding in a Python string literal (double-quoted) */
+function pyEscape(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+}
+
+/** Escape a string for safe use as a literal pattern in regexp_replace() */
+function regexEscape(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // ================================================================
 // GAP FIX: Grok pattern -> regexp_extract translations
 // ================================================================
@@ -58,80 +68,81 @@ export function applyNELFunction(base, call, mode) {
   }
   if (name === 'replace') {
     var search = unquoteArg(args[0] || ''); var repl = unquoteArg(args[1] || '');
-    return mode === 'col' ? 'regexp_replace(' + base + ', "' + search + '", "' + repl + '")' : base + '.replace("' + search + '", "' + repl + '")';
+    return mode === 'col' ? 'regexp_replace(' + base + ', "' + pyEscape(regexEscape(search)) + '", "' + pyEscape(repl) + '")' : base + '.replace("' + pyEscape(search) + '", "' + pyEscape(repl) + '")';
   }
   if (name === 'replaceall') {
     var pat = unquoteArg(args[0] || ''); var rpl = unquoteArg(args[1] || '');
-    return mode === 'col' ? 'regexp_replace(' + base + ', "' + pat + '", "' + rpl + '")' : 're.sub(r"' + pat + '", "' + rpl + '", ' + base + ')';
+    return mode === 'col' ? 'regexp_replace(' + base + ', "' + pyEscape(pat) + '", "' + pyEscape(rpl) + '")' : 're.sub(r"' + pyEscape(pat) + '", "' + pyEscape(rpl) + '", ' + base + ')';
   }
   if (name === 'replacefirst') {
     var pat2 = unquoteArg(args[0] || ''); var rpl2 = unquoteArg(args[1] || '');
     // col mode: Spark regexp_replace replaces ALL matches (no count param); noted as limitation
-    return mode === 'col' ? 'regexp_replace(' + base + ', "' + pat2 + '", "' + rpl2 + '")' : 're.sub(r"' + pat2 + '", "' + rpl2 + '", str(' + base + '), count=1)';
+    // NiFi replaceFirst takes a literal string, so regex-escape for regexp_replace
+    return mode === 'col' ? 'regexp_replace(' + base + ', "' + pyEscape(regexEscape(pat2)) + '", "' + pyEscape(rpl2) + '")' : 're.sub(r"' + pyEscape(regexEscape(pat2)) + '", "' + pyEscape(rpl2) + '", str(' + base + '), count=1)';
   }
   if (name === 'startswith') {
     var sw = unquoteArg(args[0] || '');
-    return mode === 'col' ? base + '.startswith("' + sw + '")' : base + '.startswith("' + sw + '")';
+    return mode === 'col' ? base + '.startswith("' + pyEscape(sw) + '")' : base + '.startswith("' + pyEscape(sw) + '")';
   }
   if (name === 'endswith') {
     var ew = unquoteArg(args[0] || '');
-    return mode === 'col' ? base + '.endswith("' + ew + '")' : base + '.endswith("' + ew + '")';
+    return mode === 'col' ? base + '.endswith("' + pyEscape(ew) + '")' : base + '.endswith("' + pyEscape(ew) + '")';
   }
   if (name === 'contains') {
     var cv = unquoteArg(args[0] || '');
-    return mode === 'col' ? base + '.contains("' + cv + '")' : '"' + cv + '" in ' + base;
+    return mode === 'col' ? base + '.contains("' + pyEscape(cv) + '")' : '"' + pyEscape(cv) + '" in ' + base;
   }
   if (name === 'matches') {
     var mp = unquoteArg(args[0] || '');
-    return mode === 'col' ? base + '.rlike("' + mp + '")' : 're.match(r"' + mp + '", ' + base + ')';
+    return mode === 'col' ? base + '.rlike("' + pyEscape(mp) + '")' : 're.match(r"' + pyEscape(mp) + '", ' + base + ')';
   }
   if (name === 'find') {
     var fp = unquoteArg(args[0] || '');
-    return mode === 'col' ? 'regexp_extract(' + base + ', "' + fp + '", 0)' : 're.search(r"' + fp + '", ' + base + ').group(0)';
+    return mode === 'col' ? 'regexp_extract(' + base + ', "' + pyEscape(fp) + '", 0)' : 're.search(r"' + pyEscape(fp) + '", ' + base + ').group(0)';
   }
   if (name === 'split') {
     var sp = unquoteArg(args[0] || ',');
-    return mode === 'col' ? 'split(' + base + ', "' + sp + '")' : base + '.split("' + sp + '")';
+    return mode === 'col' ? 'split(' + base + ', "' + pyEscape(sp) + '")' : base + '.split("' + pyEscape(sp) + '")';
   }
   if (name === 'substringbefore') {
     var sb = unquoteArg(args[0] || '');
-    return mode === 'col' ? 'substring_index(' + base + ', "' + sb + '", 1)' : base + '.split("' + sb + '")[0]';
+    return mode === 'col' ? 'substring_index(' + base + ', "' + pyEscape(sb) + '", 1)' : base + '.split("' + pyEscape(sb) + '")[0]';
   }
   if (name === 'substringafter') {
     var sa = unquoteArg(args[0] || '');
-    return mode === 'col' ? 'substring_index(' + base + ', "' + sa + '", -1)' : '"' + sa + '".join(' + base + '.split("' + sa + '")[1:])';
+    return mode === 'col' ? 'substring_index(' + base + ', "' + pyEscape(sa) + '", -1)' : '"' + pyEscape(sa) + '".join(' + base + '.split("' + pyEscape(sa) + '")[1:])';
   }
   if (name === 'padleft' || name === 'leftpad') {
     var plLen = args[0] || '10'; var plChar = unquoteArg(args[1] || ' ');
-    return mode === 'col' ? 'lpad(' + base + ', ' + plLen + ', "' + plChar + '")' : base + '.rjust(' + plLen + ', "' + plChar + '")';
+    return mode === 'col' ? 'lpad(' + base + ', ' + plLen + ', "' + pyEscape(plChar) + '")' : base + '.rjust(' + plLen + ', "' + pyEscape(plChar) + '")';
   }
   if (name === 'padright' || name === 'rightpad') {
     var prLen = args[0] || '10'; var prChar = unquoteArg(args[1] || ' ');
-    return mode === 'col' ? 'rpad(' + base + ', ' + prLen + ', "' + prChar + '")' : base + '.ljust(' + prLen + ', "' + prChar + '")';
+    return mode === 'col' ? 'rpad(' + base + ', ' + prLen + ', "' + pyEscape(prChar) + '")' : base + '.ljust(' + prLen + ', "' + pyEscape(prChar) + '")';
   }
   if (name === 'indexof') {
     var io = unquoteArg(args[0] || '');
-    return mode === 'col' ? 'locate("' + io + '", ' + base + ')' : base + '.find("' + io + '")';
+    return mode === 'col' ? 'locate("' + pyEscape(io) + '", ' + base + ')' : base + '.find("' + pyEscape(io) + '")';
   }
   if (name === 'getdelimitedfield') {
     var idx = args[0] || '1'; var delim = unquoteArg(args[1] || ',');
-    return mode === 'col' ? 'split(' + base + ', "' + delim + '")[' + (parseInt(idx)-1) + ']' : base + '.split("' + delim + '")[' + (parseInt(idx)-1) + ']';
+    return mode === 'col' ? 'split(' + base + ', "' + pyEscape(delim) + '")[' + (parseInt(idx)-1) + ']' : base + '.split("' + pyEscape(delim) + '")[' + (parseInt(idx)-1) + ']';
   }
   if (name === 'append') {
     var av = unquoteArg(args[0] || '');
-    return mode === 'col' ? 'concat(' + base + ', lit("' + av + '"))' : base + ' + "' + av + '"';
+    return mode === 'col' ? 'concat(' + base + ', lit("' + pyEscape(av) + '"))' : base + ' + "' + pyEscape(av) + '"';
   }
   if (name === 'prepend') {
     var pv = unquoteArg(args[0] || '');
-    return mode === 'col' ? 'concat(lit("' + pv + '"), ' + base + ')' : '"' + pv + '" + ' + base;
+    return mode === 'col' ? 'concat(lit("' + pyEscape(pv) + '"), ' + base + ')' : '"' + pyEscape(pv) + '" + ' + base;
   }
   if (name === 'equals') {
     var eq = unquoteArg(args[0] || '');
-    return mode === 'col' ? '(' + base + ' == lit("' + eq + '"))' : '(' + base + ' == "' + eq + '")';
+    return mode === 'col' ? '(' + base + ' == lit("' + pyEscape(eq) + '"))' : '(' + base + ' == "' + pyEscape(eq) + '")';
   }
   if (name === 'equalsignorecase') {
     var eic = unquoteArg(args[0] || '');
-    return mode === 'col' ? '(lower(' + base + ') == lit("' + eic.toLowerCase() + '"))' : '(' + base + '.lower() == "' + eic.toLowerCase() + '")';
+    return mode === 'col' ? '(lower(' + base + ') == lit("' + pyEscape(eic.toLowerCase()) + '"))' : '(' + base + '.lower() == "' + pyEscape(eic.toLowerCase()) + '")';
   }
 
   // -- Math functions --
@@ -277,9 +288,9 @@ export function applyNELFunction(base, call, mode) {
   if (name === 'in') {
     var inList = args.map(function(a) { return unquoteArg(a); });
     if (mode === 'col') {
-      return base + '.isin(' + inList.map(function(v) { return '"' + v + '"'; }).join(', ') + ')';
+      return base + '.isin(' + inList.map(function(v) { return '"' + pyEscape(v) + '"'; }).join(', ') + ')';
     }
-    return base + ' in [' + inList.map(function(v) { return '"' + v + '"'; }).join(', ') + ']';
+    return base + ' in [' + inList.map(function(v) { return '"' + pyEscape(v) + '"'; }).join(', ') + ']';
   }
 
   // -- Math namespace functions --

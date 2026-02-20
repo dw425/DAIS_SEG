@@ -8,6 +8,9 @@
  * @module validators/line-validator
  */
 
+const PROP_COVERAGE_GOOD = 70;
+const PROP_COVERAGE_PARTIAL = 30;
+
 /**
  * Validate processor-to-cell line mapping and property coverage.
  *
@@ -62,7 +65,7 @@ export async function validateLines({
       }
 
       const propCoverage = importantProps.length > 0 ? Math.round((propsInCode / importantProps.length) * 100) : 100;
-      const status = !m.mapped ? 'missing' : matchedCellIndices.length === 0 ? 'no-cell' : propCoverage >= 70 ? 'good' : propCoverage >= 30 ? 'partial' : 'weak';
+      const status = !m.mapped ? 'missing' : matchedCellIndices.length === 0 ? 'no-cell' : propCoverage >= PROP_COVERAGE_GOOD ? 'good' : propCoverage >= PROP_COVERAGE_PARTIAL ? 'partial' : 'weak';
 
       if (status === 'good') lineMatched++;
       else lineGaps++;

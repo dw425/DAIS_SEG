@@ -9,6 +9,7 @@
  */
 
 import { ROLE_TIER_ORDER } from '../constants/nifi-role-map.js';
+import { CONFIDENCE_THRESHOLDS } from '../constants/confidence-thresholds.js';
 
 /**
  * Generate a structured migration report from assessment mappings and NiFi flow.
@@ -32,7 +33,7 @@ export function generateMigrationReport(mappings, nifi) {
     byGroup[m.group].total++; if (m.mapped) byGroup[m.group].mapped++; else byGroup[m.group].unmapped++;
     byGroup[m.group].procs.push(m);
   });
-  const gaps = mappings.filter(m => !m.mapped || m.confidence < 0.3).map(m => ({
+  const gaps = mappings.filter(m => !m.mapped || m.confidence < CONFIDENCE_THRESHOLDS.PARTIAL).map(m => ({
     name: m.name, type: m.type, group: m.group, role: m.role,
     reason: m.gapReason || `Low confidence mapping (${Math.round(m.confidence * 100)}%)`,
     recommendation: m.type.match(/^(Listen|Handle)/) ? 'Consider Databricks Model Serving or external API gateway'

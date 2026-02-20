@@ -11,6 +11,7 @@ import { renderConnections } from './render-connections.js';
 import { clearRouteTrace } from './route-trace.js';
 import { applySidebarFilter, clearSidebarFilter } from './sidebar-filter.js';
 import { tierFilter } from './filter-toolbar.js';
+import { escapeHTML } from '../../security/html-sanitizer.js';
 
 /** Module-level escape handler reference for cleanup between renders. */
 let _escapeHandler = null;
@@ -140,7 +141,7 @@ export function renderTierDiagram(tierData, containerId, detailId, legendId) {
       if (d.role) {
         const roleColors = { source: '#3B82F6', sink: '#21C354', route: '#EAB308', transform: '#A855F7', process: '#6366F1', utility: '#808495' };
         const barW = Math.max(4, (d.total / maxTotal) * 80);
-        row.innerHTML = `<span class="density-bar" style="width:${barW}px;background:${roleColors[d.role] || '#808495'}" title="${d.total}x"></span><span class="density-label" title="${d.name}">${d.name} (${d.total})</span>`;
+        row.innerHTML = `<span class="density-bar" style="width:${barW}px;background:${roleColors[d.role] || '#808495'}" title="${d.total}x"></span><span class="density-label" title="${escapeHTML(d.name)}">${escapeHTML(d.name)} (${d.total})</span>`;
       } else {
         const wPct = Math.max(2, (d.writers / maxTotal) * 60);
         const rPct = Math.max(0, (d.readers / maxTotal) * 60);
@@ -148,7 +149,7 @@ export function renderTierDiagram(tierData, containerId, detailId, legendId) {
         let barsHTML = `<span class="density-bar" style="width:${wPct}px;background:#EF4444" title="${d.writers} writer(s)"></span>`;
         if (d.readers) barsHTML += `<span class="density-bar" style="width:${rPct}px;background:#3B82F6" title="${d.readers} reader(s)"></span>`;
         if (d.lookups) barsHTML += `<span class="density-bar" style="width:${lPct}px;background:#F59E0B" title="${d.lookups} lookup(s)"></span>`;
-        row.innerHTML = barsHTML + `<span class="density-label" title="${d.name}">${d.name}</span>`;
+        row.innerHTML = barsHTML + `<span class="density-label" title="${escapeHTML(d.name)}">${escapeHTML(d.name)}</span>`;
       }
 
       // Click handler for filter
