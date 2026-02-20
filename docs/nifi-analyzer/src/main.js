@@ -39,6 +39,7 @@ import { handleError, AppError, wrapAsync, clearErrorLog } from './core/errors.j
 // 3. UI Modules
 // ================================================================
 import { initTabs, switchTab, setTabStatus, unlockTab } from './ui/tabs.js';
+import { escapeHTML } from './security/html-sanitizer.js';
 import { initFileUpload, getUploadedContent, getUploadedName } from './ui/file-upload.js';
 import { loadSampleFlow, loadSampleFile } from './ui/sample-flows.js';
 import { parseProgress, parseProgressHide, uiYield } from './ui/progress.js';
@@ -62,6 +63,8 @@ import { generateNotebookAndWorkflow } from './generators/index.js';
 import { runValidationEngine } from './validators/index.js';
 import {
   generateReportSuite,
+  generateFinalReport,
+  runValueAnalysis,
   downloadNotebook,
   downloadWorkflow,
   downloadReport,
@@ -72,6 +75,7 @@ import {
   exportAsJupyterNotebook,
   exportWorkflowYAML,
 } from './reporters/index.js';
+import { NIFI_DATABRICKS_MAP } from './constants/nifi-databricks-map.js';
 
 // ================================================================
 // 5. Initial State
@@ -516,6 +520,92 @@ document.addEventListener('DOMContentLoaded', () => {
   window.generateNotebookAndWorkflow = generateNotebookAndWorkflow;
   window.runValidationEngine = runValidationEngine;
   window.generateReportSuite = generateReportSuite;
+
+  // Steps 6-8: Final Report, Validation, Value Analysis
+  const metricsHTML = (items) => '<div class="metrics">' + items.map(item => {
+    const l = Array.isArray(item) ? item[0] : item.label;
+    const v = Array.isArray(item) ? item[1] : item.value;
+    const d = Array.isArray(item) ? item[2] : item.delta;
+    const c = Array.isArray(item) ? '' : (item.color || '');
+    return `<div class="metric"><div class="label">${l}</div><div class="value"${c ? ' style="color:' + c + '"' : ''}>${v}</div>${d ? `<div class="delta">${d}</div>` : ''}</div>`;
+  }).join('') + '</div>';
+
+  window.generateFinalReport = async () => {
+    const STATE = getState();
+    if (!STATE.parsed) return;
+    setTabStatus('reportFinal', 'processing');
+    const { html, report } = generateFinalReport(STATE, metricsHTML, escapeHTML);
+    setState({ finalReport: report });
+    const el = document.getElementById('reportFinalResults');
+    if (el) el.innerHTML = html;
+    setTabStatus('reportFinal', 'done');
+    unlockTab('validate');
+    const notReady = document.getElementById('validateNotReady');
+    const ready = document.getElementById('validateReady');
+    if (notReady) notReady.classList.add('hidden');
+    if (ready) ready.classList.remove('hidden');
+  };
+
+  window.runValidation = async () => {
+    const STATE = getState();
+    if (!STATE.parsed || !STATE.parsed._nifi || !STATE.notebook) return;
+    setTabStatus('validate', 'processing');
+    const el = document.getElementById('validateResults');
+    const result = await runValidationEngine({
+      nifi: STATE.parsed._nifi,
+      mappings: STATE.notebook.mappings || STATE.assessment?.mappings || [],
+      cells: STATE.notebook.cells || [],
+      systems: STATE.assessment?.systems || {},
+      nifiDatabricksMap: NIFI_DATABRICKS_MAP,
+      onProgress: (pct, msg) => {
+        if (el) el.innerHTML = `<div style="color:var(--text2);padding:16px">${msg} (${pct}%)</div>`;
+      },
+    });
+    setState({ validation: result });
+    if (el) {
+      const score = result.overallScore || 0;
+      const cls = score >= 80 ? 'green' : score >= 50 ? 'amber' : 'red';
+      let vh = `<hr class="divider"><div class="score-big" style="color:var(--${cls})">Validation Score: ${Math.round(score)}%</div>`;
+      vh += metricsHTML([
+        { label: 'Intent Match', value: Math.round(result.intentScore || 0) + '%' },
+        { label: 'Line Coverage', value: Math.round(result.lineScore || 0) + '%' },
+        { label: 'Reverse Eng.', value: Math.round(result.reScore || 0) + '%' },
+        { label: 'Function Map', value: Math.round(result.funcScore || 0) + '%' },
+      ]);
+      if (result.allGaps && result.allGaps.length) {
+        vh += '<hr class="divider"><h3>Gaps (' + result.allGaps.length + ')</h3>';
+        vh += '<ul style="margin:0;padding-left:20px;font-size:0.85rem">';
+        result.allGaps.slice(0, 30).forEach(g => {
+          vh += '<li style="margin:4px 0">' + escapeHTML(g.processor || g.name || '') + ': ' + escapeHTML(g.gap || g.reason || g.message || '') + '</li>';
+        });
+        if (result.allGaps.length > 30) vh += '<li>... and ' + (result.allGaps.length - 30) + ' more</li>';
+        vh += '</ul>';
+      }
+      vh += '<hr class="divider"><button class="btn" onclick="downloadValidationReport()">Download Validation Report</button>';
+      el.innerHTML = vh;
+    }
+    setTabStatus('validate', 'done');
+    unlockTab('value');
+    const notReady = document.getElementById('valueNotReady');
+    const ready = document.getElementById('valueReady');
+    if (notReady) notReady.classList.add('hidden');
+    if (ready) ready.classList.remove('hidden');
+  };
+
+  window.runValueAnalysis = () => {
+    const STATE = getState();
+    if (!STATE.parsed || !STATE.parsed._nifi || !STATE.notebook) return;
+    setTabStatus('value', 'processing');
+    const html = runValueAnalysis({
+      nifi: STATE.parsed._nifi,
+      notebook: STATE.notebook,
+      escapeHTML,
+    });
+    setState({ valueAnalysis: html });
+    const el = document.getElementById('valueResults');
+    if (el) el.innerHTML = typeof html === 'string' ? html : (html?.html || '');
+    setTabStatus('value', 'done');
+  };
 
   // ── Done ──
   console.info('[main] NiFi Flow Analyzer initialized');
