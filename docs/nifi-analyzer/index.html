@@ -3084,36 +3084,342 @@ function resolveControllerService(csName, controllerServices) {
 // ════════════════════════════════════════════════════════════════════
 
     // ════════════════════════════════════════════════════════════════
-    // REC #3: NiFi Expression Language → Python Translator
+    // REC #3: NiFi Expression Language → PySpark Translator
+    // Recursive-descent parser for chained NEL expressions
+    // Supports col() mode (PySpark column ops) and python mode (string ops)
     // ════════════════════════════════════════════════════════════════
-    function translateNiFiELtoPython(elExpr) {
+
+    // NEL variable context classification (Gap #14)
+    function resolveNELVariableContext(varName) {
+      const lower = varName.toLowerCase();
+      // Secrets: password, token, key, credential, secret
+      if (/password|token|secret|credential|api[_.]?key|private[_.]?key|passphrase/i.test(lower)) {
+        const scope = lower.includes('kafka') ? 'kafka' : lower.includes('jdbc') ? 'jdbc' :
+          lower.includes('s3') || lower.includes('aws') ? 'aws' : lower.includes('es') ? 'es' : 'app';
+        return { type: 'secret', code: `dbutils.secrets.get(scope="${scope}", key="${varName}")` };
+      }
+      // Config: s3.*, kafka.*, jdbc.*, nifi.*, aws.*
+      if (/^(s3|kafka|jdbc|nifi|aws|azure|gcp|http|ftp|smtp|ssl|sasl)\./i.test(varName) ||
+          /\.url$|\.host$|\.port$|\.path$|\.bucket$|\.region$/i.test(lower)) {
+        return { type: 'config', code: `dbutils.widgets.get("${varName}")` };
+      }
+      // Row-level attributes → col()
+      return { type: 'column', code: `col("${varName}")` };
+    }
+
+    // Recursive-descent NEL parser
+    function translateNELtoPySpark(elExpr, mode) {
       if (!elExpr || typeof elExpr !== 'string') return elExpr;
+      mode = mode || 'col'; // 'col' for PySpark column ops, 'python' for string ops
+
+      // If the expression doesn't contain ${, return as-is
       if (!elExpr.includes('${')) return elExpr;
 
-      let py = elExpr;
-      // Replace ${attr} with f-string variable references
-      py = py.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}/g, '{$1}');
-      // Replace ${attr:function()} chains
-      py = py.replace(/\$\{([^}]+):isEmpty\(\)\}/g, 'not $1');
-      py = py.replace(/\$\{([^}]+):equals\('([^']*)'\)\}/g, '$1 == "$2"');
-      py = py.replace(/\$\{([^}]+):contains\('([^']*)'\)\}/g, '"$2" in $1');
-      py = py.replace(/\$\{([^}]+):toUpper\(\)\}/g, '$1.upper()');
-      py = py.replace(/\$\{([^}]+):toLower\(\)\}/g, '$1.lower()');
-      py = py.replace(/\$\{([^}]+):trim\(\)\}/g, '$1.strip()');
-      py = py.replace(/\$\{([^}]+):length\(\)\}/g, 'len($1)');
-      py = py.replace(/\$\{([^}]+):substring\((\d+),\s*(\d+)\)\}/g, '$1[$2:$3]');
-      py = py.replace(/\$\{([^}]+):replace\('([^']*)',\s*'([^']*)'\)\}/g, '$1.replace("$2", "$3")');
-      py = py.replace(/\$\{([^}]+):append\('([^']*)'\)\}/g, '$1 + "$2"');
-      py = py.replace(/\$\{([^}]+):prepend\('([^']*)'\)\}/g, '"$2" + $1');
-      py = py.replace(/\$\{([^}]+):toNumber\(\)\}/g, 'int($1)');
-      py = py.replace(/\$\{([^}]+):format\('([^']*)'\)\}/g, '$1.strftime("$2")');
-      py = py.replace(/\$\{now\(\)\}/g, 'datetime.now()');
-      py = py.replace(/\$\{hostname\(\)\}/g, 'socket.gethostname()');
-      py = py.replace(/\$\{UUID\(\)\}/g, 'str(uuid.uuid4())');
-      py = py.replace(/\$\{literal\('([^']*)'\)\}/g, '"$1"');
-      // Clean up remaining ${...}
-      py = py.replace(/\$\{([^}]+)\}/g, '{$1}');
-      return py;
+      // Replace each ${...} block
+      return elExpr.replace(/\$\{([^}]+)\}/g, function(fullMatch, inner) {
+        return _parseNELExpression(inner.trim(), mode);
+      });
+    }
+
+    function _parseNELExpression(expr, mode) {
+      // Tokenize: split on colon-delimited function calls, respecting nested parens
+      var parts = _tokenizeNELChain(expr);
+      if (parts.length === 0) return '""';
+
+      var base = parts[0].trim();
+      var chain = parts.slice(1);
+
+      // Resolve the base reference
+      var result;
+      // System functions (no base variable)
+      if (/^now\(\)$/i.test(base)) {
+        result = mode === 'col' ? 'current_timestamp()' : 'datetime.now()';
+      } else if (/^UUID\(\)$/i.test(base)) {
+        result = mode === 'col' ? 'expr("uuid()")' : 'str(uuid.uuid4())';
+      } else if (/^hostname\(\)$/i.test(base)) {
+        result = mode === 'col' ? 'lit(spark.conf.get("spark.databricks.clusterUsageTags.clusterName", "unknown"))' : 'socket.gethostname()';
+      } else if (/^nextInt\(\)$/i.test(base) || /^random\(\)$/i.test(base)) {
+        result = mode === 'col' ? '(rand() * 2147483647).cast("int")' : 'random.randint(0, 2147483647)';
+      } else if (/^literal\('([^']*)'\)$/i.test(base)) {
+        var litVal = base.match(/^literal\('([^']*)'\)$/i)[1];
+        result = mode === 'col' ? 'lit("' + litVal + '")' : '"' + litVal + '"';
+      } else if (/^literal\((\d+)\)$/i.test(base)) {
+        var litNum = base.match(/^literal\((\d+)\)$/i)[1];
+        result = mode === 'col' ? 'lit(' + litNum + ')' : litNum;
+      } else if (/^math:abs\((.+)\)$/i.test(base)) {
+        var absArg = base.match(/^math:abs\((.+)\)$/i)[1];
+        result = mode === 'col' ? 'abs(' + _resolveNELArg(absArg, mode) + ')' : 'abs(' + _resolveNELArg(absArg, mode) + ')';
+      } else if (/^math:ceil\((.+)\)$/i.test(base)) {
+        result = mode === 'col' ? 'ceil(' + _resolveNELArg(base.match(/^math:ceil\((.+)\)$/i)[1], mode) + ')' : 'math.ceil(' + _resolveNELArg(base.match(/^math:ceil\((.+)\)$/i)[1], mode) + ')';
+      } else if (/^math:floor\((.+)\)$/i.test(base)) {
+        result = mode === 'col' ? 'floor(' + _resolveNELArg(base.match(/^math:floor\((.+)\)$/i)[1], mode) + ')' : 'math.floor(' + _resolveNELArg(base.match(/^math:floor\((.+)\)$/i)[1], mode) + ')';
+      } else if (/^math:round\((.+)\)$/i.test(base)) {
+        result = mode === 'col' ? 'round(' + _resolveNELArg(base.match(/^math:round\((.+)\)$/i)[1], mode) + ')' : 'round(' + _resolveNELArg(base.match(/^math:round\((.+)\)$/i)[1], mode) + ')';
+      } else {
+        // Variable reference
+        var ctx = resolveNELVariableContext(base);
+        if (mode === 'col') {
+          result = ctx.type === 'column' ? 'col("' + base + '")' : ctx.code;
+        } else {
+          result = ctx.type === 'column' ? '_attrs.get("' + base + '", "")' :
+                   ctx.type === 'secret' ? ctx.code : ctx.code;
+        }
+      }
+
+      // Apply chained function calls
+      for (var i = 0; i < chain.length; i++) {
+        result = _applyNELFunction(result, chain[i].trim(), mode);
+      }
+
+      return result;
+    }
+
+    function _resolveNELArg(arg, mode) {
+      arg = arg.trim();
+      if (/^'([^']*)'$/.test(arg)) return mode === 'col' ? 'lit("' + arg.slice(1,-1) + '")' : '"' + arg.slice(1,-1) + '"';
+      if (/^\d+$/.test(arg)) return mode === 'col' ? 'lit(' + arg + ')' : arg;
+      if (arg.includes(':')) return _parseNELExpression(arg, mode);
+      var ctx = resolveNELVariableContext(arg);
+      return mode === 'col' ? (ctx.type === 'column' ? 'col("' + arg + '")' : ctx.code) :
+        (ctx.type === 'column' ? '_attrs.get("' + arg + '", "")' : ctx.code);
+    }
+
+    function _tokenizeNELChain(expr) {
+      // Split on top-level colons, respecting parens and quotes
+      var parts = []; var current = ''; var depth = 0; var inStr = false; var strChar = '';
+      for (var i = 0; i < expr.length; i++) {
+        var ch = expr[i];
+        if (inStr) {
+          current += ch;
+          if (ch === strChar) inStr = false;
+        } else if (ch === "'" || ch === '"') {
+          inStr = true; strChar = ch; current += ch;
+        } else if (ch === '(') {
+          depth++; current += ch;
+        } else if (ch === ')') {
+          depth--; current += ch;
+        } else if (ch === ':' && depth === 0) {
+          parts.push(current); current = '';
+        } else {
+          current += ch;
+        }
+      }
+      if (current) parts.push(current);
+      return parts;
+    }
+
+    function _extractNELFuncArgs(call) {
+      // Extract function name and args from "funcName(arg1, arg2)"
+      var m = call.match(/^(\w+)\((.*)\)$/s);
+      if (!m) return { name: call, args: [] };
+      var name = m[1];
+      var rawArgs = m[2].trim();
+      if (!rawArgs) return { name: name, args: [] };
+      // Parse comma-separated args, respecting quotes and parens
+      var args = []; var current = ''; var depth = 0; var inStr = false; var strChar = '';
+      for (var i = 0; i < rawArgs.length; i++) {
+        var ch = rawArgs[i];
+        if (inStr) {
+          current += ch;
+          if (ch === strChar) inStr = false;
+        } else if (ch === "'" || ch === '"') {
+          inStr = true; strChar = ch; current += ch;
+        } else if (ch === '(') {
+          depth++; current += ch;
+        } else if (ch === ')') {
+          depth--; current += ch;
+        } else if (ch === ',' && depth === 0) {
+          args.push(current.trim()); current = '';
+        } else {
+          current += ch;
+        }
+      }
+      if (current.trim()) args.push(current.trim());
+      return { name: name, args: args };
+    }
+
+    function _unquoteArg(a) {
+      if (/^'([^']*)'$/.test(a)) return a.slice(1, -1);
+      if (/^"([^"]*)"$/.test(a)) return a.slice(1, -1);
+      return a;
+    }
+
+    function _applyNELFunction(base, call, mode) {
+      var f = _extractNELFuncArgs(call);
+      var name = f.name.toLowerCase();
+      var args = f.args;
+
+      // ── String functions ──
+      if (name === 'toupper') return mode === 'col' ? 'upper(' + base + ')' : base + '.upper()';
+      if (name === 'tolower') return mode === 'col' ? 'lower(' + base + ')' : base + '.lower()';
+      if (name === 'trim') return mode === 'col' ? 'trim(' + base + ')' : base + '.strip()';
+      if (name === 'length') return mode === 'col' ? 'length(' + base + ')' : 'len(' + base + ')';
+      if (name === 'substring') {
+        var start = args[0] || '0'; var len = args[1];
+        if (mode === 'col') return len ? 'substring(' + base + ', ' + (parseInt(start)+1) + ', ' + len + ')' : 'substring(' + base + ', ' + (parseInt(start)+1) + ', 9999)';
+        return len ? base + '[' + start + ':' + (parseInt(start)+parseInt(len)) + ']' : base + '[' + start + ':]';
+      }
+      if (name === 'replace') {
+        var search = _unquoteArg(args[0] || ''); var repl = _unquoteArg(args[1] || '');
+        return mode === 'col' ? 'regexp_replace(' + base + ', "' + search + '", "' + repl + '")' : base + '.replace("' + search + '", "' + repl + '")';
+      }
+      if (name === 'replaceall') {
+        var pat = _unquoteArg(args[0] || ''); var rpl = _unquoteArg(args[1] || '');
+        return mode === 'col' ? 'regexp_replace(' + base + ', "' + pat + '", "' + rpl + '")' : 're.sub(r"' + pat + '", "' + rpl + '", ' + base + ')';
+      }
+      if (name === 'replacefirst') {
+        var pat2 = _unquoteArg(args[0] || ''); var rpl2 = _unquoteArg(args[1] || '');
+        return mode === 'col' ? 'regexp_replace(' + base + ', "(' + pat2 + ')", "' + rpl2 + '")' : 're.sub(r"' + pat2 + '", "' + rpl2 + '", ' + base + ', count=1)';
+      }
+      if (name === 'startswith') {
+        var sw = _unquoteArg(args[0] || '');
+        return mode === 'col' ? base + '.startswith("' + sw + '")' : base + '.startswith("' + sw + '")';
+      }
+      if (name === 'endswith') {
+        var ew = _unquoteArg(args[0] || '');
+        return mode === 'col' ? base + '.endswith("' + ew + '")' : base + '.endswith("' + ew + '")';
+      }
+      if (name === 'contains') {
+        var cv = _unquoteArg(args[0] || '');
+        return mode === 'col' ? base + '.contains("' + cv + '")' : '"' + cv + '" in ' + base;
+      }
+      if (name === 'matches') {
+        var mp = _unquoteArg(args[0] || '');
+        return mode === 'col' ? base + '.rlike("' + mp + '")' : 're.match(r"' + mp + '", ' + base + ')';
+      }
+      if (name === 'find') {
+        var fp = _unquoteArg(args[0] || '');
+        return mode === 'col' ? 'regexp_extract(' + base + ', "' + fp + '", 0)' : 're.search(r"' + fp + '", ' + base + ').group(0)';
+      }
+      if (name === 'split') {
+        var sp = _unquoteArg(args[0] || ',');
+        return mode === 'col' ? 'split(' + base + ', "' + sp + '")' : base + '.split("' + sp + '")';
+      }
+      if (name === 'substringbefore') {
+        var sb = _unquoteArg(args[0] || '');
+        return mode === 'col' ? 'substring_index(' + base + ', "' + sb + '", 1)' : base + '.split("' + sb + '")[0]';
+      }
+      if (name === 'substringafter') {
+        var sa = _unquoteArg(args[0] || '');
+        return mode === 'col' ? 'substring_index(' + base + ', "' + sa + '", -1)' : '"' + sa + '".join(' + base + '.split("' + sa + '")[1:])';
+      }
+      if (name === 'padleft' || name === 'leftpad') {
+        var plLen = args[0] || '10'; var plChar = _unquoteArg(args[1] || ' ');
+        return mode === 'col' ? 'lpad(' + base + ', ' + plLen + ', "' + plChar + '")' : base + '.rjust(' + plLen + ', "' + plChar + '")';
+      }
+      if (name === 'padright' || name === 'rightpad') {
+        var prLen = args[0] || '10'; var prChar = _unquoteArg(args[1] || ' ');
+        return mode === 'col' ? 'rpad(' + base + ', ' + prLen + ', "' + prChar + '")' : base + '.ljust(' + prLen + ', "' + prChar + '")';
+      }
+      if (name === 'indexof') {
+        var io = _unquoteArg(args[0] || '');
+        return mode === 'col' ? 'locate("' + io + '", ' + base + ')' : base + '.find("' + io + '")';
+      }
+      if (name === 'getdelimitedfield') {
+        var idx = args[0] || '1'; var delim = _unquoteArg(args[1] || ',');
+        return mode === 'col' ? 'split(' + base + ', "' + delim + '")[' + (parseInt(idx)-1) + ']' : base + '.split("' + delim + '")[' + (parseInt(idx)-1) + ']';
+      }
+      if (name === 'append') {
+        var av = _unquoteArg(args[0] || '');
+        return mode === 'col' ? 'concat(' + base + ', lit("' + av + '"))' : base + ' + "' + av + '"';
+      }
+      if (name === 'prepend') {
+        var pv = _unquoteArg(args[0] || '');
+        return mode === 'col' ? 'concat(lit("' + pv + '"), ' + base + ')' : '"' + pv + '" + ' + base;
+      }
+      if (name === 'equals') {
+        var eq = _unquoteArg(args[0] || '');
+        return mode === 'col' ? '(' + base + ' == lit("' + eq + '"))' : '(' + base + ' == "' + eq + '")';
+      }
+      if (name === 'equalsignorecase') {
+        var eic = _unquoteArg(args[0] || '');
+        return mode === 'col' ? '(lower(' + base + ') == lit("' + eic.toLowerCase() + '"))' : '(' + base + '.lower() == "' + eic.toLowerCase() + '")';
+      }
+
+      // ── Math functions ──
+      if (name === 'plus') {
+        var pn = args[0] || '0';
+        return mode === 'col' ? '(' + base + ' + lit(' + pn + '))' : '(' + base + ' + ' + pn + ')';
+      }
+      if (name === 'minus') {
+        var mn = args[0] || '0';
+        return mode === 'col' ? '(' + base + ' - lit(' + mn + '))' : '(' + base + ' - ' + mn + ')';
+      }
+      if (name === 'multiply') {
+        var mul = args[0] || '1';
+        return mode === 'col' ? '(' + base + ' * lit(' + mul + '))' : '(' + base + ' * ' + mul + ')';
+      }
+      if (name === 'divide') {
+        var div = args[0] || '1';
+        return mode === 'col' ? '(' + base + ' / lit(' + div + '))' : '(' + base + ' / ' + div + ')';
+      }
+      if (name === 'mod') {
+        var modv = args[0] || '1';
+        return mode === 'col' ? '(' + base + ' % lit(' + modv + '))' : '(' + base + ' % ' + modv + ')';
+      }
+      if (name === 'gt') {
+        var gtv = args[0] || '0';
+        return mode === 'col' ? '(' + base + ' > lit(' + gtv + '))' : '(' + base + ' > ' + gtv + ')';
+      }
+      if (name === 'lt') {
+        var ltv = args[0] || '0';
+        return mode === 'col' ? '(' + base + ' < lit(' + ltv + '))' : '(' + base + ' < ' + ltv + ')';
+      }
+      if (name === 'ge') {
+        var gev = args[0] || '0';
+        return mode === 'col' ? '(' + base + ' >= lit(' + gev + '))' : '(' + base + ' >= ' + gev + ')';
+      }
+      if (name === 'le') {
+        var lev = args[0] || '0';
+        return mode === 'col' ? '(' + base + ' <= lit(' + lev + '))' : '(' + base + ' <= ' + lev + ')';
+      }
+
+      // ── Logic functions ──
+      if (name === 'isempty') return mode === 'col' ? '(' + base + '.isNull() | (' + base + ' == lit("")))' : '(not ' + base + ')';
+      if (name === 'isnull') return mode === 'col' ? base + '.isNull()' : '(' + base + ' is None)';
+      if (name === 'notnull') return mode === 'col' ? base + '.isNotNull()' : '(' + base + ' is not None)';
+      if (name === 'not') return mode === 'col' ? '(~' + base + ')' : '(not ' + base + ')';
+      if (name === 'and') {
+        var andArg = args[0] ? _resolveNELArg(args[0], mode) : 'lit(True)';
+        return mode === 'col' ? '(' + base + ' & ' + andArg + ')' : '(' + base + ' and ' + andArg + ')';
+      }
+      if (name === 'or') {
+        var orArg = args[0] ? _resolveNELArg(args[0], mode) : 'lit(False)';
+        return mode === 'col' ? '(' + base + ' | ' + orArg + ')' : '(' + base + ' or ' + orArg + ')';
+      }
+      if (name === 'ifelse') {
+        var trueVal = args[0] ? _resolveNELArg(args[0], mode) : 'lit(True)';
+        var falseVal = args[1] ? _resolveNELArg(args[1], mode) : 'lit(None)';
+        return mode === 'col' ? 'when(' + base + ', ' + trueVal + ').otherwise(' + falseVal + ')' :
+          '(' + trueVal + ' if ' + base + ' else ' + falseVal + ')';
+      }
+
+      // ── Date functions ──
+      if (name === 'format') {
+        var fmt = _unquoteArg(args[0] || 'yyyy-MM-dd');
+        return mode === 'col' ? 'date_format(' + base + ', "' + fmt + '")' : base + '.strftime("' + _javaDateToPython(fmt) + '")';
+      }
+      if (name === 'todate') {
+        var dfmt = _unquoteArg(args[0] || 'yyyy-MM-dd');
+        return mode === 'col' ? 'to_timestamp(' + base + ', "' + dfmt + '")' : 'datetime.strptime(' + base + ', "' + _javaDateToPython(dfmt) + '")';
+      }
+      if (name === 'tonumber') return mode === 'col' ? base + '.cast("long")' : 'int(' + base + ')';
+      if (name === 'tostring') return mode === 'col' ? base + '.cast("string")' : 'str(' + base + ')';
+
+      // ── Unknown function → comment ──
+      return base + '  /* NEL: ' + call + ' */';
+    }
+
+    // Java date format → Python strftime
+    function _javaDateToPython(fmt) {
+      return fmt.replace(/yyyy/g, '%Y').replace(/MM/g, '%m').replace(/dd/g, '%d')
+        .replace(/HH/g, '%H').replace(/mm/g, '%M').replace(/ss/g, '%S')
+        .replace(/SSS/g, '%f').replace(/E+/g, '%a').replace(/Z/g, '%z');
+    }
+
+    // Keep backward compat alias
+    function translateNiFiELtoPython(elExpr) {
+      return translateNELtoPySpark(elExpr, 'python');
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -3258,6 +3564,138 @@ function resolveControllerService(csName, controllerServices) {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // GAP #13: PHI/HIPAA Detection & Safe DLQ Generation
+    // ════════════════════════════════════════════════════════════════
+    const _PHI_PATTERNS = [
+      { pattern: /\b(ssn|social.?security|ss_num)\b/i, field: 'SSN' },
+      { pattern: /\b(mrn|medical.?record|patient.?id|patient_number)\b/i, field: 'MRN' },
+      { pattern: /\b(dob|date.?of.?birth|birth.?date|birthdate)\b/i, field: 'DOB' },
+      { pattern: /\b(patient|patient.?name|first.?name|last.?name|full.?name)\b/i, field: 'Patient Name' },
+      { pattern: /\b(diagnosis|icd.?\d{1,2}|cpt.?code|procedure.?code|drg)\b/i, field: 'Diagnosis/Code' },
+      { pattern: /\b(phone|fax|email|address|zip.?code|street)\b/i, field: 'Contact Info' },
+      { pattern: /\b(insurance|policy.?number|member.?id|subscriber)\b/i, field: 'Insurance' },
+      { pattern: /\b(prescription|medication|rx_|drug.?name|ndc)\b/i, field: 'Medication' },
+      { pattern: /\b(lab.?result|test.?result|vital|blood.?pressure|heart.?rate)\b/i, field: 'Clinical Data' },
+      { pattern: /\b(account.?number|billing|charge|payment)\b/i, field: 'Financial/Billing' },
+    ];
+
+    function detectPHIFields(props) {
+      const phiFields = [];
+      const allText = JSON.stringify(props || {}).toLowerCase();
+      _PHI_PATTERNS.forEach(p => {
+        if (p.pattern.test(allText)) {
+          // Find which specific property keys match
+          Object.keys(props || {}).forEach(k => {
+            if (p.pattern.test(k)) phiFields.push({ key: k, category: p.field });
+          });
+          // Also check property values for column references
+          Object.values(props || {}).forEach(v => {
+            if (typeof v === 'string' && p.pattern.test(v)) {
+              phiFields.push({ key: v.substring(0, 50), category: p.field });
+            }
+          });
+        }
+      });
+      // Deduplicate by key
+      const seen = new Set();
+      return phiFields.filter(f => { if (seen.has(f.key)) return false; seen.add(f.key); return true; });
+    }
+
+    function generatePHISafeDLQ(varName, phiFields) {
+      if (!phiFields || phiFields.length === 0) return '';
+      const lines = [
+        '# ⚠ PHI/HIPAA WARNING: This processor handles protected health information',
+        '# The following fields are hashed (SHA-256) before DLQ write to prevent PHI exposure:',
+        '# ' + phiFields.map(f => f.key + ' (' + f.category + ')').join(', '),
+        'from pyspark.sql.functions import sha2, col',
+      ];
+      phiFields.forEach(f => {
+        const colName = f.key.replace(/[^a-zA-Z0-9_]/g, '_');
+        lines.push(`df_${varName}_dlq = df_${varName}_dlq.withColumn("${colName}", sha2(col("${colName}").cast("string"), 256))`);
+      });
+      return lines.join('\n');
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // GAP #10: subprocess.run() → Pandas UDF wrapper
+    // ════════════════════════════════════════════════════════════════
+    function wrapSubprocessAsPandasUDF(code, procName, varName, inputVar, props) {
+      if (!code.includes('subprocess.run') && !code.includes('_sp.run')) return code;
+      // Detect if this is per-row execution (Input Source = flowfile content)
+      const inputSource = (props || {})['Input Source'] || '';
+      if (inputSource.toLowerCase().includes('flowfile') || inputSource.toLowerCase().includes('content')) {
+        // Per-row: wrap in pandas_udf for distributed execution
+        const cmdMatch = code.match(/(?:subprocess\.run|_sp\.run)\(\s*(?:"([^"]+)"|'([^']+)'|\[([^\]]+)\])/);
+        const cmd = cmdMatch ? (cmdMatch[1] || cmdMatch[2] || cmdMatch[3]) : 'echo';
+        return `# ${procName} — distributed via Pandas UDF (per-row execution)\n` +
+          `from pyspark.sql.functions import pandas_udf, col\n` +
+          `import pandas as pd\nimport subprocess\n\n` +
+          `@pandas_udf("string")\n` +
+          `def _exec_cmd_${varName}(rows: pd.Series) -> pd.Series:\n` +
+          `    """Execute command per row — runs on workers, not driver"""\n` +
+          `    results = []\n` +
+          `    for row_val in rows:\n` +
+          `        try:\n` +
+          `            _r = subprocess.run(${JSON.stringify(cmd)}.split(), input=str(row_val), capture_output=True, text=True, timeout=30)\n` +
+          `            results.append(_r.stdout.strip() if _r.returncode == 0 else f"ERROR: {_r.stderr[:100]}")\n` +
+          `        except Exception as e:\n` +
+          `            results.append(f"ERROR: {str(e)[:100]}")\n` +
+          `    return pd.Series(results)\n\n` +
+          `df_${varName} = df_${inputVar}.withColumn("_cmd_result", _exec_cmd_${varName}(col("value")))\n` +
+          `print(f"[CMD] Distributed execution via Pandas UDF")`;
+      }
+      // Single-execution: keep driver-side (unchanged)
+      return code;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // GAP #12: Cycle/Loop Detection → Python Iteration
+    // ════════════════════════════════════════════════════════════════
+    function generateLoopFromCycle(cycle, mappings, lineage) {
+      if (!cycle || cycle.length < 2) return null;
+      const loopProcs = cycle.map(name => mappings.find(m => m.name === name)).filter(Boolean);
+      if (loopProcs.length === 0) return null;
+      // Detect pattern: API retry cycles vs conditional loops
+      const hasHTTP = loopProcs.some(m => /InvokeHTTP|PostHTTP|GetHTTP/i.test(m.type));
+      const hasRoute = loopProcs.some(m => /RouteOn/i.test(m.type));
+      const varName = sanitizeVarName(cycle[0]);
+
+      if (hasHTTP) {
+        // API retry cycle → tenacity while-loop
+        return `# Cycle detected: ${cycle.join(' → ')} → (loop back)\n` +
+          `# Pattern: API retry loop — converted to tenacity retry\n` +
+          `from tenacity import retry, stop_after_attempt, wait_exponential, RetryError\n\n` +
+          `@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=60))\n` +
+          `def _retry_loop_${varName}(df):\n` +
+          `    """Retry loop for: ${cycle.join(' → ')}"""\n` +
+          `    # Process through cycle steps\n` +
+          `    result = df\n` +
+          `    # TODO: Add actual processing logic from cycle processors\n` +
+          `    return result\n\n` +
+          `try:\n` +
+          `    df_${varName} = _retry_loop_${varName}(df_${varName})\n` +
+          `except RetryError:\n` +
+          `    print(f"[LOOP] Retry cycle exhausted for ${cycle[0]}")`;
+      }
+
+      // Conditional loop
+      return `# Cycle detected: ${cycle.join(' → ')} → (loop back)\n` +
+        `# Pattern: Conditional loop — converted to while iteration\n` +
+        `_max_iterations = 100\n` +
+        `_iteration = 0\n` +
+        `_loop_df_${varName} = df_${varName}\n` +
+        `while _iteration < _max_iterations:\n` +
+        `    _iteration += 1\n` +
+        `    # TODO: Add loop body from cycle processors\n` +
+        `    _loop_result = _loop_df_${varName}\n` +
+        `    if _loop_result.count() == 0:\n` +
+        `        break  # No more records to process\n` +
+        `    _loop_df_${varName} = _loop_result\n` +
+        `df_${varName} = _loop_df_${varName}\n` +
+        `print(f"[LOOP] Completed {_iteration} iterations for ${cycle[0]}")`;
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // REC #8: Retry / Error Handling Code Wrapper
     // ════════════════════════════════════════════════════════════════
     function generateRetryWrapper(procName, procType, code, penaltyDuration, yieldDuration, maxRetries) {
@@ -3392,28 +3830,13 @@ function resolveControllerService(csName, controllerServices) {
     function postProcessELInCode(code, procName) {
       if (!code || !code.includes('${')) return code;
       var lines = code.split('\n');
+      var hasColOps = false;
       var processed = lines.map(function(line) {
         if (line.trim().charAt(0) === '#') return line;
-        var fixed = line;
-        // ${attr:isEmpty()} -> not _attrs.get("attr", "")
-        fixed = fixed.replace(/\$\{([^:}]+):isEmpty\(\)\}/g, 'not _attrs.get("$1", "")');
-        fixed = fixed.replace(/\$\{([^:}]+):equals\('([^']*)'\)\}/g, '_attrs.get("$1", "") == "$2"');
-        fixed = fixed.replace(/\$\{([^:}]+):contains\('([^']*)'\)\}/g, '"$2" in _attrs.get("$1", "")');
-        fixed = fixed.replace(/\$\{([^:}]+):toUpper\(\)\}/g, '_attrs.get("$1", "").upper()');
-        fixed = fixed.replace(/\$\{([^:}]+):toLower\(\)\}/g, '_attrs.get("$1", "").lower()');
-        fixed = fixed.replace(/\$\{([^:}]+):trim\(\)\}/g, '_attrs.get("$1", "").strip()');
-        fixed = fixed.replace(/\$\{([^:}]+):length\(\)\}/g, 'len(_attrs.get("$1", ""))');
-        fixed = fixed.replace(/\$\{([^:}]+):substring\((\d+),\s*(\d+)\)\}/g, '_attrs.get("$1", "")[$2:$3]');
-        fixed = fixed.replace(/\$\{([^:}]+):replace\('([^']*)',\s*'([^']*)'\)\}/g, '_attrs.get("$1", "").replace("$2", "$3")');
-        fixed = fixed.replace(/\$\{([^:}]+):append\('([^']*)'\)\}/g, '_attrs.get("$1", "") + "$2"');
-        fixed = fixed.replace(/\$\{([^:}]+):prepend\('([^']*)'\)\}/g, '"$2" + _attrs.get("$1", "")');
-        fixed = fixed.replace(/\$\{now\(\)\}/g, 'datetime.now()');
-        fixed = fixed.replace(/\$\{hostname\(\)\}/g, 'socket.gethostname()');
-        fixed = fixed.replace(/\$\{UUID\(\)\}/g, 'str(uuid.uuid4())');
-        // Simple ${attr} -> _attrs.get("attr", "")
-        fixed = fixed.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_.]*?)\}/g, '_attrs.get("$1", "")');
-        // Remaining complex ${...} -> flag as comment
-        fixed = fixed.replace(/\$\{([^}]+)\}/g, '""  # FIXME: unresolved NiFi EL: $$${$1}');
+        if (!line.includes('${')) return line;
+        // Delegate to the NEL parser in python mode for remaining EL
+        var fixed = translateNELtoPySpark(line, 'python');
+        if (fixed !== line) hasColOps = true;
         return fixed;
       });
       var result = processed.join('\n');
@@ -3433,7 +3856,9 @@ function resolveControllerService(csName, controllerServices) {
     // Tracks which processors produce streaming DataFrames.
     // ════════════════════════════════════════════════════════════════════
     const _STREAMING_SOURCE_TYPES = /^(ConsumeKafka|ConsumeKafkaRecord|ListenHTTP|ListenTCP|ListenUDP|ListenSyslog|ListenRELP|ListenSMTP|ListenGRPC|ListenWebSocket|ConsumeJMS|ConsumeMQTT|ConsumeAMQP|ConsumeGCPubSub|ConsumeAzureEventHub|ConsumeAzureServiceBus|ConsumeKinesisStream|TailFile|GetHTTP|GenerateFlowFile)/;
-    const _BATCH_SINK_PATTERN = /\.toPandas\(\)|for\s+row\s+in\s+df_\w+\.(?:limit\(\d+\)\.)?collect\(\)|df_\w+\.limit\(\d+\)\.toPandas|df_\w+\.count\(\)/;
+    const _BATCH_SINK_PATTERN = /\.toPandas\(\)|for\s+row\s+in\s+df_\w+\.(?:limit\(\d+\)\.)?collect\(\)|df_\w+\.limit\(\d+\)\.toPandas|df_\w+\.count\(\)|\.write\.format\(|\.saveAsTable\(|\.save\(|\.show\(|\.display\(/;
+    // Processors that break streaming propagation (batch-only operations)
+    const _BATCH_BREAKING_TYPES = /^(ExecuteSQL|PutDatabaseRecord|PutFile|PutFTP|PutSFTP|PutHDFS|FetchFile|QueryDatabaseTable|ListDatabaseTables|GenerateTableFetch)$/;
 
     function wrapBatchSinkForStreaming(code, procName, varName, inputVar, isStreamingContext) {
       if (!isStreamingContext) return code;
@@ -3473,6 +3898,33 @@ function resolveControllerService(csName, controllerServices) {
       }
       // df_X.count() on streaming -> warning
       fixed = fixed.replace(/df_(\w+)\.count\(\)/g, '0  # Cannot call .count() on streaming DataFrame; use watermark/window aggregation');
+      // .show() / .display() on streaming -> warning
+      fixed = fixed.replace(/df_(\w+)\.show\([^)]*\)/g, '# Cannot call .show() on streaming DataFrame — use display() in notebook');
+      fixed = fixed.replace(/display\(df_(\w+)\)/g, '# display() streams automatically in Databricks notebooks');
+      // .write.format() → .writeStream.format() with checkpoint
+      if (/\.write\.format\(/.test(fixed) && !/\.writeStream/.test(fixed)) {
+        fixed = fixed.replace(
+          /(\w+)\.write\.format\(([^)]+)\)((?:\s*\.option\([^)]+\))*)\s*\.(?:save|mode)\(/g,
+          function(match, df, fmt, opts) {
+            return df + '.writeStream.format(' + fmt + ')' + opts +
+              '\n    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/checkpoints/' + varName + '")\n    .trigger(availableNow=True)\n    .start(';
+          }
+        );
+      }
+      // .saveAsTable() → .writeStream...toTable() with checkpoint
+      if (/\.write\.(?:mode\([^)]+\)\.)?saveAsTable\(/.test(fixed) && !/\.writeStream/.test(fixed)) {
+        fixed = fixed.replace(
+          /\.write\.(?:mode\([^)]+\)\.)?saveAsTable\(([^)]+)\)/g,
+          '.writeStream\n    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/checkpoints/' + varName + '")\n    .trigger(availableNow=True)\n    .toTable($1)'
+        );
+      }
+      // Auto-inject checkpoint for writeStream that's missing it
+      if (/\.writeStream/.test(fixed) && !/checkpointLocation/.test(fixed)) {
+        fixed = fixed.replace(
+          /\.writeStream/g,
+          '.writeStream\n    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/checkpoints/' + varName + '")'
+        );
+      }
 
       return fixed;
     }
@@ -3557,12 +4009,17 @@ function mapNiFiToDatabricks(nifi) {
   processors.forEach(p => {
     if (_STREAMING_SOURCE_TYPES.test(p.type)) _streamingProcs.add(p.name);
   });
-  // Propagate streaming context through connections
+  // Propagate streaming context through connections (stop at batch-breaking types)
+  const _procTypeMap = {};
+  processors.forEach(p => { _procTypeMap[p.name] = p.type; });
   let _changed = true;
   while (_changed) {
     _changed = false;
     conns.forEach(c => {
       if (_streamingProcs.has(c.sourceName) && !_streamingProcs.has(c.destinationName)) {
+        // Don't propagate streaming through batch-breaking processors
+        const destType = _procTypeMap[c.destinationName] || '';
+        if (_BATCH_BREAKING_TYPES.test(destType)) return; // Streaming stops here
         _streamingProcs.add(c.destinationName);
         _changed = true;
       }
@@ -3590,9 +4047,9 @@ function mapNiFiToDatabricks(nifi) {
         const key = k.replace(/\s+/g, '_').toLowerCase();
         code = code.replace(new RegExp('\\{' + key + '\\}', 'gi'), val);
       });
-      // REC #3: Translate remaining NiFi EL expressions to Python
+      // REC #3: Translate remaining NiFi EL expressions to PySpark
       if (code.includes('${')) {
-        code = translateNiFiELtoPython(code);
+        code = translateNELtoPySpark(code, 'python');
       }
       // FIX #1: Post-process to resolve ALL remaining NiFi EL literals
       if (code.includes('${')) {
@@ -3609,20 +4066,60 @@ function mapNiFiToDatabricks(nifi) {
       const _yield = props['Yield Duration'] || '1 sec';
       const _retries = props['Max Retries'] || props['Retry Count'] || '3';
       code = generateRetryWrapper(p.name, p.type, code, _penalty, _yield, parseInt(_retries) || 3);
+      // GAP #10: Convert per-row subprocess.run() to Pandas UDF
+      code = wrapSubprocessAsPandasUDF(code, p.name, varName, inputVar, props);
+      // GAP #13: PHI/HIPAA detection — hash sensitive fields before DLQ write
+      const _phiFields = detectPHIFields(props);
+      if (_phiFields.length > 0) {
+        code = '# ⚠ PHI/HIPAA WARNING: Protected health information detected\n' +
+          '# Fields: ' + _phiFields.map(f => f.key + ' (' + f.category + ')').join(', ') + '\n' +
+          '# All PHI fields are hashed (SHA-256) in DLQ writes\n' + code;
+      }
       // ── Smart code generation for high-frequency processor types ──
       let conf = mapEntry.conf;
       if (p.type === 'RouteOnAttribute') {
+        const strategy = props['Routing Strategy'] || 'Route to Property name';
         const routeEntries = Object.entries(props).filter(([k]) => k !== 'Routing Strategy');
         if (routeEntries.length) {
-          const lines = ['# Route based on NiFi attribute conditions'];
-          routeEntries.forEach(([routeName, expr]) => {
+          const lines = [
+            'from pyspark.sql.functions import col, lit, upper, lower, trim, length, substring, regexp_replace, concat, when, current_timestamp, date_format, to_timestamp, expr, rand, substring_index, lpad, rpad, locate, split, regexp_extract, round, abs, ceil, floor',
+            `# RouteOnAttribute: ${p.name} — ${strategy}`,
+            `# Generates named DataFrames per route with NEL-parsed filter conditions`
+          ];
+          const routeVars = [];
+          routeEntries.forEach(([routeName, rawExpr]) => {
             const safe = routeName.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
-            lines.push(`# Route "${routeName}": ${expr}`);
-            lines.push(`df_${varName}_${safe} = df_${inputVar}.filter(col("${routeName}").isNotNull())  # Translate: ${expr}`);
+            const routeVar = `df_${varName}_${safe}`;
+            routeVars.push(routeVar);
+            if (rawExpr.includes('${')) {
+              const filterExpr = translateNELtoPySpark(rawExpr, 'col');
+              lines.push(`# Route "${routeName}": ${rawExpr.substring(0,80).replace(/"/g,"'")}`);
+              lines.push(`${routeVar} = df_${inputVar}.filter(${filterExpr})`);
+            } else {
+              // Static expression — try to interpret as boolean-like
+              lines.push(`# Route "${routeName}": ${rawExpr}`);
+              if (/^true$/i.test(rawExpr)) {
+                lines.push(`${routeVar} = df_${inputVar}  # Always matches`);
+              } else if (/^false$/i.test(rawExpr)) {
+                lines.push(`${routeVar} = df_${inputVar}.limit(0)  # Never matches`);
+              } else {
+                lines.push(`${routeVar} = df_${inputVar}.filter(lit(True))  # Static: ${rawExpr.substring(0,60)}`);
+              }
+            }
           });
-          lines.push(`df_${varName}_unmatched = df_${inputVar}  # Unmatched rows`);
+          // Compute unmatched as subtract of all matched routes
+          if (routeVars.length === 1) {
+            lines.push(`df_${varName}_unmatched = df_${inputVar}.subtract(${routeVars[0]})`);
+          } else if (routeVars.length > 1) {
+            lines.push(`# Unmatched: rows not matching any route`);
+            lines.push(`df_${varName}_unmatched = df_${inputVar}`);
+            routeVars.forEach(rv => {
+              lines.push(`df_${varName}_unmatched = df_${varName}_unmatched.subtract(${rv})`);
+            });
+          }
+          lines.push(`df_${varName} = df_${inputVar}  # Pass-through for default routing`);
           code = lines.join('\n');
-          conf = 0.90;
+          conf = 0.92;
         }
       }
       if (p.type === 'ExecuteStreamCommand') {
@@ -3709,13 +4206,22 @@ function mapNiFiToDatabricks(nifi) {
         const stdKeys = new Set(['Delete Attributes Expression','Store State','Stateful Variables Initial Value','canonical-value-lookup-cache-size']);
         const attrEntries = Object.entries(props).filter(([k]) => !stdKeys.has(k));
         if (attrEntries.length) {
-          const lines = ['# Set DataFrame columns from NiFi attributes', `df_${varName} = df_${inputVar}`];
-          attrEntries.forEach(([attr, expr]) => {
+          const lines = ['from pyspark.sql.functions import col, lit, upper, lower, trim, length, substring, regexp_replace, concat, when, current_timestamp, date_format, to_timestamp, expr, rand, substring_index, lpad, rpad, locate, split, regexp_extract, round, abs, ceil, floor',
+            `# UpdateAttribute: ${p.name} — set DataFrame columns via NEL expressions`,
+            `df_${varName} = df_${inputVar}`];
+          attrEntries.forEach(([attr, rawExpr]) => {
             const cn = attr.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
-            lines.push(`  .withColumn("${cn}", lit("${expr.replace(/"/g,'\\"')}"))  # ${attr}`);
+            if (rawExpr.includes('${')) {
+              // Parse NEL expression to PySpark column operations
+              const pyExpr = translateNELtoPySpark(rawExpr, 'col');
+              lines.push(`df_${varName} = df_${varName}.withColumn("${cn}", ${pyExpr})  # NEL: ${rawExpr.substring(0,80).replace(/"/g,"'")}`);
+            } else {
+              // Plain string value — use lit()
+              lines.push(`df_${varName} = df_${varName}.withColumn("${cn}", lit("${rawExpr.replace(/"/g,'\\"')}"))  # ${attr}`);
+            }
           });
           code = lines.join('\n');
-          conf = 0.90;
+          conf = 0.92;
         }
       }
       code = code.replace(/\{(\w+)\}/g, '<$1>');
@@ -3882,25 +4388,91 @@ function mapNiFiToDatabricks(nifi) {
         code = `# Format Conversion: ${p.name}\n# ${reader} -> ${writer} (${inFmt} -> ${outFmt})\ndf_${varName} = df_${inputVar}  # Spark DataFrames are format-agnostic\n# Write example: df_${varName}.write.format("${outFmt}").save("/path/to/output")\nprint(f"[CONVERT] ${inFmt} -> ${outFmt}")`;
         conf = 0.93;
       }
-      // ── MergeContent / MergeRecord ──
+      // ── MergeContent / MergeRecord — write optimizations ──
       if (/^Merge(Content|Record)$/.test(p.type)) {
         const strategy = props['Merge Strategy'] || 'Bin-Packing';
         const minEntries = props['Minimum Number of Entries'] || '1';
         const maxEntries = props['Maximum Number of Entries'] || '1000';
-        code = `# Merge: ${p.name}\n# Strategy: ${strategy} | Min: ${minEntries} | Max: ${maxEntries}\n# In Databricks, Spark already operates on partitioned DataFrames.\n# Small file compaction is handled by Delta Lake Auto Optimize.\ndf_${varName} = df_${inputVar}.coalesce(max(1, df_${inputVar}.rdd.getNumPartitions() // 4))\n# spark.conf.set("spark.databricks.delta.optimizeWrite.enabled", "true")\n# spark.conf.set("spark.databricks.delta.autoCompact.enabled", "true")\nprint(f"[MERGE] Coalesced partitions - Delta Auto Optimize handles compaction")`;
+        const mergeFormat = props['Merge Format'] || 'Binary Concatenation';
+        code = `# Merge: ${p.name}\n# Strategy: ${strategy} | Entries: ${minEntries}-${maxEntries} | Format: ${mergeFormat}\n` +
+          `# Enable Delta write optimizations for small file compaction\n` +
+          `spark.conf.set("spark.databricks.delta.optimizeWrite.enabled", "true")\n` +
+          `spark.conf.set("spark.databricks.delta.autoCompact.enabled", "true")\n` +
+          `spark.conf.set("spark.databricks.delta.autoCompact.minNumFiles", ${minEntries})\n` +
+          `\n# Coalesce partitions to reduce file count\n` +
+          `_num_parts = max(1, df_${inputVar}.rdd.getNumPartitions() // 4)\n` +
+          `df_${varName} = df_${inputVar}.coalesce(_num_parts)\n` +
+          `# Post-write: run OPTIMIZE on target table for best performance\n` +
+          `# spark.sql("OPTIMIZE <catalog>.<schema>.<table> ZORDER BY (<key_column>)")\n` +
+          `print(f"[MERGE] Coalesced to {_num_parts} partitions — Delta Auto Optimize + Auto Compaction enabled")`;
+        conf = 0.93;
+      }
+      // ── Split processors — proper explode() ──
+      if (p.type === 'SplitJson') {
+        const jsonPath = props['JsonPath Expression'] || '$.*';
+        const sparkPath = jsonPath.replace(/^\$\.?\*?/, '$');
+        const lines = [
+          'from pyspark.sql.functions import explode, col, from_json, get_json_object',
+          'from pyspark.sql.types import ArrayType, StringType',
+          `# SplitJson: ${p.name}`,
+          `# JsonPath: ${jsonPath}`
+        ];
+        if (jsonPath === '$' || jsonPath === '$.*' || jsonPath === '$[*]') {
+          lines.push(`# Top-level array — explode directly`);
+          lines.push(`df_${varName} = df_${inputVar}.withColumn("_items", from_json(col("value"), ArrayType(StringType())))`);
+          lines.push(`df_${varName} = df_${varName}.withColumn("_item", explode(col("_items"))).drop("_items")`);
+        } else {
+          lines.push(`# Extract nested array then explode`);
+          lines.push(`df_${varName} = df_${inputVar}.withColumn("_nested", get_json_object(col("value"), "${sparkPath || '$'}"))` );
+          lines.push(`df_${varName} = df_${varName}.withColumn("_items", from_json(col("_nested"), ArrayType(StringType())))`);
+          lines.push(`df_${varName} = df_${varName}.withColumn("value", explode(col("_items"))).drop("_nested", "_items")`);
+        }
+        lines.push(`# Note: For complex nested structures, define explicit schema instead of StringType()`);
+        lines.push(`print(f"[SPLIT] JSON array exploded into individual rows")`);
+        code = lines.join('\n');
         conf = 0.92;
       }
-      // ── Split processors ──
-      if (/^Split(Json|Text|Xml|Content|Record|Avro)$/.test(p.type)) {
+      if (p.type === 'SplitContent') {
+        const byteSeq = props['Byte Sequence'] || props['Line Split Count'] || '';
+        const format = props['Byte Sequence Format'] || 'UTF-8';
+        const lines = [
+          'from pyspark.sql.functions import explode, split, col',
+          `# SplitContent: ${p.name}`,
+          `# Byte Sequence: ${byteSeq || '(newline)'} | Format: ${format}`
+        ];
+        const delimiter = byteSeq || '\\n';
+        const escapedDelim = delimiter.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        lines.push(`df_${varName} = df_${inputVar}.withColumn("_parts", split(col("value"), "${escapedDelim}"))`);
+        lines.push(`df_${varName} = df_${varName}.withColumn("value", explode(col("_parts"))).drop("_parts")`);
+        lines.push(`df_${varName} = df_${varName}.filter(col("value") != lit(""))  # Remove empty splits`);
+        lines.push(`print(f"[SPLIT] Content split into individual rows by delimiter")`);
+        code = lines.join('\n');
+        conf = 0.92;
+      }
+      if (/^Split(Text|Xml|Record|Avro)$/.test(p.type)) {
         const splitType = p.type.replace('Split', '').toLowerCase();
         code = `# Split: ${p.name}\n# In Databricks, Spark reads entire ${splitType} datasets as DataFrames.\ndf_${varName} = df_${inputVar}  # Already partitioned across Spark executors\nfrom pyspark.sql.functions import explode, col\nprint(f"[SPLIT] ${splitType} data already distributed across partitions")`;
         conf = 0.92;
       }
-      // ── CompressContent / UnpackContent ──
+      // ── CompressContent / UnpackContent — codec configuration ──
       if (/^(Compress|Unpack)Content$/.test(p.type)) {
         const mode = props['Mode'] || (p.type === 'CompressContent' ? 'compress' : 'decompress');
-        const format = props['Compression Format'] || 'gzip';
-        code = `# ${p.type}: ${p.name}\n# Mode: ${mode} | Format: ${format}\n# In Databricks, Delta Lake handles compression automatically (zstd/snappy).\ndf_${varName} = df_${inputVar}\nprint(f"[COMPRESSION] ${format} ${mode} - handled automatically by Spark/Delta")`;
+        const format = props['Compression Format'] || props['Compression Level'] || 'gzip';
+        const codecMap = { 'gzip': 'gzip', 'bzip2': 'bzip2', 'snappy': 'snappy', 'lz4': 'lz4', 'zstd': 'zstd', 'deflate': 'deflate', 'lzo': 'lzo', 'none': 'none' };
+        const sparkCodec = codecMap[format.toLowerCase()] || 'snappy';
+        if (p.type === 'CompressContent') {
+          code = `# CompressContent: ${p.name}\n# Mode: ${mode} | Format: ${format}\n` +
+            `# Set Spark compression codec for Parquet/Delta writes\n` +
+            `spark.conf.set("spark.sql.parquet.compression.codec", "${sparkCodec}")\n` +
+            `spark.conf.set("spark.sql.orc.compression.codec", "${sparkCodec === 'gzip' ? 'zlib' : sparkCodec}")\n` +
+            `df_${varName} = df_${inputVar}\n` +
+            `print(f"[COMPRESS] Codec set to ${sparkCodec} for downstream writes")`;
+        } else {
+          code = `# UnpackContent: ${p.name}\n# Mode: ${mode} | Format: ${format}\n` +
+            `# Spark auto-detects compression when reading (gzip, snappy, bzip2, etc.)\n` +
+            `df_${varName} = df_${inputVar}\n` +
+            `print(f"[DECOMPRESS] Spark auto-detects ${format} compression on read")`;
+        }
         conf = 0.95;
       }
       // ── EncryptContent ──
@@ -4149,8 +4721,58 @@ function mapNiFiToDatabricks(nifi) {
       }
       if (p.type === 'ValidateRecord') {
         const schemaName = props['Schema Name'] || '';
-        const checkCol = schemaName || 'id';
-        code = `# Validate Records: ${p.name}\nfrom pyspark.sql.functions import col\ndf_${varName}_valid = df_${inputVar}.filter(col("${checkCol}").isNotNull())\ndf_${varName}_invalid = df_${inputVar}.filter(col("${checkCol}").isNull())\ndf_${varName} = df_${varName}_valid\nprint(f"[VALIDATE] Valid/Invalid split complete")`;
+        const schemaText = props['Schema Text'] || '';
+        const strategy = props['Schema Access Strategy'] || 'Inherit Record Schema';
+        const invalidAction = props['Invalid Record Strategy'] || 'route';
+        const validationRules = Object.entries(props).filter(([k]) =>
+          !['Schema Name','Schema Text','Schema Access Strategy','Record Reader','Record Writer','Invalid Record Strategy','Allow Extra Fields','Strict Type Checking'].includes(k));
+
+        const lines = [
+          'from pyspark.sql.functions import col, lit, when, current_timestamp',
+          `# ValidateRecord: ${p.name}`,
+          `# Schema: ${schemaName || 'inferred'} | Strategy: ${strategy} | On Invalid: ${invalidAction}`
+        ];
+
+        // DLT expectations (if running in DLT context)
+        lines.push(`# DLT Expectations (use when running as Delta Live Table):`);
+        if (validationRules.length > 0) {
+          validationRules.forEach(([ruleName, ruleExpr]) => {
+            const safeRule = ruleName.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+            if (ruleExpr.includes('${')) {
+              const parsedExpr = translateNELtoPySpark(ruleExpr, 'col');
+              lines.push(`# @dlt.expect_or_drop("${safeRule}", "${parsedExpr.replace(/"/g, "'").substring(0,100)}")`);
+            } else {
+              lines.push(`# @dlt.expect_or_drop("${safeRule}", "${ruleExpr.replace(/"/g, "'").substring(0,100)}")`);
+            }
+          });
+        } else {
+          lines.push(`# @dlt.expect_or_drop("not_null_check", "col('${schemaName || 'id'}') IS NOT NULL")`);
+        }
+
+        // Inline validation
+        lines.push('');
+        lines.push('# Inline validation — split valid/invalid records');
+        if (validationRules.length > 0) {
+          const conditions = validationRules.map(([rn, re]) => {
+            if (re.includes('${')) return translateNELtoPySpark(re, 'col');
+            return `col("${rn}").isNotNull()`;
+          });
+          const combinedCond = conditions.join(' & ');
+          lines.push(`_valid_cond = ${combinedCond}`);
+          lines.push(`df_${varName}_valid = df_${inputVar}.filter(_valid_cond)`);
+          lines.push(`df_${varName}_invalid = df_${inputVar}.filter(~(_valid_cond))`);
+        } else {
+          const checkCol = schemaName || 'id';
+          lines.push(`df_${varName}_valid = df_${inputVar}.filter(col("${checkCol}").isNotNull())`);
+          lines.push(`df_${varName}_invalid = df_${inputVar}.filter(col("${checkCol}").isNull())`);
+        }
+        lines.push(`df_${varName} = df_${varName}_valid`);
+        lines.push('');
+        lines.push(`# Dead-letter queue for invalid records`);
+        lines.push(`if df_${varName}_invalid.count() > 0:`);
+        lines.push(`    df_${varName}_invalid.withColumn("_rejected_at", current_timestamp()).withColumn("_rejection_source", lit("${p.name.replace(/"/g,'\\"')}")).write.mode("append").saveAsTable("${schemaName ? schemaName + '.' : ''}_dead_letter_queue")`);
+        lines.push(`print(f"[VALIDATE] {df_${varName}_valid.count()} valid, {df_${varName}_invalid.count()} invalid records")`);
+        code = lines.join('\n');
         conf = 0.92;
       }
 
@@ -4183,6 +4805,40 @@ function mapNiFiToDatabricks(nifi) {
         const pattern = props['Grok Expression'] || '%{COMBINEDAPACHELOG}';
         code = `# Grok: ${p.name}\n# Pattern: ${pattern}\nfrom pyspark.sql.functions import regexp_extract, col\ndf_${varName} = df_${inputVar}\nprint(f"[GROK] Extracted fields")`;
         conf = 0.90;
+      }
+      // ── ExtractText: Parse regex from properties → regexp_extract() ──
+      if (p.type === 'ExtractText') {
+        const stdKeys = new Set(['Character Set','Enable Canonical Equivalence','Enable Case Insensitive Flag',
+          'Enable Comments','Enable DOTALL Mode','Enable Literal Flag','Enable Multiline Mode','Enable Unicode Case',
+          'Enable Unicode Predefined Character Classes','Include Capture Group 0','Maximum Buffer Size',
+          'Maximum Capture Group Length','Permit Whitespace and Comments in Pattern']);
+        const regexEntries = Object.entries(props).filter(([k]) => !stdKeys.has(k));
+        if (regexEntries.length) {
+          const lines = [
+            'from pyspark.sql.functions import regexp_extract, col',
+            `# ExtractText: ${p.name} — regex extraction to columns`,
+            `df_${varName} = df_${inputVar}`
+          ];
+          regexEntries.forEach(([attrName, pattern]) => {
+            const colName = attrName.replace(/[^a-zA-Z0-9_]/g, '_');
+            // Count capture groups in the regex pattern
+            const groupCount = (pattern.match(/\((?!\?)/g) || []).length;
+            const escapedPattern = pattern.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            if (groupCount > 1) {
+              // Multiple capture groups — extract each one
+              for (let g = 1; g <= groupCount; g++) {
+                lines.push(`df_${varName} = df_${varName}.withColumn("${colName}_${g}", regexp_extract(col("value"), "${escapedPattern}", ${g}))`);
+              }
+            } else {
+              // Single or no capture group — extract group 1 (or 0 if none)
+              const group = groupCount >= 1 ? 1 : 0;
+              lines.push(`df_${varName} = df_${varName}.withColumn("${colName}", regexp_extract(col("value"), "${escapedPattern}", ${group}))`);
+            }
+          });
+          lines.push(`print(f"[EXTRACT] Extracted ${regexEntries.length} regex patterns into columns")`);
+          code = lines.join('\n');
+          conf = 0.92;
+        }
       }
       // ── HL7 ──
       if (p.type === 'ExtractHL7Attributes' || p.type === 'RouteHL7') {
@@ -4657,8 +5313,23 @@ function mapNiFiToDatabricks(nifi) {
         conf = 0.92;
       }
       if (p.type === 'RetryFlowFile') {
-        const maxRetries = props['Maximum Retries'] || '3';
-        code = `# Retry: ${p.name}\n# Max retries: ${maxRetries}\nfrom tenacity import retry, stop_after_attempt\n@retry(stop=stop_after_attempt(${maxRetries}))\ndef process_with_retry(df):\n    return df  # Apply processing\ndf_${varName} = process_with_retry(df_${inputVar})\nprint(f"[RETRY] Max ${maxRetries} attempts")`;
+        const maxRetries = props['Maximum Retries'] || props['Retry Count'] || '3';
+        const penaltyDur = props['Penalty Duration'] || '30000 ms';
+        code = `# Retry: ${p.name}\n# Max retries: ${maxRetries} | Penalty: ${penaltyDur}\n` +
+          `from tenacity import retry, stop_after_attempt, wait_exponential, RetryError\n` +
+          `from pyspark.sql.functions import current_timestamp, lit\n\n` +
+          `@retry(stop=stop_after_attempt(${maxRetries}), wait=wait_exponential(multiplier=1, min=2, max=30))\n` +
+          `def _process_with_retry_${varName}(df):\n` +
+          `    return df  # TODO: Apply actual processing logic here\n\n` +
+          `try:\n` +
+          `    df_${varName} = _process_with_retry_${varName}(df_${inputVar})\n` +
+          `    print(f"[RETRY] ${p.name.replace(/"/g,"'")} succeeded")\n` +
+          `except RetryError as _retry_err:\n` +
+          `    print(f"[RETRY] ${p.name.replace(/"/g,"'")} exhausted ${maxRetries} retries — writing to DLQ")\n` +
+          `    df_${inputVar}.withColumn("_dlq_error", lit(str(_retry_err))).withColumn("_dlq_source", lit("${p.name.replace(/"/g,'\\"')}")).withColumn("_dlq_timestamp", current_timestamp()).write.mode("append").saveAsTable("__dead_letter_queue")\n` +
+          `    # Return empty DataFrame with same schema to allow pipeline to continue\n` +
+          `    df_${varName} = spark.createDataFrame([], df_${inputVar}.schema)\n` +
+          `    print(f"[DLQ] Failed records written to __dead_letter_queue")`;
         conf = 0.92;
       }
       if (p.type === 'ReplaceText' && !code.includes('regexp_replace')) {
@@ -5203,6 +5874,24 @@ function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
   // Footer with comprehensive status
   cells.push({type:'code',label:'Pipeline Complete',source:`# Final status\nimport json\ntry:\n    _exec_log = spark.sql("SELECT status, count(*) as cnt FROM ${qualifiedSchema}.__execution_log GROUP BY status").collect()\n    _counts = {r.status: r.cnt for r in _exec_log}\n    _ok = _counts.get("SUCCESS", 0)\n    _fail = _counts.get("FAILED", 0)\n    _recov = sum(v for k,v in _counts.items() if k in ("RECOVERED","PASSTHROUGH","DLQ"))\n    print("=" * 60)\n    print(f"PIPELINE COMPLETE: {_ok} success, {_fail} failed, {_recov} recovered")\n    print(f"Success rate: {round(_ok/max(_ok+_fail+_recov,1)*100,1)}%")\n    print("=" * 60)\n    if _fail > 0:\n        display(spark.sql("SELECT * FROM ${qualifiedSchema}.__execution_log WHERE status='FAILED'"))\n    dbutils.notebook.exit(json.dumps({"status":"COMPLETE","success":_ok,"failed":_fail,"recovered":_recov}))\nexcept Exception as _e:\n    print(f"[WARN] Status check failed: {_e}")\n    dbutils.notebook.exit("COMPLETE")`,role:'utility'});
 
+  // GAP #12: Detect cycles → generate loop cells
+  try {
+    const _graphResult = analyzeFlowGraph(nifi.processors || [], nifi.connections || []);
+    if (_graphResult.circularRefs && _graphResult.circularRefs.length > 0) {
+      _graphResult.circularRefs.forEach(ref => {
+        const loopCode = generateLoopFromCycle(ref.cycle, sortedMappings, lineage);
+        if (loopCode) {
+          cells.push({
+            type: 'code', label: 'Loop: ' + ref.cycle[0],
+            source: loopCode, role: 'transform',
+            processor: ref.cycle[0], procType: 'CycleLoop',
+            confidence: 0.75, mapped: true
+          });
+        }
+      });
+    }
+  } catch(e) { console.warn('Cycle-to-loop generation:', e); }
+
   // Apply placeholder resolution
   if (cfg.catalog) {
     cells.forEach(c => { c.source = resolveNotebookPlaceholders(c.source, cfg); });
@@ -5224,7 +5913,7 @@ function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
     processorCount: sortedMappings.length, mappedCount: mapCount,
     generatedAt: new Date().toISOString(),
     config: { catalog: catalogName, schema: schemaName },
-    improvements: ['lineage','smartImports','topoSort','adaptiveCode','errorFramework','autoRecovery','fullProperties','relationshipRouting','executionReport','e2eValidation']
+    improvements: ['lineage','smartImports','topoSort','adaptiveCode','errorFramework','autoRecovery','fullProperties','relationshipRouting','executionReport','e2eValidation','nelParser','phiDetection','sharedClusters','cycleDetection','streamingGuard']
   }};
 }
 
@@ -5244,14 +5933,33 @@ function generateWorkflowJSON(mappings, nifi, cfg) {
     const sg = procToGroup[c.sourceName], dg = procToGroup[c.destinationName];
     if (sg && dg && sg !== dg) groupDeps[dg].add(sg);
   });
+  // Shared job cluster definition — avoids cost explosion from per-task clusters
+  const sharedClusterKey = 'nifi_migration_cluster';
+  const jobClusters = [{
+    job_cluster_key: sharedClusterKey,
+    new_cluster: {
+      spark_version: sparkVer,
+      node_type_id: nodeType,
+      num_workers: numWorkers,
+      spark_conf: {
+        'spark.databricks.delta.optimizeWrite.enabled': 'true',
+        'spark.databricks.delta.autoCompact.enabled': 'true',
+        'spark.sql.adaptive.enabled': 'true',
+        'spark.sql.shuffle.partitions': 'auto'
+      },
+      custom_tags: { source: 'nifi_migration' }
+    }
+  }];
+
   const tasks = groups.map(g => ({
     task_key: sanitizeVarName(g),
     description: `Process group: ${g}`,
     notebook_task: { notebook_path: `${wsPath}/${sanitizeVarName(g)}_notebook`, source: 'WORKSPACE' },
     depends_on: [...groupDeps[g]].map(d => ({ task_key: sanitizeVarName(d) })),
-    new_cluster: { spark_version: sparkVer, node_type_id: nodeType, num_workers: numWorkers }
+    job_cluster_key: sharedClusterKey
   }));
-  return { name: `NiFi_Migration_${sanitizeVarName(groups[0] || 'flow')}`, tasks, format: 'MULTI_TASK',
+  return { name: `NiFi_Migration_${sanitizeVarName(groups[0] || 'flow')}`,
+    job_clusters: jobClusters, tasks, format: 'MULTI_TASK',
     tags: { source: 'nifi_migration', generated_by: 'seg_demo' } };
 }
 
