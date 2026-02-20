@@ -1,0 +1,51 @@
+customer_id,first_name,last_name,email,phone,address,city,state,zip,created_date,credit_score,account_type
+1001,James,Morrison,james.morrison@gmail.com,512-555-0147,742 Elm Street,Austin,TX,78701,2022-03-15,745,Premium
+1002,Maria,Gonzalez,maria.gonzalez@yahoo.com,305-555-0238,1589 Ocean Drive,Miami,FL,33139,2021-07-22,812,Standard
+1003,David,Chen,david.chen@outlook.com,415-555-0391,2200 Pacific Ave,San Francisco,CA,94115,2023-01-10,698,Basic
+1004,Aisha,Johnson,aisha.j@hotmail.com,773-555-0482,445 Michigan Ave,Chicago,IL,60611,2020-11-03,780,Premium
+1005,Robert,Williams,rwilliams@gmail.com,206-555-0573,1100 Pine Street,Seattle,WA,98101,2022-06-18,721,Standard
+1006,Jennifer,O'Brien,jen.obrien@icloud.com,617-555-0164,88 Beacon Hill,Boston,MA,02108,2021-09-27,835,Premium
+1007,Hiroshi,Tanaka,h.tanaka@gmail.com,310-555-0755,4501 Sunset Blvd,Los Angeles,CA,90027,2023-04-05,692,Basic
+1008,Priya,Patel,priya.patel@yahoo.com,646-555-0846,320 Park Avenue,New York,NY,10022,2020-02-14,768,Standard
+1009,Marcus,Brown,marcus.b@outlook.com,404-555-0937,1750 Peachtree St,Atlanta,GA,30309,2022-08-30,710,Standard
+1010,Sarah,Kim,sarah.kim@gmail.com,503-555-0128,925 Hawthorne Blvd,Portland,OR,97214,2021-12-01,799,Premium
+1011,Carlos,Rivera,c.rivera@hotmail.com,602-555-0219,3300 Camelback Rd,Phoenix,AZ,85018,2023-02-17,655,Basic
+1012,Emily,Davis,emily.davis@gmail.com,303-555-0310,1425 Larimer St,Denver,CO,80202,2022-05-09,742,Standard
+1013,Anthony,Washington,a.wash@yahoo.com,615-555-0401,800 Broadway,Nashville,TN,37203,2020-08-21,788,Premium
+1014,Lisa,Nguyen,lisa.nguyen@outlook.com,512-555-0592,2100 South Lamar,Austin,TX,78704,2021-04-13,715,Standard
+1015,Michael,Thompson,m.thompson@gmail.com,216-555-0683,1900 Euclid Ave,Cleveland,OH,44115,2023-06-28,670,Basic
+1016,Fatima,Ali,fatima.ali@icloud.com,313-555-0774,5500 Woodward Ave,Detroit,MI,48202,2022-01-05,731,Standard
+1017,Brian,Murphy,b.murphy@gmail.com,612-555-0865,400 Nicollet Mall,Minneapolis,MN,55401,2020-10-19,805,Premium
+1018,Keisha,Jackson,keisha.j@yahoo.com,704-555-0956,1200 Trade Street,Charlotte,NC,28202,2021-03-26,690,Basic
+1019,Daniel,Martinez,d.martinez@hotmail.com,210-555-0147,350 Riverwalk,San Antonio,TX,78205,2023-07-14,753,Standard
+1020,Rachel,Green,rachel.green@gmail.com,858-555-0238,7700 Girard Ave,La Jolla,CA,92037,2022-09-02,820,Premium
+1021,William,Harris,w.harris@outlook.com,504-555-0329,1000 Canal Street,New Orleans,LA,70112,2020-06-11,678,Basic
+1022,Sophia,Lee,sophia.lee@gmail.com,425-555-0410,15600 NE 8th St,Bellevue,WA,98008,2021-11-23,794,Premium
+1023,Jerome,Carter,j.carter@yahoo.com,410-555-0501,300 Light Street,Baltimore,MD,21202,2023-03-08,707,Standard
+1024,Anna,Kowalski,anna.k@icloud.com,412-555-0692,4200 Forbes Ave,Pittsburgh,PA,15213,2022-07-16,738,Standard
+1025,Kevin,Wright,k.wright@gmail.com,919-555-0783,450 Fayetteville St,Raleigh,NC,27601,2020-12-29,765,Premium
+1026,Tamara,Scott,t.scott@hotmail.com,317-555-0874,200 Monument Circle,Indianapolis,IN,46204,2021-08-04,685,Basic
+1027,Jason,Adams,jason.a@gmail.com,816-555-0965,1800 Main Street,Kansas City,MO,64108,2023-05-21,726,Standard
+1028,Michelle,Robinson,m.robinson@yahoo.com,702-555-0156,3700 Las Vegas Blvd,Las Vegas,NV,89109,2022-02-13,810,Premium
+1029,Gregory,Young,g.young@outlook.com,614-555-0247,100 North High St,Columbus,OH,43215,2020-09-07,673,Basic
+1030,Nicole,Hall,nicole.hall@gmail.com,901-555-0338,150 Beale Street,Memphis,TN,38103,2021-06-15,748,Standard
+1031,Ahmad,Hassan,a.hassan@icloud.com,469-555-0429,2500 McKinney Ave,Dallas,TX,75201,2023-08-03,702,Standard
+1032,Patricia,Lopez,p.lopez@gmail.com,520-555-0510,400 Congress St,Tucson,AZ,85701,2022-04-27,779,Premium
+1033,Ryan,King,ryan.king@yahoo.com,414-555-0601,700 Water Street,Milwaukee,WI,53202,2020-07-18,660,Basic
+1034,Jasmine,Edwards,j.edwards@hotmail.com,804-555-0792,1500 Broad Street,Richmond,VA,23220,2021-10-09,733,Standard
+1035,Thomas,Mitchell,t.mitchell@gmail.com,801-555-0883,200 State Street,Salt Lake City,UT,84111,2023-01-24,791,Premium
+1036,Olivia,Campbell,o.campbell@outlook.com,407-555-0174,800 Orange Ave,Orlando,FL,32801,2022-10-11,718,Standard
+1037,Derek,Phillips,d.phillips@gmail.com,502-555-0265,550 Fourth Street,Louisville,KY,40202,2020-04-02,756,Standard
+1038,Samantha,Evans,s.evans@yahoo.com,505-555-0356,300 Central Ave,Albuquerque,NM,87102,2021-01-19,695,Basic
+1039,Christopher,Turner,c.turner@icloud.com,918-555-0447,100 East Archer,Tulsa,OK,74103,2023-09-15,742,Standard
+1040,Lauren,Collins,l.collins@gmail.com,808-555-0538,2300 Kalakaua Ave,Honolulu,HI,96815,2022-06-03,828,Premium
+1041,Patrick,Stewart,p.stewart@hotmail.com,402-555-0629,1200 O Street,Lincoln,NE,68508,2020-01-28,667,Basic
+1042,Diana,Ramirez,d.ramirez@gmail.com,904-555-0710,200 Ocean Blvd,Jacksonville,FL,32202,2021-05-12,751,Standard
+1043,Steven,Cooper,s.cooper@yahoo.com,860-555-0801,100 Constitution Plz,Hartford,CT,06103,2023-04-19,713,Standard
+1044,Monica,Bell,m.bell@outlook.com,225-555-0992,330 Third Street,Baton Rouge,LA,70801,2022-11-25,786,Premium
+1045,Vincent,Reed,v.reed@gmail.com,603-555-0183,60 Pleasant Street,Concord,NH,03301,2020-03-16,698,Basic
+1046,Andrea,Howard,a.howard@icloud.com,843-555-0274,200 Meeting Street,Charleston,SC,29401,2021-02-08,770,Premium
+1047,Raymond,Ward,r.ward@gmail.com,515-555-0365,700 Locust Street,Des Moines,IA,50309,2023-06-01,725,Standard
+1048,Stephanie,Cox,s.cox@yahoo.com,907-555-0456,600 West 5th Ave,Anchorage,AK,99501,2022-08-14,808,Premium
+1049,Kenneth,Bailey,k.bailey@hotmail.com,406-555-0547,100 North Last Chance,Helena,MT,59601,2020-05-23,682,Basic
+1050,Vanessa,Price,v.price@gmail.com,307-555-0638,200 Capitol Ave,Cheyenne,WY,82001,2021-09-30,739,Standard
