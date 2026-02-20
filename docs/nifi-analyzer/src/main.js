@@ -134,10 +134,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── 6c. Wire file input change to trigger pipeline ──
   const fileInput = document.getElementById('fileInput');
   if (fileInput) {
-    fileInput.addEventListener('change', () => {
+    fileInput.addEventListener('change', async () => {
       resetState();
       clearErrorLog();
       setState(INITIAL_STATE);
+      // Wait for FileReader to finish before parsing
+      const { handleFile } = await import('./ui/file-upload.js');
+      await handleFile();
       parseInput();
     });
   }

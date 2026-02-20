@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NiFi Flow Analyzer</title>
+</head>
+<body>
+<div class="container">
+  <h1>NiFi Flow Analyzer</h1>
+  <p class="caption">Upload a NiFi flow XML &mdash; analyze processors, assess migration readiness, convert to Databricks, and generate migration reports</p>
+
+  <div class="tabs" id="tabs">
+    <div class="tab active" data-tab="load">1. Load Flow<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="analyze">2. Analyze<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="assess">3. Assess<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="convert">4. Convert<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="report">5. Report<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="reportFinal">6. Final Report<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="validate">7. Validate<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+    <div class="tab locked" data-tab="value">8. Value Analysis<span class="check">&#10003;</span><span class="spinner-sm"></span></div>
+  </div>
+
+  <!-- STEP 1: LOAD NIFI FLOW -->
+  <div class="panel active" id="panel-load">
+    <h2>Step 1: Load NiFi Flow</h2>
+    <div class="row">
+      <div class="col">
+        <h3>Upload NiFi XML</h3>
+        <div class="file-upload" id="fileDropZone">
+          <p>Drop a NiFi flow XML here or click to browse</p>
+          <p style="color:var(--text2);font-size:0.85rem">Supports NiFi templates, flow definitions, and registry exports</p>
+          <input type="file" id="fileInput" accept=".xml,.json">
+        </div>
+        <div id="fileName" class="alert alert-info hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="col">
+        <h3>Paste NiFi XML</h3>
+        <textarea id="pasteInput" placeholder="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;template&gt;
+  &lt;snippet&gt;
+    &lt;processors&gt;...&lt;/processors&gt;
+  &lt;/snippet&gt;
+&lt;/template&gt;"></textarea>
+      </div>
+    </div>
+    <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-primary" id="parseBtn">Analyze Flow</button>
+      <div id="parseProgress" style="display:none;flex:1;min-width:300px;align-items:center;gap:10px">
+        <div style="flex:0 0 200px;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden"><div id="parsePBar" style="height:100%;width:0%;background:var(--primary);border-radius:4px;transition:width 0.15s"></div></div>
+        <span id="parsePPct" style="font-size:0.8rem;font-weight:700;color:var(--primary);min-width:36px">0%</span>
+        <span id="parsePStatus" style="font-size:0.78rem;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:500px"></span>
+      </div>
+    </div>
+    <div style="margin-top:20px;border:1px solid var(--border);border-radius:12px;padding:16px;background:var(--bg2)">
+      <h3 style="margin:0 0 4px 0;font-size:0.95rem">Sample NiFi Flows &mdash; Click to Load &amp; Analyze</h3>
+      <p style="color:var(--text2);font-size:0.8rem;margin:0 0 12px 0">Pre-built NiFi flow samples that demonstrate the full analysis pipeline.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px">
+        <div class="sample-card" data-sample="etl">
+          <div class="sample-icon">&#128640;</div>
+          <div class="sample-info"><strong>ETL Pipeline</strong><span>NiFi XML &bull; 9 processors</span><span class="sample-tags">GetFile, SQL, Route, PutFile</span></div>
+        </div>
+        <div class="sample-card" data-sample="streaming">
+          <div class="sample-icon">&#9889;</div>
+          <div class="sample-info"><strong>Streaming IoT</strong><span>NiFi XML &bull; 10 processors</span><span class="sample-tags">Kafka, JSON, Merge, HDFS</span></div>
+        </div>
+        <div class="sample-card" data-sample="full">
+          <div class="sample-icon">&#127981;</div>
+          <div class="sample-info"><strong>Manufacturing Migration</strong><span>NiFi XML &bull; 17 processors</span><span class="sample-tags">ListFile, SFTP, Wait/Notify, SQL</span></div>
+        </div>
+      </div>
+    </div>
+    <div id="parseResults"></div>
+  </div>
+
+  <!-- STEP 2: ANALYZE -->
+  <div class="panel" id="panel-analyze">
+    <h2>Step 2: Flow Analysis</h2>
+    <div id="analyzeNotReady" class="alert alert-info">Load a NiFi flow first (Step 1).</div>
+    <div id="analyzeReady" class="hidden">
+      <button class="btn btn-primary" id="analyzeBtn">Run Deep Analysis</button>
+      <div id="analyzeResults"></div>
+    </div>
+  </div>
+
+  <!-- STEP 3: ASSESS -->
+  <div class="panel" id="panel-assess">
+    <h2>Step 3: Migration Assessment</h2>
+    <div id="assessNotReady" class="alert alert-info">Complete the flow analysis first (Step 2).</div>
+    <div id="assessReady" class="hidden">
+      <button class="btn btn-primary" id="assessBtn">Run Assessment</button>
+      <div id="assessResults"></div>
+    </div>
+  </div>
+
+  <!-- STEP 4: CONVERT -->
+  <div class="panel" id="panel-convert">
+    <h2>Step 4: NiFi &rarr; Databricks Notebook</h2>
+    <div id="convertNotReady" class="alert alert-info">Complete the assessment first (Step 3).</div>
+    <div id="convertReady" class="hidden">
+      <p style="color:var(--text2);font-size:0.9rem;margin-bottom:12px">
+        Reverse-engineer your NiFi flow into a Databricks Python notebook with PySpark equivalents,
+        Unity Catalog definitions, and a Databricks workflow.
+      </p>
+      <div class="expander" id="dbxConfigExpander"><div class="expander-header" id="dbxConfigExpanderHeader"><span>Databricks Configuration</span><span class="expander-arrow">&#9654;</span></div><div class="expander-body">
+        <p style="font-size:0.82rem;color:var(--text2);margin-bottom:12px">Configure these to generate a runnable notebook with resolved placeholders. Leave blank for generic templates.</p>
+        <div class="row">
+          <div class="col"><label>Unity Catalog</label><input type="text" id="cfgCatalog" placeholder="e.g. main"></div>
+          <div class="col"><label>Schema</label><input type="text" id="cfgSchema" placeholder="e.g. nifi_migration"></div>
+          <div class="col"><label>Secret Scope</label><input type="text" id="cfgScope" placeholder="e.g. migration_secrets"></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <div class="col"><label>Cloud Provider</label><select id="cfgCloud"><option value="azure">Azure</option><option value="aws">AWS</option><option value="gcp">GCP</option></select></div>
+          <div class="col"><label>Spark Version</label><input type="text" id="cfgSparkVersion" value="14.3.x-scala2.12"></div>
+          <div class="col"><label>Node Type</label><input type="text" id="cfgNodeType" value="Standard_DS3_v2"></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <div class="col"><label>Workers</label><input type="number" id="cfgWorkers" value="2" min="1" max="100"></div>
+          <div class="col" style="flex:2"><label>Workspace Path</label><input type="text" id="cfgWorkspacePath" value="/Workspace/Migrations/NiFi"></div>
+        </div>
+        <div style="margin-top:8px"><button class="btn" id="saveDbxConfigBtn">Save Configuration</button></div>
+      </div></div>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="generateNotebookBtn">Generate Notebook</button></div>
+      <div id="notebookResults"></div>
+    </div>
+  </div>
+
+  <!-- STEP 5: MIGRATION REPORT -->
+  <div class="panel" id="panel-report">
+    <h2>Step 5: Migration Report</h2>
+    <div id="reportNotReady" class="alert alert-info">Generate the notebook first (Step 4).</div>
+    <div id="reportReady" class="hidden">
+      <button class="btn btn-primary" id="reportBtn">Generate Report</button>
+      <div id="reportResults"></div>
+    </div>
+  </div>
+
+  <!-- STEP 6: FINAL REPORT -->
+  <div class="panel" id="panel-reportFinal">
+    <h2>Step 6: Final Report</h2>
+    <div id="reportFinalNotReady" class="alert alert-info">Generate the migration report first (Step 5).</div>
+    <div id="reportFinalReady" class="hidden">
+      <p style="color:var(--text2);font-size:0.9rem;margin-bottom:12px">
+        Comprehensive end-to-end analysis &mdash; every processor, every gap, every recommendation. Download as JSON.
+      </p>
+      <button class="btn btn-primary" id="finalReportBtn">Generate Final Report</button>
+      <div id="reportFinalResults"></div>
+    </div>
+  </div>
+
+  <!-- STEP 7: VALIDATE -->
+  <div class="panel" id="panel-validate">
+    <h2>Step 7: Notebook &harr; Flow Validation</h2>
+    <div id="validateNotReady" class="alert alert-info">Generate the final report first (Step 6).</div>
+    <div id="validateReady" class="hidden">
+      <p style="color:var(--text2);font-size:0.9rem;margin-bottom:12px">
+        Four-angle comparison between the generated PySpark notebook and the original NiFi flow.
+        Identifies gaps, manual items, and feeds corrections back into the accelerator.
+      </p>
+      <button class="btn btn-primary" id="validateBtn">Run Validation</button>
+      <div id="validateResults"></div>
+    </div>
+  </div>
+
+  <!-- STEP 8: VALUE ANALYSIS -->
+  <div class="panel" id="panel-value">
+    <h2>Step 8: Workflow Value Analysis</h2>
+    <div id="valueNotReady" class="alert alert-info">Complete validation first (Step 7).</div>
+    <div id="valueReady" class="hidden">
+      <p style="color:var(--text2);font-size:0.9rem;margin-bottom:12px">
+        Holistic migration value assessment &mdash; what the flow does, how to build it better in Databricks,
+        what steps can be dropped, and quantified migration ROI.
+      </p>
+      <button class="btn btn-primary" id="valueBtn">Run Value Analysis</button>
+      <div id="valueResults"></div>
+    </div>
+  </div>
+</div>
+<div class="path-trace-toast" id="pathTraceToast">
+  <span id="pathTraceText"></span>
+  <span class="toast-hint">Click another node to extend path</span>
+  <span class="toast-clear" id="pathTraceClear">Clear</span>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

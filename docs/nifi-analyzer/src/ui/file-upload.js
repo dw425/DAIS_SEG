@@ -44,9 +44,9 @@ export function getUploadedName() {
  */
 export function handleFile() {
   const fileInput = document.getElementById('fileInput');
-  if (!fileInput) return;
+  if (!fileInput) return Promise.resolve();
   const f = fileInput.files[0];
-  if (!f) return;
+  if (!f) return Promise.resolve();
 
   uploadedName = f.name;
   const fileNameEl = document.getElementById('fileName');
@@ -55,11 +55,15 @@ export function handleFile() {
     fileNameEl.classList.remove('hidden');
   }
 
-  const reader = new FileReader();
-  reader.onload = e => {
-    uploadedContent = e.target.result;
-  };
-  reader.readAsText(f);
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      uploadedContent = e.target.result;
+      resolve();
+    };
+    reader.onerror = () => resolve();
+    reader.readAsText(f);
+  });
 }
 
 /**
@@ -94,5 +98,5 @@ export function initFileUpload() {
     }
   });
 
-  fileInput.addEventListener('change', handleFile);
+  // Note: change event is handled by main.js which calls handleFile() + parseInput()
 }

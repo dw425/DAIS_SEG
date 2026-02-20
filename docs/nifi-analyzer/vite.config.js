@@ -6,7 +6,10 @@ export default defineConfig({
   build: {
     target: 'es2020',
     outDir: 'dist',
-    minify: 'esbuild'
+    minify: 'esbuild',
+    rollupOptions: {
+      input: 'index.dev.html'
+    }
   },
   test: {
     environment: 'jsdom',
