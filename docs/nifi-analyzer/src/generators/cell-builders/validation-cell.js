@@ -61,7 +61,7 @@ srcChecks + '\n' + snkChecks + '\n\n' +
 '    _val_df = spark.createDataFrame([{"report_json":json.dumps(_validation_report),\n' +
 '        "validated_at":datetime.now().isoformat(),\n' +
 '        "source_rows":_src_total,"sink_rows":_snk_total}])\n' +
-'    _val_df.write.mode("append").saveAsTable("`' + qualifiedSchema + '`.__validation_reports")\n' +
+'    _val_df.write.mode("append").saveAsTable("' + qualifiedSchema + '.__validation_reports")\n' +
 'except: pass\n' +
 '\n' +
 'print("=" * 60)\n' +

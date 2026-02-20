@@ -122,7 +122,7 @@ export function mapNiFiToDatabricks(nifi, deps) {
 
     if (mapEntry) {
       // Step 1: Resolve template
-      const props = p.properties || {};
+      const props = { ...(p.properties || {}) };
 
       // REC #4: Resolve variables in property values
       if (_hasVars) {

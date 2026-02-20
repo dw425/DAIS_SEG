@@ -40,6 +40,7 @@ export function wrapBatchSinkForStreaming(code, procName, varName, inputVar, isS
   let fixed = code;
   // Replace for row in df_X.limit(N).collect() -> foreachBatch pattern
   if (/for\s+row\s+in\s+df_\w+/.test(fixed)) {
+    // Note: matches generated code patterns only (no user comments expected)
     const loopStart = fixed.indexOf('for row');
     if (loopStart >= 0) {
       const beforeLoop = fixed.substring(0, loopStart);

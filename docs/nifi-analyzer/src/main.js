@@ -500,7 +500,7 @@ document.addEventListener('DOMContentLoaded', () => {
           vh += '<hr class="divider"><h3>Missing Imports (' + result.missingImports.length + ')</h3>';
           vh += '<ul style="margin:0;padding-left:20px;font-size:0.85rem">';
           result.missingImports.forEach(mi => {
-            vh += '<li style="margin:4px 0"><code>' + escapeHTML(mi.module || '') + '</code> needed by ' + escapeHTML(mi.cell || '') + '</li>';
+            vh += '<li style="margin:4px 0"><code>' + escapeHTML(mi.symbol || '') + '</code> needed by cell ' + escapeHTML(String(mi.usedIn || '')) + (mi.suggestion ? ' — add <code>' + escapeHTML(mi.suggestion) + '</code>' : '') + '</li>';
           });
           vh += '</ul>';
         }

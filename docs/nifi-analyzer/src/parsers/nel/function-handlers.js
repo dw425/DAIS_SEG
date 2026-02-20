@@ -98,7 +98,7 @@ export function applyNELFunction(base, call, mode) {
   }
   if (name === 'find') {
     var fp = unquoteArg(args[0] || '');
-    return mode === 'col' ? 'regexp_extract(' + base + ', "' + pyEscape(fp) + '", 0)' : 're.search(r"' + pyEscape(fp) + '", ' + base + ').group(0)';
+    return mode === 'col' ? 'regexp_extract(' + base + ', "' + pyEscape(fp) + '", 0)' : '(lambda m: m.group(0) if m else "")(re.search(r"' + pyEscape(fp) + '", ' + base + '))';
   }
   if (name === 'split') {
     var sp = unquoteArg(args[0] || ',');
@@ -257,11 +257,13 @@ export function applyNELFunction(base, call, mode) {
     return mode === 'col' ? 'to_json(struct(' + base + '))' : 'json.dumps(str(' + base + '))[1:-1]';
   }
   if (name === 'urlencode') {
+    // Spark SQL limitation: no built-in URL encode/decode; python mode handles correctly
     return mode === 'col'
       ? "regexp_replace(regexp_replace(" + base + ", ' ', '%20'), '[^A-Za-z0-9_.~-]', '')"
       : "urllib.parse.quote(str(" + base + "), safe='')";
   }
   if (name === 'urldecode') {
+    // Spark SQL limitation: no built-in URL encode/decode; python mode handles correctly
     return mode === 'col'
       ? "regexp_replace(" + base + ", '%20', ' ')"
       : "urllib.parse.unquote(str(" + base + "))";

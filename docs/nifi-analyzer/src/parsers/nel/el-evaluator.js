@@ -192,11 +192,11 @@ export function evaluateNiFiEL(expr, attributes) {
         val = (s[0] === '"' && s[s.length - 1] === '"') ? s.slice(1, -1) : s;
       }
       else if (fn === 'unescapeJson()') { try { val = JSON.parse('"' + String(val).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'); } catch(e) { /* preserve original value */ } }
-      else if (fn === 'escapeXml()') { val = String(val).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-      else if (fn === 'escapeCsv()') { val = val.includes(',') ? '"' + val.replace(/"/g, '""') + '"' : val; }
+      else if (fn === 'escapeXml()') { val = String(val).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;'); }
+      else if (fn === 'escapeCsv()') { val = (val.includes(',') || val.includes('"') || val.includes('\n')) ? '"' + val.replace(/"/g, '""') + '"' : val; }
       else if (fn === 'urlEncode()') { val = encodeURIComponent(val); }
-      else if (fn === 'urlDecode()') { val = decodeURIComponent(val); }
-      else if (fn === 'base64Encode()') { val = btoa(val); }
+      else if (fn === 'urlDecode()') { try { val = decodeURIComponent(val); } catch(e) {} }
+      else if (fn === 'base64Encode()') { try { val = btoa(val); } catch(e) {} }
       else if (fn === 'base64Decode()') { try { val = atob(val); } catch(e) {} }
       else if (fn.startsWith('ifElse(')) {
         const arg = fn.match(/ifElse\(["']([^"']*)["']\s*,\s*["']([^"']*)["']\)/);

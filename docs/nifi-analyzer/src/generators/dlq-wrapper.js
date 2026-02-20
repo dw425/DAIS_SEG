@@ -40,7 +40,7 @@ export function generateDLQWrapper(code, procName, varName, inputVar, qualifiedS
   const safeProc = procName.replace(/[^a-zA-Z0-9_]/g, '_');
   const schema = qualifiedSchema || 'nifi_migration';
   const indented = code.split('\n').map(l => '        ' + l).join('\n');
-  const indented2 = code.split('\n').map(l => '                ' + l).join('\n');
+  const indented2 = code.split('\n').map(l => '                ' + l).join('\n').replace(new RegExp(`df_${inputVar}`, 'g'), '_single_df');
 
   // Check for PHI fields if detector is provided
   const opts = options || {};
@@ -57,7 +57,7 @@ export function generateDLQWrapper(code, procName, varName, inputVar, qualifiedS
     dlqWriteCode =
       '        if _failed_records:\n' +
       '            _dlq_df = spark.createDataFrame(_failed_records)\n' +
-      '            _dlq_df.write.format("delta").mode("append").saveAsTable("`' + schema + '`.__dead_letter_queue")\n' +
+      '            _dlq_df.write.format("delta").mode("append").saveAsTable("' + schema + '.__dead_letter_queue")\n' +
       '            print(f"[DLQ] ' + procName + ': {len(_failed_records)} records routed to DLQ")';
   }
 

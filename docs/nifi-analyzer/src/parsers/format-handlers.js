@@ -12,7 +12,7 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 export async function decompressGzip(bytes) {
   try {
-    if (!bytes || bytes.length === 0) return [];
+    if (!bytes || bytes.length === 0) return '';
     if (bytes.length > MAX_FILE_SIZE) return { error: 'File exceeds 50MB limit' };
     // bytes is Uint8Array
     // Use pako.inflate (bundled via Vite)

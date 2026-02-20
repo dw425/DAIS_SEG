@@ -42,7 +42,7 @@ export function generateExecutionReportCell(mappings, qualifiedSchema) {
 '    _exec_rows = spark.sql("""\n' +
 '        SELECT processor_name, processor_type, role, status, error_message,\n' +
 '               rows_processed, duration, confidence, upstream_procs\n' +
-'        FROM `' + qualifiedSchema + '`.__execution_log ORDER BY timestamp\n' +
+'        FROM ' + qualifiedSchema + '.__execution_log ORDER BY timestamp\n' +
 '    """).collect()\n' +
 '    for _r in _exec_rows:\n' +
 '        _exec_report["processors"].append({\n' +
@@ -65,7 +65,7 @@ export function generateExecutionReportCell(mappings, qualifiedSchema) {
 '        "generated_at":datetime.now().isoformat(),\n' +
 '        "success_rate":_exec_report["summary"]["success_rate"],\n' +
 '        "total_procs":_successes+_failures+_recovered}])\n' +
-'    _report_df.write.mode("append").saveAsTable("`' + qualifiedSchema + '`.__execution_reports")\n' +
+'    _report_df.write.mode("append").saveAsTable("' + qualifiedSchema + '.__execution_reports")\n' +
 'except: pass\n' +
 '\n' +
 'print("=" * 60)\n' +

@@ -52,7 +52,7 @@ const NIFI_ROLE_MAP = {
   PutElasticsearch:'sink',PutMongo:'sink',PutHBaseJSON:'sink',PutHBaseCell:'sink',
   PutSNS:'sink',PutDynamoDB:'sink',PutKinesisStream:'sink',
   PutGCSObject:'sink',PublishGCPubSub:'sink',
-  PutDatabaseRecord:'sink',PutSyslog:'sink',PutTCP:'sink',
+  PutSyslog:'sink',PutTCP:'sink',
   // Utility
   LogMessage:'utility',LogAttribute:'utility',Wait:'utility',Notify:'utility',
   DebugFlow:'utility',CountText:'utility',

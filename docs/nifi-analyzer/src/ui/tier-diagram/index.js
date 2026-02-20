@@ -10,7 +10,7 @@ import { renderNodes } from './render-nodes.js';
 import { renderConnections } from './render-connections.js';
 import { clearRouteTrace } from './route-trace.js';
 import { applySidebarFilter, clearSidebarFilter } from './sidebar-filter.js';
-import { tierFilter } from './filter-toolbar.js';
+import { tierFilter, resetTierFilterState } from './filter-toolbar.js';
 import { escapeHTML } from '../../security/html-sanitizer.js';
 
 /** Module-level escape handler reference for cleanup between renders. */
@@ -26,6 +26,7 @@ let _escapeHandler = null;
  * @param {string} legendId    — DOM id for legend
  */
 export function renderTierDiagram(tierData, containerId, detailId, legendId) {
+  resetTierFilterState();
   const container = document.getElementById(containerId);
   const detailEl = document.getElementById(detailId);
   const legendEl = document.getElementById(legendId);

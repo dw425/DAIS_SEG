@@ -26,7 +26,7 @@ export function buildSchemaCell({ catalogName, schemaName, qualifiedSchema, tabl
   if (catalogName) ddl += `CREATE CATALOG IF NOT EXISTS \`${catalogName}\`;\nUSE CATALOG \`${catalogName}\`;\n`;
   ddl += `CREATE SCHEMA IF NOT EXISTS \`${schemaName}\`;\nUSE SCHEMA \`${schemaName}\`;\n`;
   tables.forEach(t => {
-    ddl += `\nCREATE TABLE IF NOT EXISTS \`${qualifiedSchema}\`.\`${t.name}\` (\n`;
+    ddl += `\nCREATE TABLE IF NOT EXISTS ${qualifiedSchema}.\`${t.name}\` (\n`;
     ddl += t.columns.map(c => `  \`${c.name}\` ${(c.data_type || c.type || 'STRING').toUpperCase()}`).join(',\n');
     ddl += '\n) USING DELTA;';
   });

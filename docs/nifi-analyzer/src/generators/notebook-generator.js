@@ -57,7 +57,7 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
 
   const flowName = (nifi.processGroups && nifi.processGroups[0] ? nifi.processGroups[0].name : 'NiFi Flow');
   const mapCount = sortedMappings.filter(m => m.mapped).length;
-  const covPct = Math.round(mapCount / sortedMappings.length * 100);
+  const covPct = Math.round(mapCount / Math.max(sortedMappings.length, 1) * 100);
 
   // Header
   cells.push(buildHeaderCell({
@@ -84,7 +84,7 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
   // Execution tracking tables (IMPROVEMENT #5)
   cells.push({
     type: 'code', label: 'Execution Framework Setup',
-    source: `# Execution Tracking Framework\nfrom datetime import datetime\n\nspark.sql(f"""\nCREATE TABLE IF NOT EXISTS \`${qualifiedSchema}\`.__execution_log (\n  processor_name STRING, processor_type STRING, role STRING,\n  timestamp TIMESTAMP DEFAULT current_timestamp(), status STRING,\n  error_message STRING, rows_processed LONG, duration STRING,\n  confidence INT, upstream_procs STRING\n) USING DELTA TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')\n""")\n\nspark.sql(f"""\nCREATE TABLE IF NOT EXISTS \`${qualifiedSchema}\`.__dead_letter_queue (\n  source_processor STRING, error STRING, record_data STRING,\n  timestamp STRING, _ingested_at TIMESTAMP DEFAULT current_timestamp()\n) USING DELTA TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')\n""")\n\nspark.sql(f"""\nCREATE TABLE IF NOT EXISTS \`${qualifiedSchema}\`.__execution_reports (\n  report_json STRING, generated_at STRING, success_rate DOUBLE, total_procs INT\n) USING DELTA\n""")\n\nspark.sql(f"""\nCREATE TABLE IF NOT EXISTS \`${qualifiedSchema}\`.__validation_reports (\n  report_json STRING, validated_at STRING, source_rows LONG, sink_rows LONG\n) USING DELTA\n""")\n\nprint(f"[FRAMEWORK] Execution tracking ready: \`${qualifiedSchema}\`")`,
+    source: `# Execution Tracking Framework\nfrom datetime import datetime\n\nspark.sql(f"""\nCREATE TABLE IF NOT EXISTS ${qualifiedSchema}.__execution_log (\n  processor_name STRING, processor_type STRING, role STRING,\n  timestamp TIMESTAMP DEFAULT current_timestamp(), status STRING,\n  error_message STRING, rows_processed LONG, duration STRING,\n  confidence INT, upstream_procs STRING\n) USING DELTA TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')\n""")\n\nspark.sql(f"""\nCREATE TABLE IF NOT EXISTS ${qualifiedSchema}.__dead_letter_queue (\n  source_processor STRING, error STRING, record_data STRING,\n  timestamp STRING, _ingested_at TIMESTAMP DEFAULT current_timestamp()\n) USING DELTA TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')\n""")\n\nspark.sql(f"""\nCREATE TABLE IF NOT EXISTS ${qualifiedSchema}.__execution_reports (\n  report_json STRING, generated_at STRING, success_rate DOUBLE, total_procs INT\n) USING DELTA\n""")\n\nspark.sql(f"""\nCREATE TABLE IF NOT EXISTS ${qualifiedSchema}.__validation_reports (\n  report_json STRING, validated_at STRING, source_rows LONG, sink_rows LONG\n) USING DELTA\n""")\n\nprint(f"[FRAMEWORK] Execution tracking ready: ${qualifiedSchema}")`,
     role: 'utility', processor: 'Framework Setup', procType: 'Internal', confidence: 1.0, mapped: true
   });
 
@@ -146,14 +146,14 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
   // Migration error table
   cells.push({
     type: 'sql', label: 'Migration Error Table',
-    source: `CREATE TABLE IF NOT EXISTS \`${qualifiedSchema}\`.__migration_errors (\n  processor_name STRING, processor_type STRING,\n  error_time TIMESTAMP, error_message STRING\n) USING DELTA;`,
+    source: `CREATE TABLE IF NOT EXISTS ${qualifiedSchema}.__migration_errors (\n  processor_name STRING, processor_type STRING,\n  error_time TIMESTAMP, error_message STRING\n) USING DELTA;`,
     role: 'config'
   });
 
   // Footer with comprehensive status
   cells.push({
     type: 'code', label: 'Pipeline Complete',
-    source: `# Final status\nimport json\ntry:\n    _exec_log = spark.sql("SELECT status, count(*) as cnt FROM \`${qualifiedSchema}\`.__execution_log GROUP BY status").collect()\n    _counts = {r.status: r.cnt for r in _exec_log}\n    _ok = _counts.get("SUCCESS", 0)\n    _fail = _counts.get("FAILED", 0)\n    _recov = sum(v for k,v in _counts.items() if k in ("RECOVERED","PASSTHROUGH","DLQ"))\n    print("=" * 60)\n    print(f"PIPELINE COMPLETE: {_ok} success, {_fail} failed, {_recov} recovered")\n    print(f"Success rate: {round(_ok/max(_ok+_fail+_recov,1)*100,1)}%")\n    print("=" * 60)\n    if _fail > 0:\n        display(spark.sql("SELECT * FROM \`${qualifiedSchema}\`.__execution_log WHERE status='FAILED'"))\n    dbutils.notebook.exit(json.dumps({"status":"COMPLETE","success":_ok,"failed":_fail,"recovered":_recov}))\nexcept Exception as _e:\n    print(f"[WARN] Status check failed: {_e}")\n    dbutils.notebook.exit("COMPLETE")`,
+    source: `# Final status\nimport json\ntry:\n    _exec_log = spark.sql("SELECT status, count(*) as cnt FROM ${qualifiedSchema}.__execution_log GROUP BY status").collect()\n    _counts = {r.status: r.cnt for r in _exec_log}\n    _ok = _counts.get("SUCCESS", 0)\n    _fail = _counts.get("FAILED", 0)\n    _recov = sum(v for k,v in _counts.items() if k in ("RECOVERED","PASSTHROUGH","DLQ"))\n    print("=" * 60)\n    print(f"PIPELINE COMPLETE: {_ok} success, {_fail} failed, {_recov} recovered")\n    print(f"Success rate: {round(_ok/max(_ok+_fail+_recov,1)*100,1)}%")\n    print("=" * 60)\n    if _fail > 0:\n        display(spark.sql("SELECT * FROM ${qualifiedSchema}.__execution_log WHERE status='FAILED'"))\n    dbutils.notebook.exit(json.dumps({"status":"COMPLETE","success":_ok,"failed":_fail,"recovered":_recov}))\nexcept Exception as _e:\n    print(f"[WARN] Status check failed: {_e}")\n    dbutils.notebook.exit("COMPLETE")`,
     role: 'utility'
   });
 

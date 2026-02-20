@@ -51,7 +51,7 @@ export function generateAutoRecovery(m, qualifiedSchema, lineage) {
   } else if (m.role === 'sink') {
     return '\n        # RECOVERY: Write to DLQ\n' +
       '        try:\n' +
-      '            ' + inputVar + '.limit(1000).write.mode("append").saveAsTable("`' + qualifiedSchema + '`.__dead_letter_queue")\n' +
+      '            ' + inputVar + '.limit(1000).write.mode("append").saveAsTable("' + qualifiedSchema + '.__dead_letter_queue")\n' +
       '            _cell_status_' + varName + ' = "DLQ"\n' +
       '            print(f"[DLQ] ' + safeName + '")\n' +
       '        except: print(f"[LOST] ' + safeName + '")';

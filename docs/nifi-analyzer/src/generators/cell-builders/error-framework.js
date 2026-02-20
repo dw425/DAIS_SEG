@@ -49,7 +49,7 @@ export function wrapWithErrorFramework(m, qualifiedSchema, cellIndex, lineage) {
     '        try: _cell_rows_' + varName + ' = ' + outputVar + '.count()\n' +
     '        except: pass\n' +
     '        print(f"[OK] ' + safeName + ' ({_cell_rows_' + varName + '} rows)")\n' +
-    '        spark.sql(f"""INSERT INTO `' + qualifiedSchema + '`.__execution_log VALUES (\n' +
+    '        spark.sql(f"""INSERT INTO ' + qualifiedSchema + '.__execution_log VALUES (\n' +
     "            '" + safeName + "', '" + safeType + "', '" + safeRole + "',\n" +
     "            current_timestamp(), '{_cell_status_" + varName + "}',\n" +
     "            '{_cell_error_" + varName + "}', {_cell_rows_" + varName + "},\n" +
@@ -62,7 +62,7 @@ export function wrapWithErrorFramework(m, qualifiedSchema, cellIndex, lineage) {
     '        _cell_error_' + varName + " = str(_e).replace(\"'\", \"''\").replace(\"\\\\\", \"\\\\\\\\\")\n" +
     '        print(f"[ERROR] ' + safeName + ': {_e}")\n' +
     '        try:\n' +
-    '            spark.sql(f"""INSERT INTO `' + qualifiedSchema + '`.__execution_log VALUES (\n' +
+    '            spark.sql(f"""INSERT INTO ' + qualifiedSchema + '.__execution_log VALUES (\n' +
     "                '" + safeName + "', '" + safeType + "', '" + safeRole + "',\n" +
     "                current_timestamp(), '{_cell_status_" + varName + "}',\n" +
     "                '{_cell_error_" + varName + "}', {_cell_rows_" + varName + "},\n" +
