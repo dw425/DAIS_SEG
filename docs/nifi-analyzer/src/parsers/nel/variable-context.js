@@ -17,7 +17,8 @@ export function resolveNELVariableContext(varName) {
   // Secrets: password, token, key, credential, secret
   if (/password|token|secret|credential|api[_.]?key|private[_.]?key|passphrase/i.test(lower)) {
     const scope = lower.includes('kafka') ? 'kafka' : lower.includes('jdbc') ? 'jdbc' :
-      lower.includes('s3') || lower.includes('aws') ? 'aws' : lower.includes('es') ? 'es' : 'app';
+      lower.includes('s3') || lower.includes('aws') ? 'aws' : lower.includes('azure') ? 'azure' :
+      lower.includes('es') ? 'es' : 'app';
     return { type: 'secret', code: `dbutils.secrets.get(scope="${scope}", key="${varName}")` };
   }
   // Config: s3.*, kafka.*, jdbc.*, nifi.*, aws.*

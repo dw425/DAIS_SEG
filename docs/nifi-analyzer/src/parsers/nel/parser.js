@@ -41,12 +41,16 @@ export function parseNELExpression(expr, mode) {
     result = mode === 'col' ? 'lit(spark.conf.get("spark.databricks.clusterUsageTags.clusterName", "unknown"))' : 'socket.gethostname()';
   } else if (/^nextInt\(\)$/i.test(base) || /^random\(\)$/i.test(base)) {
     result = mode === 'col' ? '(rand() * 2147483647).cast("int")' : 'random.randint(0, 2147483647)';
-  } else if (/^literal\('([^']*)'\)$/i.test(base)) {
-    var litVal = base.match(/^literal\('([^']*)'\)$/i)[1];
+  } else if (/^literal\('((?:[^'\\]|\\.)*)'\)$/i.test(base)) {
+    var litVal = base.match(/^literal\('((?:[^'\\]|\\.)*)'\)$/i)[1];
     result = mode === 'col' ? 'lit("' + litVal + '")' : '"' + litVal + '"';
   } else if (/^literal\((\d+)\)$/i.test(base)) {
     var litNum = base.match(/^literal\((\d+)\)$/i)[1];
     result = mode === 'col' ? 'lit(' + litNum + ')' : litNum;
+  // NOTE: math:* regexes use /^math:func\((.+)\)$/ — the $ anchor forces the
+  // literal \) to match the LAST ')' in the string, so .+ (greedy) correctly
+  // captures everything between the first '(' and last ')'. This handles
+  // single-level nesting like math:ceil(abs(-5)) -> captures "abs(-5)".
   } else if (/^math:abs\((.+)\)$/i.test(base)) {
     var absArg = base.match(/^math:abs\((.+)\)$/i)[1];
     result = mode === 'col' ? 'abs(' + resolveNELArg(absArg, mode) + ')' : 'abs(' + resolveNELArg(absArg, mode) + ')';

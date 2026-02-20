@@ -40,7 +40,9 @@ export function handleNoSQLProcessor(p, props, varName, inputVar, existingCode, 
 
   // -- MongoDB --
   if (/^(Get|Put|Delete)Mongo/.test(p.type)) {
-    const uri = props['Mongo URI'] ? `"${props['Mongo URI']}"` : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
+    const uri = props['Mongo URI']
+      ? `"${props['Mongo URI'].replace(/"/g, '\\"')}"`
+      : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
     const db = props['Mongo Database Name'] || 'mydb';
     const coll = props['Mongo Collection Name'] || 'mycollection';
     const isWrite = /^(Put|Delete)/.test(p.type);
@@ -57,7 +59,9 @@ export function handleNoSQLProcessor(p, props, varName, inputVar, existingCode, 
 
   // -- GetMongoRecord --
   if (p.type === 'GetMongoRecord') {
-    const uri = props['Mongo URI'] ? `"${props['Mongo URI']}"` : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
+    const uri = props['Mongo URI']
+      ? `"${props['Mongo URI'].replace(/"/g, '\\"')}"`
+      : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
     const db = props['Mongo Database Name'] || 'mydb';
     const coll = props['Mongo Collection Name'] || 'collection';
     code = `# Mongo Record: ${p.name}\nfrom pymongo import MongoClient\n_mongo_uri = ${uri}\n_client = MongoClient(_mongo_uri)\n_docs = list(_client["${db}"]["${coll}"].find({}, {"_id": 0}).limit(50000))\ndf_${varName} = spark.createDataFrame(_docs) if _docs else spark.createDataFrame([], "id STRING")\n_client.close()`;
@@ -67,7 +71,9 @@ export function handleNoSQLProcessor(p, props, varName, inputVar, existingCode, 
 
   // -- RunMongoAggregation --
   if (p.type === 'RunMongoAggregation') {
-    const uri = props['Mongo URI'] ? `"${props['Mongo URI']}"` : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
+    const uri = props['Mongo URI']
+      ? `"${props['Mongo URI'].replace(/"/g, '\\"')}"`
+      : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
     const db = props['Mongo Database Name'] || 'mydb';
     const coll = props['Mongo Collection Name'] || 'collection';
     code = `# Mongo Aggregation: ${p.name}\nfrom pymongo import MongoClient\n_mongo_uri = ${uri}\n_client = MongoClient(_mongo_uri)\n_results = list(_client["${db}"]["${coll}"].aggregate([]))\ndf_${varName} = spark.createDataFrame(_results) if _results else df_${inputVar}\n_client.close()`;
@@ -77,7 +83,9 @@ export function handleNoSQLProcessor(p, props, varName, inputVar, existingCode, 
 
   // -- GridFS --
   if (/^(Fetch|Put|Delete)GridFS$/.test(p.type)) {
-    const uri = props['Mongo URI'] ? `"${props['Mongo URI']}"` : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
+    const uri = props['Mongo URI']
+      ? `"${props['Mongo URI'].replace(/"/g, '\\"')}"`
+      : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
     const db = props['Mongo Database Name'] || 'files_db';
     code = `# GridFS ${p.type}: ${p.name}\nfrom pymongo import MongoClient\nimport gridfs\n_mongo_uri = ${uri}\n_client = MongoClient(_mongo_uri)\n_fs = gridfs.GridFS(_client["${db}"])\ndf_${varName} = df_${inputVar}\n_client.close()`;
     conf = 0.90;

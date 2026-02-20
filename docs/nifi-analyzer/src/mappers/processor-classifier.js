@@ -56,6 +56,7 @@ const NIFI_ROLE_MAP = {
   // Utility
   LogMessage:'utility',LogAttribute:'utility',Wait:'utility',Notify:'utility',
   DebugFlow:'utility',CountText:'utility',
+  PutAttribute:'transform',
 };
 
 /**

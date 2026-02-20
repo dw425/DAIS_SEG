@@ -67,7 +67,8 @@ export function extractNELFuncArgs(call) {
  * @returns {string} Unquoted string
  */
 export function unquoteArg(a) {
-  if (/^'([^']*)'$/.test(a)) return a.slice(1, -1);
-  if (/^"([^"]*)"$/.test(a)) return a.slice(1, -1);
+  if (a.length >= 2 && ((a[0] === "'" && a[a.length-1] === "'") || (a[0] === '"' && a[a.length-1] === '"'))) {
+    return a.slice(1, -1);
+  }
   return a;
 }

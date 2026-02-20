@@ -60,14 +60,18 @@ export function analyzeFlowGraph(processors, connections) {
     }
   });
 
-  // Circular references — DFS cycle detection
+  // Circular references — DFS cycle detection with deduplication
   const visited = new Set();
   const recStack = new Set();
+  const seenCycles = new Set();
   function hasCycle(nodeId, path) {
     if (recStack.has(nodeId)) {
-      result.circularRefs.push({
-        cycle: path.concat(nodeId).map(id => procById[id] ? procById[id].name : id),
-      });
+      const cycle = path.concat(nodeId).map(id => procById[id] ? procById[id].name : id);
+      const cycleKey = [...cycle].sort().join('|');
+      if (!seenCycles.has(cycleKey)) {
+        seenCycles.add(cycleKey);
+        result.circularRefs.push({ cycle });
+      }
       return true;
     }
     if (visited.has(nodeId)) return false;

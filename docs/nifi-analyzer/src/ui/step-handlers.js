@@ -14,6 +14,7 @@ import { parseProgress, parseProgressHide, uiYield } from './progress.js';
 import { buildTierData } from './tier-diagram/build-tier-data.js';
 import { renderTierDiagram } from './tier-diagram/index.js';
 import { handleError, AppError } from '../core/errors.js';
+import { metricsHTML, tableHTML, expanderHTML } from '../utils/dom-helpers.js';
 
 /**
  * Show an error alert in a target element.
@@ -53,53 +54,9 @@ import { getProcessorPackages } from '../constants/package-map.js';
 // Config
 import { getDbxConfig } from '../core/config.js';
 
-// ================================================================
-// HELPER HTML BUILDERS (extracted from index.html lines 7294-7328)
-// ================================================================
-
-/**
- * Build a metrics row from label/value items.
- * @param {Array} items
- * @returns {string}
- */
-function metricsHTML(items) {
-  return '<div class="metrics">' + items.map(item => {
-    const l = Array.isArray(item) ? item[0] : item.label;
-    const v = Array.isArray(item) ? item[1] : item.value;
-    const d = Array.isArray(item) ? item[2] : item.delta;
-    const c = Array.isArray(item) ? '' : (item.color || '');
-    return `<div class="metric"><div class="label">${l}</div><div class="value"${c ? ' style="color:' + c + '"' : ''}>${v}</div>${d ? `<div class="delta">${d}</div>` : ''}</div>`;
-  }).join('') + '</div>';
-}
-
-/**
- * Build an HTML table from headers and rows.
- * @param {string[]} headers
- * @param {Array[]}  rows
- * @returns {string}
- */
-function tableHTML(headers, rows) {
-  return `<div class="table-scroll"><table><thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c ?? ''}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
-}
-
-/**
- * Build an expandable section.
- * @param {string}  title
- * @param {string}  content
- * @param {boolean} open
- * @returns {string}
- */
-function expanderHTML(title, content, open = false) {
-  return `<div class="expander ${open ? 'open' : ''}"><div class="expander-header" data-expander-toggle><span>${title}</span><span class="expander-arrow">\u25B6</span></div><div class="expander-body">${content}</div></div>`;
-}
-
-// Delegate expander toggle clicks via event delegation
-if (typeof document !== 'undefined') {
-  document.addEventListener('click', (e) => {
-    const header = e.target.closest('[data-expander-toggle]');
-    if (header) header.parentElement.classList.toggle('open');
-  });
-}
+// HTML builders (metricsHTML, tableHTML, expanderHTML) imported from
+// ../utils/dom-helpers.js — the canonical, XSS-safe implementations.
+// Expander toggle click delegation is also handled in dom-helpers.
 
 // ================================================================
 // PARSE INPUT — NiFi XML Only
@@ -227,26 +184,38 @@ export async function parseInput() {
   if (analyzeReady) analyzeReady.classList.remove('hidden');
   setTimeout(() => { if (prog) prog.style.display = 'none'; }, 500);
 
-  // Auto-run all steps sequentially with proper await
+  // Auto-run all steps sequentially with state validation between each step
   try {
     await new Promise(r => setTimeout(r, 50));
     switchTab('analyze'); await runAnalysis();
+    if (!getState().analysis) { console.error('[auto-run] Analysis failed, stopping pipeline'); return; }
+
     await new Promise(r => setTimeout(r, 50));
     switchTab('assess'); await runAssessment();
+    if (!getState().assessment) { console.error('[auto-run] Assessment failed, stopping pipeline'); return; }
+
     await new Promise(r => setTimeout(r, 50));
     switchTab('convert'); await generateNotebook();
+    if (!getState().notebook) { console.error('[auto-run] Notebook generation failed, stopping pipeline'); return; }
+
     await new Promise(r => setTimeout(r, 50));
     switchTab('report'); await generateReport();
+    if (!getState().migrationReport) { console.error('[auto-run] Report generation failed, stopping pipeline'); return; }
+
     await new Promise(r => setTimeout(r, 50));
     if (typeof window.generateFinalReport === 'function') {
       switchTab('reportFinal');
       await window.generateFinalReport();
+      if (!getState().finalReport) { console.error('[auto-run] Final report failed, stopping pipeline'); return; }
     }
+
     await new Promise(r => setTimeout(r, 50));
     if (typeof window.runValidation === 'function') {
       switchTab('validate');
       await window.runValidation();
+      if (!getState().validation) { console.error('[auto-run] Validation failed, stopping pipeline'); return; }
     }
+
     await new Promise(r => setTimeout(r, 50));
     if (typeof window.runValueAnalysis === 'function') {
       switchTab('value');
@@ -354,7 +323,7 @@ export async function runAnalysis() {
       props.forEach(([k, v]) => {
         const masked = isSensitiveProp(k) ? '********' : v;
         const hasEL = v && v.includes('${');
-        const dv = hasEL ? String(masked).replace(/\$\{([^}]+)\}/g, '<span class="el-highlight">${$1}</span>') : escapeHTML(String(masked || ''));
+        const dv = hasEL ? String(masked).replace(/\$\{([^}]+)\}/g, (m, g) => `<span class="el-highlight">\${${escapeHTML(g)}}</span>`) : escapeHTML(String(masked || ''));
         body += '<tr><td style="color:var(--text2);padding:2px 6px;border-bottom:1px solid var(--border);white-space:nowrap">' + escapeHTML(k) + '</td><td style="padding:2px 6px;border-bottom:1px solid var(--border);word-break:break-all">' + dv + '</td></tr>';
       });
       body += '</table>';

@@ -73,14 +73,18 @@ export function metricsHTML(items) {
 /**
  * Build a scrollable table from headers and row data.
  *
+ * Headers are escaped. Cell values are treated as trusted HTML (callers must
+ * escape user data before passing it in) to allow inline badges, conf-dots,
+ * and other markup.
+ *
  * @param {string[]} headers
- * @param {Array<Array<string>>} rows
- * @returns {string} HTML string (trusted template — cell values are escaped)
+ * @param {Array<Array<string>>} rows — cells may contain trusted HTML
+ * @returns {string} HTML string
  */
 export function tableHTML(headers, rows) {
   const thead = headers.map(h => `<th>${escapeHTML(h)}</th>`).join('');
   const tbody = rows.map(r =>
-    `<tr>${r.map(c => `<td>${escapeHTML(c ?? '')}</td>`).join('')}</tr>`
+    `<tr>${r.map(c => `<td>${c ?? ''}</td>`).join('')}</tr>`
   ).join('');
   return `<div class="table-scroll"><table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table></div>`;
 }
@@ -88,7 +92,10 @@ export function tableHTML(headers, rows) {
 /**
  * Build a collapsible expander section.
  *
- * @param {string} title
+ * Title and content are treated as trusted HTML (callers must escape user
+ * data before passing it in) to allow inline badges, conf-dots, and markup.
+ *
+ * @param {string} title   — may contain trusted HTML
  * @param {string} content — trusted HTML content
  * @param {boolean} [open=false]
  * @returns {string} HTML string
@@ -96,7 +103,7 @@ export function tableHTML(headers, rows) {
 export function expanderHTML(title, content, open = false) {
   return `<div class="expander ${open ? 'open' : ''}">`
     + `<div class="expander-header" data-expander-toggle>`
-    + `<span>${escapeHTML(title)}</span><span class="expander-arrow">&#9654;</span></div>`
+    + `<span>${title}</span><span class="expander-arrow">&#9654;</span></div>`
     + `<div class="expander-body">${content}</div></div>`;
 }
 

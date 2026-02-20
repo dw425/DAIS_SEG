@@ -49,7 +49,7 @@ export function wrapWithErrorFramework(m, qualifiedSchema, cellIndex, lineage) {
     '        try: _cell_rows_' + varName + ' = ' + outputVar + '.count()\n' +
     '        except: pass\n' +
     '        print(f"[OK] ' + safeName + ' ({_cell_rows_' + varName + '} rows)")\n' +
-    '        spark.sql(f"""INSERT INTO ' + qualifiedSchema + '.__execution_log VALUES (\n' +
+    '        spark.sql(f"""INSERT INTO `' + qualifiedSchema + '`.__execution_log VALUES (\n' +
     "            '" + safeName + "', '" + safeType + "', '" + safeRole + "',\n" +
     "            current_timestamp(), '{_cell_status_" + varName + "}',\n" +
     "            '{_cell_error_" + varName + "}', {_cell_rows_" + varName + "},\n" +
@@ -59,14 +59,17 @@ export function wrapWithErrorFramework(m, qualifiedSchema, cellIndex, lineage) {
     '        )""")\n' +
     'except Exception as _e:\n' +
     '        _cell_status_' + varName + ' = "FAILED"\n' +
-    '        _cell_error_' + varName + " = str(_e).replace(\"'\", \"''\")\n" +
+    '        _cell_error_' + varName + " = str(_e).replace(\"'\", \"''\").replace(\"\\\\\", \"\\\\\\\\\")\n" +
     '        print(f"[ERROR] ' + safeName + ': {_e}")\n' +
-    '        spark.sql(f"""INSERT INTO ' + qualifiedSchema + '.__execution_log VALUES (\n' +
-    "            '" + safeName + "', '" + safeType + "', '" + safeRole + "',\n" +
-    "            current_timestamp(), '{_cell_status_" + varName + "}',\n" +
-    "            '{_cell_error_" + varName + "}', {_cell_rows_" + varName + "},\n" +
-    "            '{str(datetime.now() - _cell_start_" + varName + ")}',\n" +
-    '            ' + Math.round(m.confidence * 100) + ",\n" +
-    "            '" + safeUpstream + "'\n" +
-    '        )""")';
+    '        try:\n' +
+    '            spark.sql(f"""INSERT INTO `' + qualifiedSchema + '`.__execution_log VALUES (\n' +
+    "                '" + safeName + "', '" + safeType + "', '" + safeRole + "',\n" +
+    "                current_timestamp(), '{_cell_status_" + varName + "}',\n" +
+    "                '{_cell_error_" + varName + "}', {_cell_rows_" + varName + "},\n" +
+    "                '{str(datetime.now() - _cell_start_" + varName + ")}',\n" +
+    '                ' + Math.round(m.confidence * 100) + ",\n" +
+    "                '" + safeUpstream + "'\n" +
+    '            )""")\n' +
+    "        except: pass  # Don't let logging failure mask the original error\n" +
+    '        raise _e';
 }

@@ -8,6 +8,8 @@
  * @module reporters/comparison-engine
  */
 
+import { CONFIDENCE_THRESHOLDS } from '../constants/confidence-thresholds.js';
+
 /**
  * Compute cross-comparison metrics between NiFi processors and Databricks mappings.
  *
@@ -17,8 +19,8 @@
  */
 export function computeComparison(mappings, nifi) {
   const total = mappings.length;
-  // Exact match: high-confidence direct 1:1 mappings (conf >= 0.8)
-  const exactCount = mappings.filter(m => m.mapped && m.confidence >= 0.8).length;
+  // Exact match: high-confidence direct 1:1 mappings (conf >= EXACT threshold)
+  const exactCount = mappings.filter(m => m.mapped && m.confidence >= CONFIDENCE_THRESHOLDS.EXACT).length;
   // Functional match: any mapped processor (intent preserved regardless of confidence)
   const funcCount = mappings.filter(m => m.mapped).length;
   // Actions converted: connections where BOTH source and destination are mapped
@@ -30,7 +32,7 @@ export function computeComparison(mappings, nifi) {
   const rows = mappings.map((m, i) => {
     let matchType;
     if (!m.mapped) matchType = 'gap';
-    else if (m.confidence >= 0.8) matchType = 'exact';
+    else if (m.confidence >= CONFIDENCE_THRESHOLDS.EXACT) matchType = 'exact';
     else matchType = 'functional';
     return {
       idx: i + 1, name: m.name, type: m.type, group: m.group || '\u2014', role: m.role,

@@ -248,12 +248,19 @@ export function runValueAnalysis({ nifi, notebook, escapeHTML }) {
   // ════════════════════════════════════════════
   h += '<h3 style="margin:24px 0 12px;color:var(--primary)">5. Migration ROI Summary</h3>';
 
-  // Complexity scoring: account for nested groups, controller chains, routing multiplier
+  // Complexity scoring formula:
+  // - Processors (x2): Each processor represents a discrete transformation step
+  // - Connections (x1): Data flow links between processors
+  // - Controller services (x3): Shared services add cross-cutting complexity
+  // - External systems (x5): Each external integration adds deployment/config complexity
+  // - Nested group depth (x3): Deeper nesting increases maintenance burden
+  // - Routing multiplier (1 + routes x 0.15): Conditional routing adds branching complexity
+  //   Capped at 3.0 to prevent unrealistic inflation
   const nestedGroupDepth = nifi.processGroups.reduce((max, pg) => {
     const depth = (pg.path || pg.name || '').split('/').length;
     return Math.max(max, depth);
   }, 1);
-  const routingMultiplier = routes.length > 0 ? 1 + (routes.length * 0.15) : 1;
+  const routingMultiplier = Math.min(routes.length > 0 ? 1 + (routes.length * 0.15) : 1, 3.0);
   const controllerChainWeight = (nifi.controllerServices || []).length * 4;
   const nifiComplexity = Math.round(
     (procs.length * 2 + conns.length + controllerChainWeight + Object.keys(extSystems).length * 5 + nestedGroupDepth * 3) * routingMultiplier

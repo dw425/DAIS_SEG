@@ -56,15 +56,18 @@ export async function checkReverseEngineering({
 
   // Check 3: Scheduling parameters
   let schedPreserved = 0;
+  let schedTotal = 0;
   nifi.processors.forEach(p => {
     if (p.schedulingPeriod && p.schedulingPeriod !== '0 sec') {
-      if (allCellTextLower.includes(p.schedulingPeriod.toLowerCase()) || allCellTextLower.includes('schedule') || allCellTextLower.includes('trigger')) schedPreserved++;
-    } else {
-      schedPreserved++;
+      if (allCellTextLower.includes(p.schedulingPeriod.toLowerCase()) || allCellTextLower.includes('trigger')) {
+        schedPreserved++;
+      }
+      schedTotal++;
     }
+    // Don't count unscheduled processors at all
   });
-  const schedPct = procCount ? Math.round((schedPreserved / procCount) * 100) : 100;
-  reChecks.push({ label: 'Scheduling Parameters Preserved', score: schedPct, detail: schedPreserved + '/' + procCount + ' scheduling configs captured' });
+  const schedPct = schedTotal ? Math.round((schedPreserved / schedTotal) * 100) : 100;
+  reChecks.push({ label: 'Scheduling Parameters Preserved', score: schedPct, detail: schedPreserved + '/' + schedTotal + ' scheduling configs captured' });
 
   if (onProgress) {
     onProgress(72, 'Checking controller services and external systems...');

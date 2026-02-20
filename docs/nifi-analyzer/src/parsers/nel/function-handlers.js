@@ -173,6 +173,7 @@ export function applyNELFunction(base, call, mode) {
   }
 
   // -- Logic functions --
+  // PySpark Column OR uses | (not ||). || would be a Python syntax error for Column objects.
   if (name === 'isempty') return mode === 'col' ? '(' + base + '.isNull() | (' + base + ' == lit("")))' : '(not ' + base + ')';
   if (name === 'isnull') return mode === 'col' ? base + '.isNull()' : '(' + base + ' is None)';
   if (name === 'notnull') return mode === 'col' ? base + '.isNotNull()' : '(' + base + ' is not None)';
@@ -266,6 +267,7 @@ export function applyNELFunction(base, call, mode) {
   }
   if (name === 'escapecsv') {
     // Wrap value in quotes and escape internal quotes if it contains comma, quote, or newline
+    // PySpark Column OR uses | (the Column.__or__ operator), which is correct syntax.
     return mode === 'col'
       ? 'when(' + base + '.contains(",") | ' + base + '.contains(\'"\') | ' + base + '.contains("\\n"), concat(lit(\'"\'), regexp_replace(' + base + ', \'"\', \'""\'), lit(\'"\'))).otherwise(' + base + ')'
       : '\'"\' + ' + base + '.replace(\'"\', \'""\') + \'"\' if "," in ' + base + ' or \'"\' in ' + base + ' or "\\n" in ' + base + ' else ' + base;

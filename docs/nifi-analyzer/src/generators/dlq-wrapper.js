@@ -57,7 +57,7 @@ export function generateDLQWrapper(code, procName, varName, inputVar, qualifiedS
     dlqWriteCode =
       '        if _failed_records:\n' +
       '            _dlq_df = spark.createDataFrame(_failed_records)\n' +
-      '            _dlq_df.write.format("delta").mode("append").saveAsTable("' + schema + '.__dead_letter_queue")\n' +
+      '            _dlq_df.write.format("delta").mode("append").saveAsTable("`' + schema + '`.__dead_letter_queue")\n' +
       '            print(f"[DLQ] ' + procName + ': {len(_failed_records)} records routed to DLQ")';
   }
 

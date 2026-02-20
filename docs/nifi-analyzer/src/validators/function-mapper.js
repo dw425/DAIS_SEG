@@ -10,6 +10,7 @@
 
 import { classifyNiFiProcessor } from '../mappers/processor-classifier.js';
 import { getProcessorPackages } from '../constants/package-map.js';
+import { CONFIDENCE_THRESHOLDS } from '../constants/confidence-thresholds.js';
 
 /**
  * Map NiFi processor functions to Databricks equivalents.
@@ -65,7 +66,7 @@ export async function mapFunctions({
 
       let dbxFunctions = [];
       let status = 'missing';
-      if (m.mapped && m.confidence >= 0.7) { status = 'mapped'; funcMapped++; if (m.desc) dbxFunctions.push(m.desc); }
+      if (m.mapped && m.confidence >= CONFIDENCE_THRESHOLDS.MAPPED) { status = 'mapped'; funcMapped++; if (m.desc) dbxFunctions.push(m.desc); }
       else if (m.mapped) { status = 'partial'; funcPartial++; if (m.desc) dbxFunctions.push(m.desc + ' (low confidence)'); }
       else { funcMissing++; }
 

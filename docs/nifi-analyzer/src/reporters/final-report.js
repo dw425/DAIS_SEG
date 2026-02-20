@@ -17,9 +17,14 @@ import { classifyNiFiProcessor } from '../mappers/processor-classifier.js';
  * @returns {string} Masked or original value
  */
 function maskSensitiveValue(key, value) {
-  if (/password|secret|token|key|credential/i.test(key)) return '***';
+  if (/password|secret|token|key|credential|api[_.]?key|private[_.]?key|passphrase/i.test(key)) return '***';
   if (typeof value === 'string') {
-    return value.replace(/(jdbc:\w+:\/\/)([^:]+):([^@]+)@/g, '$1$2:***@');
+    let v = value;
+    v = v.replace(/(jdbc:\w+:\/\/)([^:]+):([^@]+)@/g, '$1$2:***@');
+    v = v.replace(/AKIA[0-9A-Z]{16}/g, '***AWS_KEY***');
+    v = v.replace(/(password|pwd|pass)\s*=\s*[^;}&\s]+/gi, '$1=***');
+    v = v.replace(/Bearer\s+[A-Za-z0-9\-._~+\/]+=*/g, 'Bearer ***');
+    return v;
   }
   return value;
 }

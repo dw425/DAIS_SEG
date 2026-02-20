@@ -85,8 +85,14 @@ export function parseTar(buffer) {
     const results = [];
     let offset = 0;
     const decoder = new TextDecoder();
+    const MAX_TAR_ENTRIES = 10000;
+    let entryCount = 0;
 
     while (offset < buffer.length - 512) {
+      if (++entryCount > MAX_TAR_ENTRIES) {
+        results.push({ name: '__tar_limit_exceeded__', content: 'TAR archive exceeds 10,000 entry limit' });
+        break;
+      }
       const header = buffer.slice(offset, offset + 512);
       let name = decoder.decode(header.slice(0, 100)).replace(/\0/g, '').trim();
       if (!name) break;
@@ -461,9 +467,11 @@ export async function extractXlsxData(bytes) {
               val = sharedStrings[idx];
             }
           }
-          // Ensure array is large enough for sparse rows
-          while (rowData.length <= colIdx) rowData.push('');
-          rowData[colIdx] = val;
+          // Ensure array is large enough for sparse rows, capped to prevent memory issues
+          const MAX_COL = 500;
+          const cappedIdx = Math.min(colIdx, MAX_COL);
+          while (rowData.length <= cappedIdx) rowData.push('');
+          rowData[cappedIdx] = val;
         }
         sheetData.push(rowData);
       }

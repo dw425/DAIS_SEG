@@ -15,7 +15,7 @@
  * @returns {*}   - Sanitized copy
  */
 export function sanitizeReportJSON(obj) {
-  if (typeof obj === 'string') return obj.replace(/[\x00-\x1f]/g, '');
+  if (typeof obj === 'string') return obj.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
   if (Array.isArray(obj)) return obj.map(sanitizeReportJSON);
   if (obj && typeof obj === 'object') {
     const out = {};

@@ -54,14 +54,30 @@ export function parseNiFiXML(doc, sourceName) {
       const bp = getChildText(conn, 'backPressureObjectThreshold');
       connections.push({sourceId:srcId, destinationId:dstId, sourceType:srcType, destinationType:dstType, relationships:rels, backPressure:bp});
     });
-    // Input/output ports
-    contents.querySelectorAll(':scope > inputPorts').forEach(p => {
+    // Extract input ports as pseudo-processors
+    contents.querySelectorAll(':scope > inputPorts > inputPort, :scope > inputPort, :scope > inputPorts').forEach(p => {
+      // Skip wrapper elements that don't have an id directly
       const id = getChildText(p, 'id'), name = getChildText(p, 'name');
-      if(id) idToName[id] = name || 'input_port';
+      if (id) {
+        idToName[id] = name || 'InputPort';
+        processors.push({ name: name || 'InputPort', type: 'InputPort', id: id, group: groupName, properties: {} });
+      }
     });
-    contents.querySelectorAll(':scope > outputPorts').forEach(p => {
+    // Extract output ports as pseudo-processors
+    contents.querySelectorAll(':scope > outputPorts > outputPort, :scope > outputPort, :scope > outputPorts').forEach(p => {
       const id = getChildText(p, 'id'), name = getChildText(p, 'name');
-      if(id) idToName[id] = name || 'output_port';
+      if (id) {
+        idToName[id] = name || 'OutputPort';
+        processors.push({ name: name || 'OutputPort', type: 'OutputPort', id: id, group: groupName, properties: {} });
+      }
+    });
+    // Extract funnels as pseudo-processors
+    contents.querySelectorAll(':scope > funnels > funnel, :scope > funnel, :scope > funnels').forEach(f => {
+      const id = getChildText(f, 'id');
+      if (id) {
+        idToName[id] = 'Funnel';
+        processors.push({ name: 'Funnel', type: 'Funnel', id: id, group: groupName, properties: {} });
+      }
     });
     // Nested processGroups (handle both plural and singular tags)
     const pgEls = contents.querySelectorAll(':scope > processGroups');
@@ -136,6 +152,11 @@ export function parseNiFiXML(doc, sourceName) {
   const topConnEls = snippet.querySelectorAll(':scope > connections');
   const topConnElsSingular = topConnEls.length === 0 ? snippet.querySelectorAll(':scope > connection') : [];
   const allTopConnEls = topConnEls.length > 0 ? topConnEls : topConnElsSingular;
+  // Use Set for O(1) deduplication instead of .some() O(n) scan
+  const connKeys = new Set();
+  connections.forEach(c => {
+    connKeys.add(`${c.sourceId}|${c.destinationId}|${c.relationships.sort().join(',')}`);
+  });
   allTopConnEls.forEach(conn => {
     const srcId = conn.querySelector('source > id')?.textContent || getChildText(conn, 'sourceId') || '';
     const dstId = conn.querySelector('destination > id')?.textContent || getChildText(conn, 'destinationId') || '';
@@ -145,8 +166,10 @@ export function parseNiFiXML(doc, sourceName) {
     conn.querySelectorAll(':scope > selectedRelationships').forEach(r => { if(r.textContent) rels.push(r.textContent); });
     if (!rels.length) conn.querySelectorAll(':scope > relationship').forEach(r => { if(r.textContent) rels.push(r.textContent); });
     const bp = getChildText(conn, 'backPressureObjectThreshold');
-    // Avoid duplicate connections
-    if (!connections.some(c => c.sourceId === srcId && c.destinationId === dstId && c.relationships.join(',') === rels.join(','))) {
+    // Avoid duplicate connections using Set for O(1) lookup
+    const connKey = `${srcId}|${dstId}|${rels.sort().join(',')}`;
+    if (!connKeys.has(connKey)) {
+      connKeys.add(connKey);
       connections.push({sourceId:srcId, destinationId:dstId, sourceType:srcType, destinationType:dstType, relationships:rels, backPressure:bp});
     }
   });

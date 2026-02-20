@@ -39,6 +39,7 @@ import { handleError, AppError, clearErrorLog } from './core/errors.js';
 // ================================================================
 import { initTabs, setTabStatus, unlockTab } from './ui/tabs.js';
 import { escapeHTML } from './security/html-sanitizer.js';
+import { metricsHTML } from './utils/dom-helpers.js';
 import { initFileUpload, getUploadedContent, getUploadedName, getUploadedBytes } from './ui/file-upload.js';
 import { loadSampleFlow, loadSampleFile } from './ui/sample-flows.js';
 import {
@@ -79,6 +80,12 @@ import { analyzeFlowGraph } from './analyzers/flow-graph-analyzer.js';
 // ================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
+  // NOTE: All event listeners below are attached exactly once inside this
+  // DOMContentLoaded handler, which itself fires only once. There is no
+  // memory-leak risk from repeated listener attachment. If a future refactor
+  // moves listener setup into a function called multiple times, use an
+  // AbortController to clean up stale listeners before re-attaching.
+
   // ── 6a. Initialize core infrastructure ──
   const store = createStore();
   const config = loadDbxConfig();
@@ -158,29 +165,33 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── 6f. Wire step buttons (analyze, assess, convert, report) ──
   const analyzeBtn = document.getElementById('analyzeBtn');
   if (analyzeBtn) {
-    analyzeBtn.addEventListener('click', () => {
-      runAnalysis();
+    analyzeBtn.addEventListener('click', async () => {
+      analyzeBtn.disabled = true;
+      try { await runAnalysis(); } finally { analyzeBtn.disabled = false; }
     });
   }
 
   const assessBtn = document.getElementById('assessBtn');
   if (assessBtn) {
-    assessBtn.addEventListener('click', () => {
-      runAssessment();
+    assessBtn.addEventListener('click', async () => {
+      assessBtn.disabled = true;
+      try { await runAssessment(); } finally { assessBtn.disabled = false; }
     });
   }
 
   const convertBtn = document.getElementById('convertBtn');
   if (convertBtn) {
-    convertBtn.addEventListener('click', () => {
-      generateNotebook();
+    convertBtn.addEventListener('click', async () => {
+      convertBtn.disabled = true;
+      try { await generateNotebook(); } finally { convertBtn.disabled = false; }
     });
   }
 
   const reportBtn = document.getElementById('reportBtn');
   if (reportBtn) {
-    reportBtn.addEventListener('click', () => {
-      generateReport();
+    reportBtn.addEventListener('click', async () => {
+      reportBtn.disabled = true;
+      try { await generateReport(); } finally { reportBtn.disabled = false; }
     });
   }
 
@@ -188,42 +199,42 @@ document.addEventListener('DOMContentLoaded', () => {
   const dlNotebookBtn = document.getElementById('downloadNotebookBtn');
   if (dlNotebookBtn) {
     dlNotebookBtn.addEventListener('click', () => {
-      downloadNotebook(getState());
+      try { downloadNotebook(getState()); } catch (e) { console.error('[download]', e); alert('Download failed: ' + e.message); }
     });
   }
 
   const dlWorkflowBtn = document.getElementById('downloadWorkflowBtn');
   if (dlWorkflowBtn) {
     dlWorkflowBtn.addEventListener('click', () => {
-      downloadWorkflow(getState());
+      try { downloadWorkflow(getState()); } catch (e) { console.error('[download]', e); alert('Download failed: ' + e.message); }
     });
   }
 
   const dlReportBtn = document.getElementById('downloadReportBtn');
   if (dlReportBtn) {
     dlReportBtn.addEventListener('click', () => {
-      downloadReport(getState());
+      try { downloadReport(getState()); } catch (e) { console.error('[download]', e); alert('Download failed: ' + e.message); }
     });
   }
 
   const dlFinalReportBtn = document.getElementById('downloadFinalReportBtn');
   if (dlFinalReportBtn) {
     dlFinalReportBtn.addEventListener('click', () => {
-      downloadFinalReport(getState());
+      try { downloadFinalReport(getState()); } catch (e) { console.error('[download]', e); alert('Download failed: ' + e.message); }
     });
   }
 
   const dlValidationBtn = document.getElementById('downloadValidationBtn');
   if (dlValidationBtn) {
     dlValidationBtn.addEventListener('click', () => {
-      downloadValidationReport(getState());
+      try { downloadValidationReport(getState()); } catch (e) { console.error('[download]', e); alert('Download failed: ' + e.message); }
     });
   }
 
   const dlValueBtn = document.getElementById('downloadValueBtn');
   if (dlValueBtn) {
     dlValueBtn.addEventListener('click', () => {
-      downloadValueAnalysis(getState());
+      try { downloadValueAnalysis(getState()); } catch (e) { console.error('[download]', e); alert('Download failed: ' + e.message); }
     });
   }
 
@@ -318,6 +329,23 @@ document.addEventListener('DOMContentLoaded', () => {
   // on the document body. This provides a safety net until the rendered HTML
   // is fully migrated away from inline handlers.
   document.body.addEventListener('click', (e) => {
+    // Prefer data-action attribute matching for delegated download buttons
+    const actionEl = e.target.closest('[data-action]');
+    if (actionEl) {
+      const action = actionEl.dataset.action;
+      e.preventDefault();
+      if (action === 'download-notebook') {
+        downloadNotebook(getState());
+      } else if (action === 'download-workflow') {
+        downloadWorkflow(getState());
+      } else if (action === 'download-report-markdown') {
+        downloadReport(getState());
+      }
+      return;
+    }
+
+    // Legacy fallback: match on text content for buttons rendered with
+    // inline text labels (will be removed once all HTML templates use data-action)
     const target = e.target.closest('button');
     if (!target) return;
 
@@ -365,13 +393,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.analyzeFlowGraph = analyzeFlowGraph;
 
   // Steps 6-8: Final Report, Validation, Value Analysis
-  const metricsHTML = (items) => '<div class="metrics">' + items.map(item => {
-    const l = Array.isArray(item) ? item[0] : item.label;
-    const v = Array.isArray(item) ? item[1] : item.value;
-    const d = Array.isArray(item) ? item[2] : item.delta;
-    const c = Array.isArray(item) ? '' : (item.color || '');
-    return `<div class="metric"><div class="label">${l}</div><div class="value"${c ? ' style="color:' + c + '"' : ''}>${v}</div>${d ? `<div class="delta">${d}</div>` : ''}</div>`;
-  }).join('') + '</div>';
+  // metricsHTML imported from ./utils/dom-helpers.js (XSS-safe version)
 
   window.generateFinalReport = async () => {
     const STATE = getState();

@@ -180,6 +180,10 @@ function validateImports(cells) {
     { pattern: /\bdatetime\./i, symbol: 'datetime', suggestion: 'from datetime import datetime' },
     { pattern: /\bbase64\./i, symbol: 'base64', suggestion: 'import base64' },
     { pattern: /\bhashlib\./i, symbol: 'hashlib', suggestion: 'import hashlib' },
+    { pattern: /\bdbutils\.secrets\.get\b/i, symbol: 'dbutils', lib: 'databricks-sdk', note: 'Databricks secrets API' },
+    { pattern: /\bpd\.\w+|pandas\.\w+/i, symbol: 'pandas', lib: 'pandas', note: 'Pandas DataFrame operations' },
+    { pattern: /\buuid\b/i, symbol: 'uuid', lib: 'uuid', note: 'UUID generation' },
+    { pattern: /\bhashlib\b/i, symbol: 'hashlib', lib: 'hashlib', note: 'Hash functions' },
   ];
 
   const allText = cells.map(c => c.source || '').join('\n');

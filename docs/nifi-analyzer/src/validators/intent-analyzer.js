@@ -9,6 +9,7 @@
  */
 
 import { classifyNiFiProcessor } from '../mappers/processor-classifier.js';
+import { CONFIDENCE_THRESHOLDS } from '../constants/confidence-thresholds.js';
 
 /**
  * Analyze whether each NiFi processor's intent is preserved in the notebook.
@@ -67,7 +68,7 @@ export async function analyzeIntent({
       const varName = mapping.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
       const cellMatch = allCellTextLower.includes(varName) || allCellTextLower.includes(ni.name.toLowerCase());
       if (!cellMatch) { intentPartial++; intentGaps.push({ proc: ni.name, type: ni.type, intent: ni.intent, issue: 'Mapped but no dedicated notebook cell references this processor' }); return; }
-      if (mapping.confidence >= 0.7) { intentMatched++; }
+      if (mapping.confidence >= CONFIDENCE_THRESHOLDS.MAPPED) { intentMatched++; }
       else { intentPartial++; intentGaps.push({ proc: ni.name, type: ni.type, intent: ni.intent, issue: 'Low confidence (' + Math.round(mapping.confidence * 100) + '%) — intent may not be fully preserved' }); }
     });
     if (onProgress) {

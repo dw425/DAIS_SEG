@@ -69,7 +69,7 @@ export const SAMPLE_FLOWS = {
     <connection><id>c10</id><source><id>p8</id><type>PROCESSOR</type></source><destination><id>p9</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
   </rootGroup>
   <controllerServices>
-    <controllerService><id>cs1</id><name>DBCPService</name><class>org.apache.nifi.dbcp.DBCPConnectionPool</class><property><name>Database Connection URL</name><value>jdbc:postgresql://db.example.com:5432/analytics</value></property><property><name>Database User</name><value>etl_user</value></property><property><name>Password</name><value>s3cur3_p4ss</value></property></controllerService>
+    <controllerService><id>cs1</id><name>DBCPService</name><class>org.apache.nifi.dbcp.DBCPConnectionPool</class><property><name>Database Connection URL</name><value>jdbc:postgresql://db.example.com:5432/analytics</value></property><property><name>Database User</name><value>etl_user</value></property><property><name>Password</name><value>\${DB_PASSWORD}</value></property></controllerService>
   </controllerServices>
 </flowController>`,
 
@@ -212,7 +212,7 @@ export const SAMPLE_FLOWS = {
         <property><name>Hostname</name><value>sftp.partner.example.com</value></property>
         <property><name>Port</name><value>22</value></property>
         <property><name>Username</name><value>mfg_data_xfer</value></property>
-        <property><name>Password</name><value>xfer_s3cret!</value></property>
+        <property><name>Password</name><value>\${SFTP_PASSWORD}</value></property>
         <property><name>Remote Path</name><value>/incoming/mfg/\${now():format('yyyyMMdd')}</value></property>
       </processor>
       <connection><id>fc6</id><source><id>f9</id><type>PROCESSOR</type></source><destination><id>f10</id><type>PROCESSOR</type></destination><relationship>success</relationship></connection>
@@ -255,7 +255,7 @@ export const SAMPLE_FLOWS = {
     <controllerService><id>cs_mfg</id><name>MfgDBCP</name><class>org.apache.nifi.dbcp.DBCPConnectionPool</class>
       <property><name>Database Connection URL</name><value>jdbc:oracle:thin:@mfg-db.example.com:1521/MFGPRD</value></property>
       <property><name>Database User</name><value>mfg_reader</value></property>
-      <property><name>Password</name><value>mfg_r34d3r!</value></property>
+      <property><name>Password</name><value>\${MFG_DB_PASSWORD}</value></property>
       <property><name>Database Driver Class Name</name><value>oracle.jdbc.driver.OracleDriver</value></property>
     </controllerService>
   </controllerServices>
