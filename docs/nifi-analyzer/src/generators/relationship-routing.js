@@ -30,7 +30,7 @@ export function generateRelationshipRouting(m, nifi, lineage) {
   const varName = sanitizeVarName(m.name);
   const relationships = {};
   outConns.forEach(c => {
-    const rel = c.relationship || 'success';
+    const rel = (c.relationships && c.relationships[0]) || c.relationship || 'success';
     if (!relationships[rel]) relationships[rel] = [];
     relationships[rel].push(c.destinationName);
   });

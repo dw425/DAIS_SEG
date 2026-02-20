@@ -35,7 +35,7 @@ export function generateAutoRecovery(m, qualifiedSchema, lineage) {
   if (m.role === 'source') {
     return '\n        # RECOVERY: Try relaxed schema\n' +
       '        try:\n' +
-      '            ' + outputVar + ' = spark.read.option("mode","PERMISSIVE").option("inferSchema","true").option("header","true").csv("/Volumes/fallback")\n' +
+      '            ' + outputVar + ' = spark.read.option("mode","PERMISSIVE").option("inferSchema","true").option("header","true").csv(VOLUMES_BASE + "/fallback")\n' +
       '            _cell_status_' + varName + ' = "RECOVERED"\n' +
       '            print(f"[RECOVERED] ' + safeName + '")\n' +
       '        except Exception as _e2:\n' +

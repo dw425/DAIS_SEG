@@ -114,6 +114,7 @@ export function parseNiFiRegistryJSON(flowData, sourceName) {
     source_type: 'nifi_registry_json',
     _nifi: nifi,
     parse_warnings: [],
+    tables: [],
     _deferredProcessorWork: null
   };
 }
