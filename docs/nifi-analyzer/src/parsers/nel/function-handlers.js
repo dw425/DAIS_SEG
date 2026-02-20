@@ -116,7 +116,7 @@ export function applyNELFunction(base, call, mode) {
     // Correct Spark SQL: when delimiter found (locate > 0), skip past it; otherwise return "".
     var saLen = sa.length;
     return mode === 'col'
-      ? 'when(locate("' + pyEscape(sa) + '", ' + base + ') > 0, substring(' + base + ', locate("' + pyEscape(sa) + '", ' + base + ') + ' + (saLen + 1) + ')).otherwise(lit(""))'
+      ? 'when(locate("' + pyEscape(sa) + '", ' + base + ') > 0, substring(' + base + ', locate("' + pyEscape(sa) + '", ' + base + ') + ' + saLen + ')).otherwise(lit(""))'
       : '"' + pyEscape(sa) + '".join(' + base + '.split("' + pyEscape(sa) + '")[1:])';
   }
   if (name === 'padleft' || name === 'leftpad') {

@@ -39,8 +39,10 @@ export const DBX_CONFIG_DEFAULTS = Object.freeze({
 export function loadDbxConfig() {
   try {
     const s = safeGetItem(STORAGE_KEY);
-    return s
-      ? { ...DBX_CONFIG_DEFAULTS, ...JSON.parse(s) }
+    // safeGetItem already returns a parsed object (not a raw string),
+    // so spread directly without a redundant JSON.parse() call.
+    return s && typeof s === 'object'
+      ? { ...DBX_CONFIG_DEFAULTS, ...s }
       : { ...DBX_CONFIG_DEFAULTS };
   } catch (e) {
     return { ...DBX_CONFIG_DEFAULTS };

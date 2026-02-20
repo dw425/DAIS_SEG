@@ -34,13 +34,8 @@ export function postProcessELInCode(code, procName, translateNELtoPySpark) {
 
   // If we resolved any _attrs references, ensure _attrs is defined
   if (result.indexOf('_attrs.get(') >= 0 && result.indexOf('_attrs =') < 0 && result.indexOf('_attrs=') < 0) {
-    var safeName = procName.replace(/[^a-zA-Z0-9_]/g, '_');
     result = '# Resolve NiFi FlowFile attributes from upstream DataFrame\n' +
-      '_attrs = {}\n' +
-      'try:\n' +
-      '    _first_row = df_' + safeName + '_input.first()\n' +
-      '    if _first_row: _attrs = _first_row.asDict()\n' +
-      'except: pass\n\n' + result;
+      '_attrs = {}  # Populated at runtime from flowfile attribute columns\n\n' + result;
   }
 
   return result;

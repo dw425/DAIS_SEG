@@ -55,8 +55,7 @@ export function parseNiFiXML(doc, sourceName) {
       connections.push({sourceId:srcId, destinationId:dstId, sourceType:srcType, destinationType:dstType, relationships:rels, backPressure:bp});
     });
     // Extract input ports as pseudo-processors
-    contents.querySelectorAll(':scope > inputPorts > inputPort, :scope > inputPort, :scope > inputPorts').forEach(p => {
-      // Skip wrapper elements that don't have an id directly
+    contents.querySelectorAll(':scope > inputPorts > inputPort, :scope > inputPort').forEach(p => {
       const id = getChildText(p, 'id'), name = getChildText(p, 'name');
       if (id) {
         idToName[id] = name || 'InputPort';
@@ -64,7 +63,7 @@ export function parseNiFiXML(doc, sourceName) {
       }
     });
     // Extract output ports as pseudo-processors
-    contents.querySelectorAll(':scope > outputPorts > outputPort, :scope > outputPort, :scope > outputPorts').forEach(p => {
+    contents.querySelectorAll(':scope > outputPorts > outputPort, :scope > outputPort').forEach(p => {
       const id = getChildText(p, 'id'), name = getChildText(p, 'name');
       if (id) {
         idToName[id] = name || 'OutputPort';
@@ -72,7 +71,7 @@ export function parseNiFiXML(doc, sourceName) {
       }
     });
     // Extract funnels as pseudo-processors
-    contents.querySelectorAll(':scope > funnels > funnel, :scope > funnel, :scope > funnels').forEach(f => {
+    contents.querySelectorAll(':scope > funnels > funnel, :scope > funnel').forEach(f => {
       const id = getChildText(f, 'id');
       if (id) {
         idToName[id] = 'Funnel';
