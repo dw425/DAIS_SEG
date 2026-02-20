@@ -1,15 +1,8 @@
 /**
  * ui/step-handlers.js — Main pipeline step handler functions
  *
- * Extracted from index.html lines 7334-7600 (and beyond).
  * These are the main functions called when users click step buttons:
  * parseInput, runAnalysis, runAssessment, generateNotebook, generateReport.
- *
- * NOTE: These functions reference many global functions from the monolithic HTML
- * (parsers, analyzers, mappers, generators, reporters). In the modularized
- * codebase, those should be imported from their respective modules. The imports
- * below use the expected module paths — some may need adjustment as more
- * phases of the extraction are completed.
  */
 
 import { getState, setState } from '../core/state.js';
@@ -21,21 +14,33 @@ import { parseProgress, parseProgressHide, uiYield } from './progress.js';
 import { buildTierData } from './tier-diagram/build-tier-data.js';
 import { renderTierDiagram } from './tier-diagram/index.js';
 
-/*
- * The following functions are expected to be available globally or imported
- * from their respective modules as more extraction phases complete.
- * For now, we reference them via window.* to maintain compatibility with
- * the monolithic HTML until all phases are extracted:
- *
- *   cleanInput, parseNiFiXML, parseNiFiRegistryJSON,
- *   buildResourceManifest, assembleBlueprint_fn,
- *   classifyNiFiProcessor, NIFI_DATABRICKS_MAP, ROLE_TIER_COLORS,
- *   buildDependencyGraph, detectExternalSystems,
- *   mapNiFiToDatabricks, getProcessorPackages,
- *   generateDatabricksNotebook, generateWorkflowJSON,
- *   generateMigrationReport, getDbxConfig,
- *   metricsHTML, tableHTML, expanderHTML, scoreBadge, progressHTML
- */
+// Parsers
+import { parseFlow } from '../parsers/index.js';
+
+// Analyzers
+import { buildResourceManifest } from '../analyzers/resource-manifest.js';
+import { assembleBlueprint } from '../analyzers/blueprint-assembler.js';
+import { buildDependencyGraph } from '../analyzers/dependency-graph.js';
+import { detectExternalSystems } from '../analyzers/external-systems.js';
+
+// Mappers
+import { classifyNiFiProcessor } from '../mappers/processor-classifier.js';
+import { mapNiFiToDatabricksAuto as mapNiFiToDatabricks } from '../mappers/index.js';
+
+// Generators
+import { generateDatabricksNotebook } from '../generators/notebook-generator.js';
+import { generateWorkflowJSON } from '../generators/workflow-generator.js';
+
+// Reporters
+import { generateMigrationReport } from '../reporters/migration-report.js';
+
+// Constants
+import { NIFI_DATABRICKS_MAP } from '../constants/nifi-databricks-map.js';
+import { ROLE_TIER_COLORS } from '../constants/nifi-role-map.js';
+import { getProcessorPackages } from '../constants/package-map.js';
+
+// Config
+import { getDbxConfig } from '../core/config.js';
 
 // ================================================================
 // HELPER HTML BUILDERS (extracted from index.html lines 7294-7328)
@@ -74,7 +79,15 @@ function tableHTML(headers, rows) {
  * @returns {string}
  */
 function expanderHTML(title, content, open = false) {
-  return `<div class="expander ${open ? 'open' : ''}"><div class="expander-header" onclick="this.parentElement.classList.toggle('open')"><span>${title}</span><span class="expander-arrow">\u25B6</span></div><div class="expander-body">${content}</div></div>`;
+  return `<div class="expander ${open ? 'open' : ''}"><div class="expander-header" data-expander-toggle><span>${title}</span><span class="expander-arrow">\u25B6</span></div><div class="expander-body">${content}</div></div>`;
+}
+
+// Delegate expander toggle clicks via event delegation
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (e) => {
+    const header = e.target.closest('[data-expander-toggle]');
+    if (header) header.parentElement.classList.toggle('open');
+  });
 }
 
 // ================================================================
@@ -90,7 +103,11 @@ export async function parseInput() {
   const uploadedContent = getUploadedContent();
   const pasteEl = document.getElementById('pasteInput');
   const raw = uploadedContent || (pasteEl ? pasteEl.value : '');
-  if (!raw.trim()) { alert('Please upload or paste a NiFi flow XML.'); return; }
+  if (!raw.trim()) {
+    const parseResultsEl = document.getElementById('parseResults');
+    if (parseResultsEl) parseResultsEl.innerHTML = '<div class="alert alert-error">Please upload or paste a NiFi flow XML.</div>';
+    return;
+  }
 
   const btn = document.getElementById('parseBtn');
   if (btn) btn.disabled = true;
@@ -107,58 +124,28 @@ export async function parseInput() {
     if (status) status.textContent = msg;
   };
 
-  updateProg(10, 'Cleaning input...');
-  await new Promise(r => setTimeout(r, 50));
-  const content = (typeof cleanInput === 'function' ? cleanInput : window.cleanInput)(raw);
-
-  updateProg(20, 'Parsing NiFi XML...');
+  updateProg(10, 'Cleaning & parsing input...');
   await new Promise(r => setTimeout(r, 50));
 
   let parsed;
   const uploadedName = getUploadedName();
-  const trimmed = content.trim();
-  const isJSON = trimmed.startsWith('{') || trimmed.startsWith('[');
-
-  if (isJSON) {
-    try {
-      const json = JSON.parse(trimmed);
-      const flowData = json.flowContents || json.flow || json;
-      if (flowData.processors || flowData.processGroups || flowData.connections) {
-        const parseFn = typeof parseNiFiRegistryJSON === 'function' ? parseNiFiRegistryJSON : window.parseNiFiRegistryJSON;
-        parsed = parseFn(flowData, uploadedName || 'NiFi Registry Flow');
-      } else {
-        document.getElementById('parseResults').innerHTML = '<div class="alert alert-error">JSON not recognized as NiFi Registry format.</div>';
-        if (btn) btn.disabled = false;
-        setTabStatus('load', 'ready');
-        if (prog) prog.style.display = 'none';
-        return;
-      }
-    } catch (e) {
-      document.getElementById('parseResults').innerHTML = '<div class="alert alert-error">Invalid JSON: ' + escapeHTML(e.message) + '</div>';
-      if (btn) btn.disabled = false;
-      setTabStatus('load', 'ready');
-      if (prog) prog.style.display = 'none';
-      return;
-    }
-  } else {
-    try {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(content, 'text/xml');
-      const parseError = doc.querySelector('parsererror');
-      if (parseError) throw new Error('Invalid XML: ' + parseError.textContent.substring(0, 100));
-      const parseFn = typeof parseNiFiXML === 'function' ? parseNiFiXML : window.parseNiFiXML;
-      parsed = parseFn(doc, uploadedName || 'NiFi Flow');
-    } catch (e) {
-      document.getElementById('parseResults').innerHTML = '<div class="alert alert-error">Failed to parse: ' + escapeHTML(e.message) + '</div>';
-      if (btn) btn.disabled = false;
-      setTabStatus('load', 'ready');
-      if (prog) prog.style.display = 'none';
-      return;
-    }
+  try {
+    parsed = parseFlow(raw, uploadedName || 'NiFi Flow');
+  } catch (e) {
+    const parseResultsEl = document.getElementById('parseResults');
+    if (parseResultsEl) parseResultsEl.innerHTML = '<div class="alert alert-error">Failed to parse: ' + escapeHTML(e.message) + '</div>';
+    if (btn) btn.disabled = false;
+    setTabStatus('load', 'ready');
+    if (prog) prog.style.display = 'none';
+    return;
   }
 
+  updateProg(20, 'Validating flow...');
+  await new Promise(r => setTimeout(r, 50));
+
   if (!parsed || !parsed._nifi || parsed._nifi.processors.length === 0) {
-    document.getElementById('parseResults').innerHTML = '<div class="alert alert-error">No NiFi processors found. Please provide a valid NiFi flow XML.</div>';
+    const parseResultsEl = document.getElementById('parseResults');
+    if (parseResultsEl) parseResultsEl.innerHTML = '<div class="alert alert-error">No NiFi processors found. Please provide a valid NiFi flow XML.</div>';
     if (btn) btn.disabled = false;
     setTabStatus('load', 'ready');
     if (prog) prog.style.display = 'none';
@@ -180,13 +167,11 @@ export async function parseInput() {
   updateProg(85, 'Building resource manifest...');
   await new Promise(r => setTimeout(r, 50));
 
-  const buildManifest = typeof buildResourceManifest === 'function' ? buildResourceManifest : window.buildResourceManifest;
-  setState({ parsed, manifest: buildManifest(parsed._nifi) });
+  setState({ parsed, manifest: buildResourceManifest(parsed._nifi) });
 
   updateProg(95, 'Rendering results...');
   const nifi = parsed._nifi;
-  const ROLE_TIER_COLORS = window.ROLE_TIER_COLORS || { source: '#3B82F6', route: '#EAB308', transform: '#A855F7', process: '#6366F1', sink: '#21C354', utility: '#808495' };
-  const classifyFn = typeof classifyNiFiProcessor === 'function' ? classifyNiFiProcessor : window.classifyNiFiProcessor;
+  const classifyFn = classifyNiFiProcessor;
 
   let h = '<div class="alert alert-success" style="margin-top:16px">Successfully parsed NiFi flow: <strong>' + escapeHTML(parsed.source_name) + '</strong></div>';
   h += metricsHTML([
@@ -267,15 +252,8 @@ export function runAnalysis() {
 
   const nifi = STATE.parsed._nifi;
   const manifest = STATE.manifest;
-  const buildDepGraph = typeof buildDependencyGraph === 'function' ? buildDependencyGraph : window.buildDependencyGraph;
-  const detectSystems = typeof detectExternalSystems === 'function' ? detectExternalSystems : window.detectExternalSystems;
-  const assembleBP = typeof assembleBlueprint_fn === 'function' ? assembleBlueprint_fn : window.assembleBlueprint_fn;
-  const classifyFn = typeof classifyNiFiProcessor === 'function' ? classifyNiFiProcessor : window.classifyNiFiProcessor;
-  const NIFI_MAP = typeof NIFI_DATABRICKS_MAP !== 'undefined' ? NIFI_DATABRICKS_MAP : window.NIFI_DATABRICKS_MAP || {};
-  const ROLE_COLORS = typeof ROLE_TIER_COLORS !== 'undefined' ? ROLE_TIER_COLORS : window.ROLE_TIER_COLORS || {};
-
-  const depGraph = buildDepGraph(nifi);
-  const systems = detectSystems(nifi);
+  const depGraph = buildDependencyGraph(nifi);
+  const systems = detectExternalSystems(nifi);
   let h = '';
   const elCount = Object.keys(nifi.deepPropertyInventory.nifiEL || {}).length;
   const sqlCount = nifi.sqlTables ? nifi.sqlTables.length : 0;
@@ -292,7 +270,7 @@ export function runAnalysis() {
     { label: 'Credentials', value: credCount }
   ]);
 
-  const blueprint = assembleBP(STATE.parsed);
+  const blueprint = assembleBlueprint(STATE.parsed);
   const tierData = buildTierData(blueprint, STATE.parsed);
   h += '<hr class="divider"><h3>Flow Visualization</h3>';
   h += '<div id="analysisTierContainer" style="position:relative"></div><div id="analysisTierDetail"></div><div id="analysisTierLegend"></div>';
@@ -305,7 +283,7 @@ export function runAnalysis() {
     sysKeys.forEach(key => {
       const sys = systems[key];
       const procList = sys.processors.map(p => {
-        const conf = NIFI_MAP[p.type] ? NIFI_MAP[p.type].conf : 0;
+        const conf = NIFI_DATABRICKS_MAP[p.type] ? NIFI_DATABRICKS_MAP[p.type].conf : 0;
         const dot = conf >= 0.7 ? 'high' : conf >= 0.3 ? 'med' : 'low';
         return '<span class="conf-dot ' + dot + '"></span>' + escapeHTML(p.name) + ' <span style="color:var(--text2)">(' + p.direction + ')</span>';
       }).join('<br>');
@@ -322,9 +300,9 @@ export function runAnalysis() {
   h += '<hr class="divider"><h3>Processor Inventory (' + nifi.processors.length + ')</h3>';
   h += '<p style="color:var(--text2);font-size:0.82rem;margin-bottom:8px">Click to expand for properties, scheduling, and dependencies.</p>';
   nifi.processors.forEach((p) => {
-    const role = classifyFn(p.type);
-    const roleColor = ROLE_COLORS[role] || '#808495';
-    const mapEntry = NIFI_MAP[p.type];
+    const role = classifyNiFiProcessor(p.type);
+    const roleColor = ROLE_TIER_COLORS[role] || '#808495';
+    const mapEntry = NIFI_DATABRICKS_MAP[p.type];
     const conf = mapEntry ? mapEntry.conf : 0;
     const confCls = conf >= 0.7 ? 'high' : conf >= 0.3 ? 'med' : 'low';
     const ups = depGraph.upstream[p.name] || [];
@@ -414,15 +392,9 @@ export function runAssessment() {
   setTabStatus('assess', 'processing');
 
   const nifi = STATE.parsed._nifi;
-  const mapFn = typeof mapNiFiToDatabricks === 'function' ? mapNiFiToDatabricks : window.mapNiFiToDatabricks;
-  const buildDepGraph = typeof buildDependencyGraph === 'function' ? buildDependencyGraph : window.buildDependencyGraph;
-  const detectSystems = typeof detectExternalSystems === 'function' ? detectExternalSystems : window.detectExternalSystems;
-  const getPkgs = typeof getProcessorPackages === 'function' ? getProcessorPackages : window.getProcessorPackages;
-  const ROLE_COLORS = typeof ROLE_TIER_COLORS !== 'undefined' ? ROLE_TIER_COLORS : window.ROLE_TIER_COLORS || {};
-
-  const mappings = mapFn(nifi);
-  const depGraph = buildDepGraph(nifi);
-  const systems = detectSystems(nifi);
+  const mappings = mapNiFiToDatabricks(nifi);
+  const depGraph = buildDependencyGraph(nifi);
+  const systems = detectExternalSystems(nifi);
   const total = mappings.length;
   const autoProcs = mappings.filter(m => m.mapped && m.confidence >= 0.7);
   const manualProcs = mappings.filter(m => m.mapped && m.confidence > 0 && m.confidence < 0.7);
@@ -460,13 +432,13 @@ export function runAssessment() {
     const confCls = m.confidence >= 0.7 ? 'high' : m.confidence >= 0.3 ? 'med' : 'low';
     const ups = depGraph.fullUpstream[m.name] || [];
     const downs = depGraph.fullDownstream[m.name] || [];
-    return [escapeHTML(m.name), '<span style="color:' + (ROLE_COLORS[m.role] || '#808495') + '">' + m.role + '</span>', escapeHTML(m.group), '<span class="conf-dot ' + confCls + '"></span>' + Math.round(m.confidence * 100) + '%', m.mapped ? escapeHTML((m.desc || '').substring(0, 50)) : '<em style="color:var(--red)">' + (m.gapReason || 'Unmapped').substring(0, 50) + '</em>', m.confidence >= 0.7 ? '0.5d' : m.confidence >= 0.3 ? '2d' : '5d', ups.length + ' up / ' + downs.length + ' down'];
+    return [escapeHTML(m.name), '<span style="color:' + (ROLE_TIER_COLORS[m.role] || '#808495') + '">' + m.role + '</span>', escapeHTML(m.group), '<span class="conf-dot ' + confCls + '"></span>' + Math.round(m.confidence * 100) + '%', m.mapped ? escapeHTML((m.desc || '').substring(0, 50)) : '<em style="color:var(--red)">' + (m.gapReason || 'Unmapped').substring(0, 50) + '</em>', m.confidence >= 0.7 ? '0.5d' : m.confidence >= 0.3 ? '2d' : '5d', ups.length + ' up / ' + downs.length + ' down'];
   });
   h += tableHTML(['Processor', 'Role', 'Group', 'Confidence', 'Approach', 'Effort', 'Deps'], confRows);
 
   // Required Packages
   const allPkgs = new Set();
-  mappings.forEach(m => { getPkgs(m.type).forEach(p => p.pip.forEach(pkg => allPkgs.add(pkg))); });
+  mappings.forEach(m => { getProcessorPackages(m.type).forEach(p => p.pip.forEach(pkg => allPkgs.add(pkg))); });
   if (allPkgs.size) {
     h += '<hr class="divider"><h3>Required Packages</h3>';
     h += '<pre style="background:var(--bg);padding:12px;border-radius:6px;font-size:0.8rem"># requirements.txt\n';
@@ -506,22 +478,14 @@ export function generateNotebook() {
   setTabStatus('convert', 'processing');
 
   const nifi = STATE.parsed._nifi;
-  const getConfig = typeof getDbxConfig === 'function' ? getDbxConfig : window.getDbxConfig;
-  const mapFn = typeof mapNiFiToDatabricks === 'function' ? mapNiFiToDatabricks : window.mapNiFiToDatabricks;
-  const genNb = typeof generateDatabricksNotebook === 'function' ? generateDatabricksNotebook : window.generateDatabricksNotebook;
-  const genWf = typeof generateWorkflowJSON === 'function' ? generateWorkflowJSON : window.generateWorkflowJSON;
-  const assembleBP = typeof assembleBlueprint_fn === 'function' ? assembleBlueprint_fn : window.assembleBlueprint_fn;
-  const getPkgs = typeof getProcessorPackages === 'function' ? getProcessorPackages : window.getProcessorPackages;
-  const ROLE_COLORS = typeof ROLE_TIER_COLORS !== 'undefined' ? ROLE_TIER_COLORS : window.ROLE_TIER_COLORS || {};
-
-  const cfg = getConfig();
-  const mappings = STATE.assessment ? STATE.assessment.mappings : mapFn(nifi);
-  const nbResult = genNb(mappings, nifi, STATE.analysis ? STATE.analysis.blueprint : assembleBP(STATE.parsed), cfg);
+  const cfg = getDbxConfig();
+  const mappings = STATE.assessment ? STATE.assessment.mappings : mapNiFiToDatabricks(nifi);
+  const nbResult = generateDatabricksNotebook(mappings, nifi, STATE.analysis ? STATE.analysis.blueprint : assembleBlueprint(STATE.parsed), cfg);
   const cells = nbResult.cells;
 
   // Package requirements cell
   const _allPkgs = new Set();
-  mappings.forEach(m => { getPkgs(m.type).forEach(p => p.pip.forEach(pkg => _allPkgs.add(pkg))); });
+  mappings.forEach(m => { getProcessorPackages(m.type).forEach(p => p.pip.forEach(pkg => _allPkgs.add(pkg))); });
   if (_allPkgs.size) {
     cells.unshift({
       type: 'code', role: 'config', label: 'Package Requirements',
@@ -529,14 +493,14 @@ export function generateNotebook() {
     });
   }
 
-  const workflow = genWf(mappings, nifi, cfg);
+  const workflow = generateWorkflowJSON(mappings, nifi, cfg);
   setState({ notebook: { mappings, cells, workflow, config: cfg } });
 
   let h = '<hr class="divider">';
   h += '<h3>Processor Mapping</h3>';
   const mapRows = mappings.map(m => [
     escapeHTML(m.name),
-    `<span style="color:${ROLE_COLORS[m.role] || '#808495'}">${escapeHTML(m.role)}</span>`,
+    `<span style="color:${ROLE_TIER_COLORS[m.role] || '#808495'}">${escapeHTML(m.role)}</span>`,
     escapeHTML(m.group || '\u2014'),
     m.mapped ? escapeHTML(m.desc) : '<em style="color:var(--text2)">No equivalent</em>',
     m.mapped ? `<span class="conf-badge ${m.confidence >= 0.8 ? 'conf-high' : m.confidence >= 0.5 ? 'conf-med' : 'conf-low'}">${Math.round(m.confidence * 100)}%</span>` : '<span class="conf-badge conf-none">\u2014</span>'
@@ -584,10 +548,7 @@ export function generateReport() {
   setTabStatus('report', 'processing');
 
   const nifi = STATE.parsed._nifi;
-  const genReport = typeof generateMigrationReport === 'function' ? generateMigrationReport : window.generateMigrationReport;
-  const ROLE_COLORS = typeof ROLE_TIER_COLORS !== 'undefined' ? ROLE_TIER_COLORS : window.ROLE_TIER_COLORS || {};
-
-  const report = genReport(STATE.notebook.mappings, nifi);
+  const report = generateMigrationReport(STATE.notebook.mappings, nifi);
   setState({ migrationReport: report });
   const s = report.summary;
 
@@ -613,7 +574,7 @@ export function generateReport() {
     if (!rd) return;
     const rpct = rd.total ? Math.round(rd.mapped / rd.total * 100) : 0;
     const rcls = rpct >= 85 ? 'green' : rpct >= 60 ? 'amber' : 'red';
-    const color = ROLE_COLORS[role] || '#808495';
+    const color = ROLE_TIER_COLORS[role] || '#808495';
     h += `<div style="margin:8px 0">`;
     h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">`;
     h += `<span style="font-weight:600;color:${color};text-transform:uppercase;font-size:0.85rem">${role}</span>`;

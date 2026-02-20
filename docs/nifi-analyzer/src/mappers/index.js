@@ -37,6 +37,15 @@ import { handleMonitoringProcessor } from './handlers/monitoring-handlers.js';
 import { handleNoSQLProcessor } from './handlers/nosql-handlers.js';
 import { handleHadoopProcessor } from './handlers/hadoop-handlers.js';
 
+// Default dependency imports (used by mapNiFiToDatabricksAuto)
+import { NIFI_DATABRICKS_MAP } from '../constants/nifi-databricks-map.js';
+import { ROLE_FALLBACK_TEMPLATES } from '../constants/role-fallback-templates.js';
+import { parseVariableRegistry, resolveVariables } from '../parsers/nel/variable-registry.js';
+import { translateNELtoPySpark } from '../parsers/nel/index.js';
+import { generateRetryWrapper } from '../generators/retry-wrapper.js';
+import { wrapSubprocessAsPandasUDF } from '../generators/subprocess-wrapper.js';
+import { detectPHIFields } from '../analyzers/phi-detector.js';
+
 /**
  * Map an entire NiFi flow to Databricks PySpark code.
  *
@@ -252,4 +261,23 @@ export function mapNiFiToDatabricks(nifi, deps) {
       fallbackUsed: true
     };
   });
+}
+
+/**
+ * Convenience wrapper that auto-injects default dependencies.
+ * Call with just (nifi) — no need to pass deps manually.
+ */
+const _defaultDeps = {
+  NIFI_DATABRICKS_MAP,
+  ROLE_FALLBACK_TEMPLATES,
+  parseVariableRegistry,
+  resolveVariables,
+  translateNELtoPySpark,
+  generateRetryWrapper,
+  wrapSubprocessAsPandasUDF,
+  detectPHIFields
+};
+
+export function mapNiFiToDatabricksAuto(nifi) {
+  return mapNiFiToDatabricks(nifi, _defaultDeps);
 }

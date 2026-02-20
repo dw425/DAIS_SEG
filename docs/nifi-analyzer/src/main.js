@@ -57,7 +57,7 @@ import {
 // ================================================================
 import { parseFlow } from './parsers/index.js';
 import { runAnalysisEngine } from './analyzers/index.js';
-import { mapNiFiToDatabricks } from './mappers/index.js';
+import { mapNiFiToDatabricksAuto as mapNiFiToDatabricks } from './mappers/index.js';
 import { generateNotebookAndWorkflow } from './generators/index.js';
 import { runValidationEngine } from './validators/index.js';
 import {
