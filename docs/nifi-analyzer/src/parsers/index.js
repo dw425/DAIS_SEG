@@ -78,7 +78,8 @@ const MAX_PARSE_SIZE = 50 * 1024 * 1024; // 50 MB
  */
 export async function parseFlow(raw, filename, options = {}) {
   // ---- File size limit ----
-  if (raw && raw.byteLength > MAX_PARSE_SIZE) {
+  const rawSize = typeof raw === 'string' ? raw.length : (raw?.byteLength ?? 0);
+  if (rawSize > MAX_PARSE_SIZE) {
     return { processors: [], _nifi: {}, parse_warnings: ['File exceeds 50MB parse limit'] };
   }
 
@@ -103,7 +104,7 @@ export async function parseFlow(raw, filename, options = {}) {
         const gzBytes = bytes || new Uint8Array(typeof raw === 'string' ? new TextEncoder().encode(raw) : raw);
         const inner = await decompressGzip(gzBytes);
         if (inner && inner.error) return { processors: [], _nifi: {}, parse_warnings: [inner.error] };
-        return parseFlow(inner, filename.replace(/\.gz$/i, ''));
+        return parseFlow(inner, (filename || '').replace(/\.gz$/i, '') || 'flow');
       }
       // ZIP/PK magic: 50 4b
       if (probe[0] === 0x50 && probe[1] === 0x4b) {
@@ -151,7 +152,7 @@ export async function parseFlow(raw, filename, options = {}) {
     const decompressed = await decompressGzip(bytes);
     if (decompressed && decompressed.error) return { processors: [], _nifi: {}, parse_warnings: [decompressed.error] };
     // Derive inner filename by removing .gz
-    const innerName = filename.replace(/\.gz$/i, '') || filename;
+    const innerName = (filename || '').replace(/\.gz$/i, '') || filename || 'flow';
     return parseFlow(decompressed, innerName);
   }
 

@@ -144,7 +144,7 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
       `    print(f"[RETRY] ${p.name.replace(/"/g,"'")} succeeded")\n` +
       `except RetryError as _retry_err:\n` +
       `    print(f"[RETRY] ${p.name.replace(/"/g,"'")} exhausted ${maxRetries} retries — writing to DLQ")\n` +
-      `    df_${inputVar}.withColumn("_dlq_error", lit(str(_retry_err))).withColumn("_dlq_source", lit("${p.name.replace(/"/g,'\\"')}")).withColumn("_dlq_timestamp", current_timestamp()).write.mode("append").saveAsTable("__dead_letter_queue")\n` +
+      `    df_${inputVar}.withColumn("_dlq_error", lit(str(_retry_err))).withColumn("_dlq_source", lit("${p.name.replace(/"/g,'\\"')}")).withColumn("_dlq_timestamp", current_timestamp()).write.mode("append").saveAsTable("<catalog>.<schema>.__dead_letter_queue")\n` +
       `    df_${varName} = spark.createDataFrame([], df_${inputVar}.schema)\n` +
       `    print(f"[DLQ] Failed records written to __dead_letter_queue")`;
     conf = 0.92;

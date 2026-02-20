@@ -171,9 +171,11 @@ export function handleRouteProcessor(p, props, varName, inputVar, existingCode, 
     lines.push(`df_${varName} = df_${varName}_valid`);
     lines.push('');
     lines.push(`# Dead-letter queue for invalid records`);
-    lines.push(`if df_${varName}_invalid.count() > 0:`);
+    lines.push(`_valid_count = df_${varName}_valid.count()`);
+    lines.push(`_invalid_count = df_${varName}_invalid.count()`);
+    lines.push(`if _invalid_count > 0:`);
     lines.push(`    df_${varName}_invalid.withColumn("_rejected_at", current_timestamp()).withColumn("_rejection_source", lit("${p.name.replace(/"/g,'\\"')}")).write.mode("append").saveAsTable("<catalog>.<schema>.__dead_letter_queue")`);
-    lines.push(`print(f"[VALIDATE] {df_${varName}_valid.count()} valid, {df_${varName}_invalid.count()} invalid records")`);
+    lines.push(`print(f"[VALIDATE] {_valid_count} valid, {_invalid_count} invalid records")`);
     code = lines.join('\n');
     conf = 0.92;
     return { code, conf };

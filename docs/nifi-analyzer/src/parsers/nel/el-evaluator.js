@@ -5,6 +5,8 @@
 // parser using a whitelist of allowed operations.
 // ================================================================
 
+import { tokenizeNELChain } from './tokenizer.js';
+
 let _elCounter = 0;
 
 /**
@@ -91,7 +93,7 @@ function safeMathEval(expression) {
 export function evaluateNiFiEL(expr, attributes) {
   if (!expr || typeof expr !== 'string' || !expr.includes('${')) return expr;
   return expr.replace(/\$\{([^}]+)\}/g, (fullMatch, inner) => {
-    const parts = inner.split(':');
+    const parts = tokenizeNELChain(inner);
     const attrName = parts[0].trim();
     let val;
     if (attrName === 'now()') val = new Date().toISOString();

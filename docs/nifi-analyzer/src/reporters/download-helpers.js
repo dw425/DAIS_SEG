@@ -38,10 +38,11 @@ function triggerDownload(blob, filename) {
     return false;
   }
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
+  a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(a.href);
+  setTimeout(() => URL.revokeObjectURL(url), 100);
   return true;
 }
 

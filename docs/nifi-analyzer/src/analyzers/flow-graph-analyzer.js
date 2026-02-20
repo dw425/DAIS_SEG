@@ -64,7 +64,8 @@ export function analyzeFlowGraph(processors, connections) {
   const visited = new Set();
   const recStack = new Set();
   const seenCycles = new Set();
-  function hasCycle(nodeId, path) {
+  function hasCycle(nodeId, path, depth = 0) {
+    if (depth > 2000) return;  // guard against stack overflow
     if (recStack.has(nodeId)) {
       const cycle = path.concat(nodeId).map(id => procById[id] ? procById[id].name : id);
       const cycleKey = [...cycle].sort().join('|');
@@ -78,7 +79,7 @@ export function analyzeFlowGraph(processors, connections) {
     visited.add(nodeId);
     recStack.add(nodeId);
     for (const next of (outgoing[nodeId] || [])) {
-      hasCycle(next, path.concat(nodeId));
+      hasCycle(next, path.concat(nodeId), depth + 1);
     }
     recStack.delete(nodeId);
     return false;

@@ -59,6 +59,7 @@ export function generateLoopFromCycle(cycle, mappings, lineage) {
     `_max_iterations = 100\n` +
     `_iteration = 0\n` +
     `_loop_df_${varName} = df_${varName}\n` +
+    `_loop_result = _loop_df_${varName}\n` +
     `while _iteration < _max_iterations:\n` +
     `    _iteration += 1\n` +
     `${indentedBody}\n` +
