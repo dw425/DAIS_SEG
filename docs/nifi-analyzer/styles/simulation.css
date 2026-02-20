@@ -1,0 +1,26 @@
+/* ==========================================================================
+   simulation.css — Dual execution simulation, progress bars, split views,
+                    pipeline step indicators, state diffs
+   ========================================================================== */
+
+.sim-progress { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px 20px; margin:16px 0; }
+.sim-progress-bar { height:10px; background:var(--surface2); border-radius:5px; overflow:hidden; margin:8px 0; }
+.sim-progress-fill { height:100%; border-radius:5px; background:linear-gradient(90deg,var(--primary),#ff8a4b); transition:width 0.4s ease; }
+
+.sim-status { font-size:0.85rem; color:var(--text2); display:flex; justify-content:space-between; align-items:center; }
+.sim-status .engine-label { font-weight:600; }
+
+.sim-donuts { display:flex; gap:32px; justify-content:center; flex-wrap:wrap; margin:24px 0; }
+
+.sim-split { display:grid; grid-template-columns:1fr 1fr; gap:0; margin:8px 0; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+.sim-split-header { background:var(--surface2); padding:8px 12px; font-weight:600; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.5px; text-align:center; }
+.sim-split-header.nifi-side { border-right:1px solid var(--border); color:#728E9B; }
+.sim-split-header.dbx-side { color:var(--primary); }
+.sim-split-cell { padding:8px 12px; font-size:0.78rem; font-family:var(--mono); background:var(--surface); border-top:1px solid var(--border); overflow-x:auto; max-height:200px; overflow-y:auto; }
+.sim-split-cell.nifi-side { border-right:1px solid var(--border); }
+
+/* State diff panels */
+.state-diff { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:12px 0; }
+.state-diff-panel { background:var(--bg2); border-radius:8px; padding:12px; }
+.state-diff-panel h4 { margin:0 0 8px 0; font-size:0.85rem; color:var(--text2); }
+.state-diff-panel pre { font-size:0.72rem; max-height:200px; overflow-y:auto; }

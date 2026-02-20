@@ -1,0 +1,10 @@
+/* ==========================================================================
+   forms.css — Input, select, textarea, label, form controls
+   ========================================================================== */
+
+textarea, input[type=text], input[type=number], select {
+  width: 100%; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 0.9rem; resize: vertical; }
+textarea:focus, input:focus { outline: none; border-color: var(--primary); }
+textarea { min-height: 200px; }
+label { display: block; font-size: 0.85rem; color: var(--text2); margin-bottom: 6px; font-weight: 500; }

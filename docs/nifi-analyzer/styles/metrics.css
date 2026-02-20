@@ -1,0 +1,11 @@
+/* ==========================================================================
+   metrics.css — Metric cards, KPI values, score displays, confidence styles
+   ========================================================================== */
+
+.metrics { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
+.metric { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; min-width: 140px; flex: 1; }
+.metric .label { font-size: 0.8rem; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+.metric .value { font-size: 1.8rem; font-weight: 700; margin-top: 4px; }
+.metric .delta { font-size: 0.85rem; color: var(--red); }
+
+.score-big { font-size: 3rem; font-weight: 800; text-align: center; padding: 20px; }

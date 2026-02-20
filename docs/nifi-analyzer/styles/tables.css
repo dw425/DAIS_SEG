@@ -1,0 +1,46 @@
+/* ==========================================================================
+   tables.css — Base table styles, mapping table, comparison detail tables,
+                table scroll wrapper, ops-log, action-log
+   ========================================================================== */
+
+table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.85rem; }
+th { text-align: left; padding: 8px 12px; background: var(--surface2); color: var(--text2);
+  font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.5px;
+  border-bottom: 2px solid var(--border); }
+td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+tr:hover td { background: var(--surface); }
+.table-scroll { overflow-x: auto; }
+
+/* Mapping table */
+.mapping-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin: 12px 0; }
+.mapping-table th { text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--border);
+  font-size: 0.7rem; text-transform: uppercase; color: var(--text2); }
+.mapping-table td { padding: 5px 10px; border-bottom: 1px solid var(--border); }
+.mapping-table tr.unmapped { opacity: 0.5; }
+
+/* Comparison detail tables */
+.comparison-detail { margin-top:16px; }
+.comparison-detail summary { cursor:pointer; font-weight:600; font-size:0.95rem; padding:10px 0; color:var(--text); }
+.comparison-detail summary:hover { color:var(--primary); }
+.comparison-detail table { width:100%; font-size:0.8rem; }
+.comparison-detail td, .comparison-detail th { padding:6px 8px; }
+.comparison-detail tr:hover { background:var(--surface2); }
+
+/* Ops log */
+.ops-log { max-height:400px; overflow-y:auto; font-family:var(--mono); font-size:0.78rem; }
+.ops-log-row { display:grid; grid-template-columns:50px 180px 100px 1fr 80px; gap:4px; padding:3px 0; border-bottom:1px solid var(--border); align-items:center; }
+.ops-log-row:hover { background:rgba(255,107,53,0.05); }
+.ops-log-row.header { font-weight:700; color:var(--text2); font-size:0.72rem; text-transform:uppercase; border-bottom:2px solid var(--border); }
+.ops-action { font-weight:600; font-size:0.75rem; }
+.ops-action.file { color:#4285F4; } .ops-action.sql { color:#21C354; } .ops-action.token { color:#FACA15; } .ops-action.signal { color:#FF6D70; } .ops-action.counter { color:#8B5CF6; } .ops-action.queue { color:#29B5E8; }
+
+/* Action log */
+.action-log { max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; margin:8px 0; }
+.action-log-entry { display:grid; grid-template-columns:100px 1fr 1fr; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border); font-size:0.78rem; align-items:start; }
+.action-log-entry:last-child { border-bottom:none; }
+.action-log-entry .action-type { font-weight:600; font-size:0.75rem; text-transform:uppercase; }
+.action-log-entry .action-type.file-op { color:#21C354; }
+.action-log-entry .action-type.sql-op { color:#6366F1; }
+.action-log-entry .action-type.token-op { color:#EAB308; }
+.action-log-entry .action-type.signal-op { color:#F97316; }
+.action-log-entry .action-type.queue-op { color:#06B6D4; }

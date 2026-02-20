@@ -1,0 +1,26 @@
+/* ==========================================================================
+   notebook-preview.css — Notebook preview container, cell styles, cell labels,
+                          code display for markdown/SQL/code cells
+   ========================================================================== */
+
+.notebook-preview { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  max-height: 600px; overflow-y: auto; margin: 12px 0; }
+
+.notebook-cell { padding: 10px 16px; border-bottom: 1px solid var(--border); font-family: 'SF Mono',Monaco,Consolas,monospace;
+  font-size: 0.78rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.notebook-cell:last-child { border-bottom: none; }
+.notebook-cell.cell-md { background: rgba(59,130,246,0.06); color: #93c5fd; }
+.notebook-cell.cell-sql { background: rgba(168,85,247,0.06); }
+.notebook-cell.cell-code { background: var(--surface); }
+
+.notebook-cell .cell-label { display: inline-block; padding: 1px 8px; border-radius: 3px;
+  font-size: 0.65rem; font-weight: 700; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+.cell-label.lb-source { background: #1d3557; color: #93c5fd; }
+.cell-label.lb-transform { background: #2d1b4e; color: #c4b5fd; }
+.cell-label.lb-sink { background: #14532d; color: #86efac; }
+.cell-label.lb-route { background: #422006; color: #fde68a; }
+.cell-label.lb-process { background: #1e1b4b; color: #a5b4fc; }
+.cell-label.lb-utility { background: #1f2937; color: #9ca3af; }
+.cell-label.lb-config { background: #0c4a6e; color: #7dd3fc; }
+.cell-label.lb-manual { background: #450a0a; color: #fca5a5; }

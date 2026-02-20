@@ -1,0 +1,29 @@
+/* ==========================================================================
+   base.css — CSS reset, :root custom properties, body defaults, typography
+   ========================================================================== */
+
+:root {
+  --bg: #0e1117; --surface: #1a1d27; --surface2: #262730;
+  --border: #363842; --text: #fafafa; --text2: #808495;
+  --primary: #ff4b4b; --primary-hover: #ff6b6b;
+  --green: #21c354; --amber: #faca15; --red: #ff4b4b;
+  --blue: #1d4ed8; --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'SF Mono', 'Fira Code', monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.6; }
+
+h1 { font-size: 2rem; margin-bottom: 4px; }
+h2 { font-size: 1.4rem; margin: 24px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+h3 { font-size: 1.1rem; margin: 16px 0 8px; }
+
+.caption { color: var(--text2); font-size: 0.9rem; margin-bottom: 20px; }
+
+code { background: var(--surface2); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.85rem; }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px;
+  overflow-x: auto; font-family: var(--mono); font-size: 0.85rem; margin: 12px 0; }
+
+.hidden { display: none; }
+.divider { border: none; border-top: 1px solid var(--border); margin: 24px 0; }

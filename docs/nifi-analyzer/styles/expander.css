@@ -1,0 +1,12 @@
+/* ==========================================================================
+   expander.css — Collapsible expander sections with header, body, arrow
+   ========================================================================== */
+
+.expander { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; overflow: hidden; }
+.expander-header { padding: 12px 16px; cursor: pointer; display: flex; justify-content: space-between;
+  align-items: center; background: var(--surface); font-weight: 500; }
+.expander-header:hover { background: var(--surface2); }
+.expander-body { padding: 16px; display: none; border-top: 1px solid var(--border); }
+.expander.open .expander-body { display: block; }
+.expander-arrow { transition: transform 0.2s; }
+.expander.open .expander-arrow { transform: rotate(90deg); }

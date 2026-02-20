@@ -1,0 +1,15 @@
+/* ==========================================================================
+   charts.css — Donut charts, coverage ring, comparison donuts, SVG chart styles
+   ========================================================================== */
+
+/* Coverage ring */
+.coverage-ring { width: 120px; height: 120px; border-radius: 50%; position: relative;
+  display: inline-flex; align-items: center; justify-content: center; }
+.coverage-ring .ring-text { font-size: 1.6rem; font-weight: 800; z-index: 1; }
+
+/* Comparison donut charts */
+.comparison-donuts { display:flex; gap:32px; justify-content:center; flex-wrap:wrap; margin:24px 0; }
+.donut-chart { text-align:center; flex:0 0 160px; }
+.donut-chart svg { filter:drop-shadow(0 2px 8px rgba(0,0,0,0.3)); }
+.donut-label { font-size:0.85rem; font-weight:600; margin-top:8px; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; }
+.donut-sub { font-size:0.75rem; color:var(--text2); margin-top:2px; }

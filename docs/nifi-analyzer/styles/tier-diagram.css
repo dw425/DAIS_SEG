@@ -1,0 +1,102 @@
+/* ==========================================================================
+   tier-diagram.css — Tier diagram, tier nodes, bands, connections, SVG lines,
+                      node badges, session nodes, table-output nodes, conflict
+                      gates, density sidebar, legend, cycle indicators,
+                      expandable process groups, progressive route tracing
+   ========================================================================== */
+
+/* Tier diagram container */
+.tier-diagram { position: relative; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); min-height: 200px; margin: 16px 0; }
+.tier-diagram svg.tier-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+
+/* Tier bands */
+.tier-band { padding: 16px 20px; border-bottom: 1px solid var(--border); position: relative; z-index: 2; }
+.tier-band:last-child { border-bottom: none; }
+.tier-band-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; margin-bottom: 10px; opacity: 0.8; }
+.tier-nodes { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+
+/* Tier nodes */
+.tier-node { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px;
+  min-width: 120px; max-width: 200px; text-align: center; cursor: pointer; transition: all 0.2s; position: relative; z-index: 3; }
+.tier-node:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+.tier-node.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(255,75,75,0.3); }
+.tier-node.highlighted { border-color: var(--green); }
+.tier-node.dimmed { opacity: 0.3; }
+.tier-node .node-name { font-weight: 600; font-size: 0.85rem; word-break: break-all; }
+.tier-node .node-meta { font-size: 0.7rem; color: var(--text2); margin-top: 4px; }
+.tier-node .node-badge { position: absolute; top: -6px; right: -6px; background: var(--primary); color: white;
+  border-radius: 10px; padding: 1px 6px; font-size: 0.65rem; font-weight: 700; }
+.tier-node .node-badge.green { background: var(--green); }
+.tier-node .node-badge.amber { background: var(--amber); color: #000; }
+.tier-node .node-badge.red { background: var(--red); }
+
+/* Session nodes -- numbered circle + colored stat badges */
+.tier-node .node-seq { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+  border-radius: 50%; background: var(--primary); color: white; font-size: 0.7rem; font-weight: 700; margin-bottom: 4px; }
+.tier-node .node-stats { display: flex; gap: 4px; justify-content: center; margin-top: 6px; flex-wrap: wrap; }
+.tier-node .node-stats .ns { padding: 1px 5px; border-radius: 3px; font-size: 0.6rem; font-weight: 700; }
+.ns-tx { background: #3B82F6; color: white; }
+.ns-ext { background: #21C354; color: white; }
+.ns-lkp { background: #EAB308; color: #000; }
+
+/* Table output nodes -- smaller, distinct style */
+.tier-node.table-output { background: var(--surface2); border-style: dashed; min-width: 100px; max-width: 180px; padding: 8px 12px; }
+.tier-node.table-output .node-name { font-size: 0.75rem; }
+.tier-node.table-output .node-class { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+
+/* Conflict gate nodes -- red border, warning icon */
+.tier-node.conflict-gate { border-color: var(--red); background: #1a0a0a; min-width: 140px; }
+.tier-node.conflict-gate .node-name { color: var(--red); }
+
+/* Connection density sidebar */
+.tier-diagram-wrapper { display: flex; gap: 0; }
+.tier-diagram-main { flex: 1; min-width: 0; }
+.tier-density-sidebar { width: 220px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface);
+  padding: 12px; overflow-y: auto; max-height: 800px; font-size: 0.7rem; }
+.tier-density-sidebar h4 { font-size: 0.75rem; margin: 0 0 8px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+.density-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.density-bar { height: 6px; border-radius: 3px; flex-shrink: 0; min-width: 2px; }
+.density-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text2); max-width: 120px; }
+@media (max-width: 900px) { .tier-density-sidebar { display: none; } .tier-diagram-wrapper { flex-direction: column; } }
+
+/* Node detail panel */
+.node-detail { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px;
+  margin-top: 12px; font-size: 0.85rem; }
+.node-detail h4 { margin: 0 0 8px; }
+
+/* Diagram legend */
+.diagram-legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0; font-size: 0.75rem; color: var(--text2); }
+.diagram-legend span { display: flex; align-items: center; gap: 4px; }
+.diagram-legend .leg-line { width: 20px; height: 2px; border-radius: 1px; }
+
+/* Cycle indicators */
+.tier-node.in-cycle { border-color: #EF4444; animation: cyclePulse 2s ease-in-out infinite; }
+.cycle-badge { position: absolute; top: -6px; left: -6px; background: #EF4444; color: white;
+  border-radius: 50%; width: 18px; height: 18px; font-size: 0.6rem; display: flex;
+  align-items: center; justify-content: center; z-index: 4; }
+
+/* Expandable process groups */
+.tier-node .expand-indicator { font-size: 0.6rem; color: var(--text2); margin-top: 4px; }
+.tier-node.expanded { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(255,75,75,0.2); }
+.tier-sub-band { padding: 8px 20px 12px 40px; border-bottom: 1px solid var(--border);
+  background: rgba(255,255,255,0.02); position: relative; z-index: 2; }
+.tier-sub-band .tier-band-label { font-size: 0.6rem; opacity: 0.6; margin-bottom: 6px; }
+.tier-sub-band .tier-nodes { gap: 8px; }
+.tier-sub-band .tier-node { min-width: 100px; max-width: 160px; padding: 6px 10px; }
+.tier-sub-band .tier-node .node-name { font-size: 0.75rem; }
+
+/* Progressive route tracing */
+.tier-node.path-selected { border-color: #FACA15; box-shadow: 0 0 0 3px rgba(250,202,21,0.4); z-index: 10; }
+.tier-node.path-selected::before { content: '\2713'; position: absolute; top: -8px; left: -8px;
+  width: 18px; height: 18px; border-radius: 50%; background: #FACA15; color: #000;
+  font-size: 0.65rem; font-weight: 700; display: flex; align-items: center; justify-content: center; z-index: 5; }
+.tier-node.path-member { border-color: #FACA15; background: rgba(250,202,21,0.08); }
+.tier-node.path-dimmed { opacity: 0.12; }
+
+/* Path trace toast */
+.path-trace-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 20px; font-size: 0.85rem; color: var(--text); z-index: 1000;
+  display: none; align-items: center; gap: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
+.path-trace-toast .toast-hint { color: var(--text2); font-size: 0.75rem; }
+.path-trace-toast .toast-clear { cursor: pointer; color: var(--primary); font-weight: 600; font-size: 0.8rem; }

@@ -1,0 +1,27 @@
+/* ==========================================================================
+   filters.css — Filter toolbar, search input, filter chips/buttons,
+                 sidebar filter states, density row interactions
+   ========================================================================== */
+
+/* Filter toolbar */
+.filter-toolbar { display:flex; gap:8px; flex-wrap:wrap; padding:12px; background:var(--surface); border:1px solid var(--border); border-radius:8px; margin-bottom:12px; align-items:center; }
+.filter-toolbar .filter-group { display:flex; gap:4px; align-items:center; }
+.filter-toolbar label { font-size:0.75rem; color:var(--text2); margin-right:4px; white-space:nowrap; }
+
+.filter-btn { padding:4px 10px; font-size:0.75rem; border:1px solid var(--border); border-radius:4px; background:var(--surface2); color:var(--text2); cursor:pointer; transition:all 0.15s; }
+.filter-btn:hover { border-color:var(--primary); color:var(--text); }
+.filter-btn.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+
+.filter-search { padding:4px 8px; font-size:0.75rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); width:160px; }
+.filter-search::placeholder { color:var(--text2); }
+
+/* Sidebar active filter (density rows) */
+.density-row { cursor: pointer; padding: 2px 4px; border-radius: 4px; transition: background 0.15s; }
+.density-row:hover { background: rgba(255,255,255,0.06); }
+.density-row.filter-active { background: rgba(250,202,21,0.15); border: 1px solid rgba(250,202,21,0.4); }
+.density-row.filter-dimmed { opacity: 0.3; }
+
+.sidebar-filter-hint { font-size: 0.6rem; color: var(--text2); margin-bottom: 6px; font-style: italic; }
+.sidebar-clear-btn { font-size: 0.65rem; color: var(--primary); cursor: pointer; margin-top: 6px;
+  display: none; text-align: center; padding: 4px; border-radius: 4px; }
+.sidebar-clear-btn:hover { background: rgba(255,75,75,0.1); }

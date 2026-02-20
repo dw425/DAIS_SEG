@@ -1,0 +1,129 @@
+/* ==========================================================================
+   components.css — Buttons, badges, alerts, cards, progress bars, file upload,
+                    source badges, gap cards, system cards, confidence dots,
+                    effort bars, highlights, and general UI components
+   ========================================================================== */
+
+/* Buttons */
+.btn { padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.95rem;
+  font-weight: 600; transition: all 0.2s; display: inline-flex; align-items: center; gap: 8px; }
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { background: var(--border); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Alerts */
+.alert { padding: 12px 16px; border-radius: 6px; margin: 12px 0; font-size: 0.9rem; }
+.alert-info { background: #1e3a5f; border: 1px solid #2563eb; color: #93c5fd; }
+.alert-success { background: #14532d; border: 1px solid var(--green); color: #86efac; }
+.alert-warn { background: #713f12; border: 1px solid var(--amber); color: #fde68a; }
+.alert-error { background: #450a0a; border: 1px solid var(--red); color: #fca5a5; }
+
+/* Badges */
+.badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+.badge-green { background: #14532d; color: #86efac; }
+.badge-amber { background: #713f12; color: #fde68a; }
+.badge-red { background: #450a0a; color: #fca5a5; }
+
+/* Confidence badges and dots */
+.conf-badge { padding: 1px 6px; border-radius: 3px; font-size: 0.65rem; font-weight: 700; }
+.conf-high { background: rgba(33,195,84,0.2); color: #86efac; }
+.conf-med { background: rgba(234,179,8,0.2); color: #fde68a; }
+.conf-low { background: rgba(239,68,68,0.2); color: #fca5a5; }
+.conf-none { background: rgba(128,132,149,0.15); color: #9ca3af; }
+.conf-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+.conf-dot.high { background:var(--green); } .conf-dot.med { background:var(--amber); } .conf-dot.low { background:var(--red); } .conf-dot.none { background:var(--text2); }
+
+/* Progress bar */
+.progress-bar { height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; margin: 6px 0; }
+.progress-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+.progress-fill.green { background: var(--green); }
+.progress-fill.amber { background: var(--amber); }
+.progress-fill.red { background: var(--red); }
+
+/* File upload */
+.file-upload { border: 2px dashed var(--border); border-radius: 8px; padding: 40px 20px; text-align: center;
+  cursor: pointer; transition: border-color 0.2s; }
+.file-upload:hover { border-color: var(--primary); }
+.file-upload input { display: none; }
+
+/* Source system grid */
+.sources-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin: 16px 0; }
+.source-badge { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 12px; text-align: center; border-top: 3px solid var(--border); transition: border-color 0.2s; }
+.source-badge:hover { border-color: var(--primary); }
+.source-badge .src-name { font-weight: 600; font-size: 0.85rem; }
+.source-badge .src-type { color: var(--text2); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.3px; }
+.detected-source { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px;
+  background: var(--surface); border: 1px solid var(--green); border-radius: 6px; margin: 8px 0; font-size: 0.9rem; }
+.detected-source .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+
+/* Gap cards */
+.gap-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px; margin: 6px 0; border-left: 3px solid var(--red); }
+.gap-card .gap-title { font-weight: 600; font-size: 0.85rem; margin-bottom: 2px; }
+.gap-card .gap-meta { color: var(--text2); font-size: 0.75rem; }
+.gap-card .gap-rec { color: var(--amber); font-size: 0.8rem; margin-top: 4px; }
+
+/* System cards */
+.sys-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px; margin:6px 0; }
+.sys-card-header { display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+.sys-card-header .sys-name { font-weight:700; font-size:0.95rem; }
+.sys-card-header .sys-badge { font-size:0.7rem; padding:2px 8px; border-radius:10px; }
+.sys-detail-row { display:flex; gap:16px; flex-wrap:wrap; font-size:0.82rem; padding:3px 0; }
+.sys-detail-row .sys-label { color:var(--text2); min-width:90px; }
+.sys-detail-row .sys-value { color:var(--text); word-break:break-all; }
+
+/* EL highlight */
+.el-highlight { background:rgba(59,130,246,0.15); color:#60a5fa; padding:1px 3px; border-radius:2px; font-family:var(--mono); font-size:0.75rem; }
+
+/* Effort bar */
+.effort-bar { display:flex; height:28px; border-radius:6px; overflow:hidden; margin:8px 0; }
+.effort-bar .effort-seg { display:flex; align-items:center; justify-content:center; font-size:0.7rem; font-weight:700; color:#fff; transition:width 0.4s ease; }
+
+/* Node selection highlights */
+.node-upstream { box-shadow:0 0 0 3px rgba(59,130,246,0.6) !important; }
+.node-downstream { box-shadow:0 0 0 3px rgba(33,195,84,0.6) !important; }
+.node-selected { box-shadow:0 0 0 3px rgba(255,75,75,0.8) !important; }
+
+/* Conform check */
+.conform-check { padding:4px 0; font-size:0.82rem; }
+.conform-check .check-icon { margin-right:6px; }
+
+/* Resource dots */
+.resource-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+.resource-dot.used { background:#21C354; } .resource-dot.orphaned { background:#FACA15; } .resource-dot.missing { background:#FF4B4B; }
+
+/* Match badges (comparison) */
+.match-badge { display:inline-block; padding:1px 8px; border-radius:3px; font-size:0.7rem; font-weight:700; }
+.match-exact { background:rgba(33,195,84,0.2); color:#86efac; }
+.match-functional { background:rgba(234,179,8,0.2); color:#fde68a; }
+.match-gap { background:rgba(239,68,68,0.2); color:#fca5a5; }
+
+/* Sample cards (VirtualEnv) */
+.sample-card { display:flex; gap:10px; align-items:center; padding:10px 14px; border:1px solid var(--border); border-radius:8px; cursor:pointer; transition:all 0.15s; background:var(--bg1); }
+.sample-card:hover { border-color:var(--accent); background:rgba(255,107,53,0.05); transform:translateY(-1px); box-shadow:0 2px 8px rgba(0,0,0,0.1); }
+.sample-icon { font-size:1.5rem; flex-shrink:0; width:32px; text-align:center; }
+.sample-info { display:flex; flex-direction:column; gap:1px; min-width:0; }
+.sample-info strong { font-size:0.85rem; color:var(--text1); }
+.sample-info span { font-size:0.75rem; color:var(--text2); }
+.sample-tags { font-size:0.7rem !important; color:var(--accent) !important; opacity:0.8; }
+
+/* Manifest grid */
+.manifest-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; margin:8px 0; }
+.manifest-stat { text-align:center; padding:8px; border-radius:8px; background:var(--surface2); }
+.manifest-stat .num { font-size:1.3rem; font-weight:700; color:var(--accent); }
+.manifest-stat .lbl { font-size:0.72rem; color:var(--text2); }
+
+/* VirtualEnv tree */
+.venv-tree { font-family:var(--mono); font-size:0.82rem; line-height:1.7; padding:8px 0; }
+.venv-tree .dir { color:var(--text2); font-weight:600; }
+.venv-tree .file { color:var(--accent); }
+.venv-tree .venv-badge { display:inline-block; background:var(--surface2); border-radius:4px; padding:1px 6px; font-size:0.72rem; margin-left:6px; }
+
+/* VirtualEnv summary */
+.venv-summary { display:flex; gap:16px; flex-wrap:wrap; margin:12px 0; }
+.venv-stat { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 16px; text-align:center; flex:1; min-width:100px; }
+.venv-stat .venv-stat-num { font-size:1.5rem; font-weight:700; color:var(--primary); }
+.venv-stat .venv-stat-label { font-size:0.75rem; color:var(--text2); margin-top:4px; }
