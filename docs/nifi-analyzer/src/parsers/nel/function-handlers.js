@@ -110,7 +110,14 @@ export function applyNELFunction(base, call, mode) {
   }
   if (name === 'substringafter') {
     var sa = unquoteArg(args[0] || '');
-    return mode === 'col' ? 'substring_index(' + base + ', "' + pyEscape(sa) + '", -1)' : '"' + pyEscape(sa) + '".join(' + base + '.split("' + pyEscape(sa) + '")[1:])';
+    // NiFi substringAfter returns everything after the FIRST occurrence of the delimiter,
+    // or "" if the delimiter is not found.
+    // substring_index(str, delim, -1) returns only the LAST segment — wrong for multi-occurrence.
+    // Correct Spark SQL: when delimiter found (locate > 0), skip past it; otherwise return "".
+    var saLen = sa.length;
+    return mode === 'col'
+      ? 'when(locate("' + pyEscape(sa) + '", ' + base + ') > 0, substring(' + base + ', locate("' + pyEscape(sa) + '", ' + base + ') + ' + (saLen + 1) + ')).otherwise(lit(""))'
+      : '"' + pyEscape(sa) + '".join(' + base + '.split("' + pyEscape(sa) + '")[1:])';
   }
   if (name === 'padleft' || name === 'leftpad') {
     var plLen = args[0] || '10'; var plChar = unquoteArg(args[1] || ' ');

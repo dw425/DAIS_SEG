@@ -98,10 +98,16 @@ export function parseNiFiXML(doc, sourceName) {
     doc.querySelector('processGroupFlow > flow') || doc.documentElement;
 
   // Top-level controllerServices (handle both plural and singular, also nested in <controllerServices> container)
+  // NOTE: ':scope > controllerServices' selects the WRAPPER element, not individual services.
+  // Use ':scope > controllerServices > controllerService' to select individual services,
+  // falling back to ':scope > controllerService' (singular tag, no wrapper).
   const csContainer = doc.querySelector('controllerServices');
-  const csEls = snippet.querySelectorAll(':scope > controllerServices');
-  const csElsSingular = csContainer ? csContainer.querySelectorAll(':scope > controllerService') : [];
-  const allCsEls = csEls.length > 0 ? csEls : csElsSingular;
+  const csEls = snippet.querySelectorAll(':scope > controllerServices > controllerService');
+  const csElsSingular = csEls.length === 0 ? snippet.querySelectorAll(':scope > controllerService') : [];
+  // Also cover the global <controllerServices> container outside of snippet (flowController format)
+  const csElsGlobal = (csEls.length === 0 && csElsSingular.length === 0 && csContainer)
+    ? csContainer.querySelectorAll(':scope > controllerService') : [];
+  const allCsEls = csEls.length > 0 ? csEls : (csElsSingular.length > 0 ? csElsSingular : csElsGlobal);
   allCsEls.forEach(cs => {
     const name = getChildText(cs, 'name');
     const type = getChildText(cs, 'type') || getChildText(cs, 'class');

@@ -147,7 +147,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
     const byteSeq = props['Byte Sequence'] || props['Line Split Count'] || '';
     const format = props['Byte Sequence Format'] || 'UTF-8';
     const lines = [
-      'from pyspark.sql.functions import explode, split, col',
+      'from pyspark.sql.functions import explode, split, col, lit',
       `# SplitContent: ${p.name}`,
       `# Byte Sequence: ${byteSeq || '(newline)'} | Format: ${format}`
     ];

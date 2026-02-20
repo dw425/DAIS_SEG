@@ -49,7 +49,7 @@ export function generateRetryWrapper(procName, procType, code, penaltyDuration, 
     `${indented}\n` +
     `    return df_${safeVarName}\n\n` +
     `try:\n` +
-    `    _exec_${safeFuncName}()\n` +
+    `    df_${safeVarName} = _exec_${safeFuncName}()\n` +
     `except Exception as e:\n` +
     `    _logger.error(f"[FAILED] ${procName}: {e}")\n` +
     `    raise`;
