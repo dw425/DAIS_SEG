@@ -79,7 +79,7 @@ export async function extractTarGz(bytes) {
 }
 
 // Simple tar parser (512-byte header blocks)
-function parseTar(buffer) {
+export function parseTar(buffer) {
   try {
     if (!buffer || buffer.length === 0) return [];
     const results = [];
@@ -119,6 +119,12 @@ function parseTar(buffer) {
           }
         }
         offset += Math.ceil(realSize / 512) * 512;
+        continue;
+      }
+
+      // PAX extended header — skip the data block and continue to next entry
+      if (typeFlag === 'x' || typeFlag === 'g') {
+        offset += Math.ceil(size / 512) * 512;
         continue;
       }
 

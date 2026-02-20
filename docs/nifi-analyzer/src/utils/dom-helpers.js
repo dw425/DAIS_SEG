@@ -95,7 +95,15 @@ export function tableHTML(headers, rows) {
  */
 export function expanderHTML(title, content, open = false) {
   return `<div class="expander ${open ? 'open' : ''}">`
-    + `<div class="expander-header" onclick="this.parentElement.classList.toggle('open')">`
+    + `<div class="expander-header" data-expander-toggle>`
     + `<span>${escapeHTML(title)}</span><span class="expander-arrow">&#9654;</span></div>`
     + `<div class="expander-body">${content}</div></div>`;
+}
+
+// Delegated event listener for expander toggles
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (e) => {
+    const header = e.target.closest('[data-expander-toggle]');
+    if (header) header.parentElement.classList.toggle('open');
+  });
 }

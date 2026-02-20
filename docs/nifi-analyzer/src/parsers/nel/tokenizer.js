@@ -26,7 +26,12 @@ export function tokenizeNELChain(expr) {
     } else if (ch === ')') {
       depth--; current += ch;
     } else if (ch === ':' && depth === 0) {
-      parts.push(current); current = '';
+      // Don't split on math: namespace prefix — treat math:func as a single token
+      if (/^math$/i.test(current)) {
+        current += ch;
+      } else {
+        parts.push(current); current = '';
+      }
     } else {
       current += ch;
     }

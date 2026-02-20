@@ -61,7 +61,7 @@ export function handleHadoopProcessor(p, props, varName, inputVar, existingCode,
 
   // -- ORC --
   if (/^(Put|Get|Fetch)ORC$/.test(p.type) || p.type === 'ConvertAvroToORC') {
-    const path = props['Directory'] || props['Path'] || '/Volumes/<catalog>/<schema>/<volume>/data';
+    const path = props['Directory'] || props['Path'] || '/Volumes/<catalog>/<schema>/data';
     const isWrite = /^Put/.test(p.type);
     if (isWrite) {
       code = `# ORC Write: ${p.name}\n(df_${inputVar}.write\n  .format("orc")\n  .mode("append")\n  .save("${path}")\n)\nprint(f"[ORC] Wrote to ${path}")`;
@@ -74,7 +74,7 @@ export function handleHadoopProcessor(p, props, varName, inputVar, existingCode,
 
   // -- Parquet --
   if (/^(Put|Get|Fetch)Parquet$/.test(p.type)) {
-    const path = props['Directory'] || props['Path'] || '/Volumes/<catalog>/<schema>/<volume>/data';
+    const path = props['Directory'] || props['Path'] || '/Volumes/<catalog>/<schema>/data';
     const isWrite = /^Put/.test(p.type);
     if (isWrite) {
       code = `# Parquet Write: ${p.name}\n(df_${inputVar}.write\n  .format("parquet")\n  .mode("append")\n  .save("${path}")\n)\nprint(f"[PARQUET] Wrote to ${path}")`;
@@ -97,7 +97,7 @@ export function handleHadoopProcessor(p, props, varName, inputVar, existingCode,
   // -- Hudi --
   if (/^Put(Hudi|HoodieRecord)$/.test(p.type)) {
     const table = props['Table Name'] || 'hudi_table';
-    const path = props['Base Path'] || '/Volumes/<catalog>/<schema>/<volume>/hudi';
+    const path = props['Base Path'] || '/Volumes/<catalog>/<schema>/hudi';
     const recordKey = props['Record Key Field'] || 'id';
     const precombineKey = props['Precombine Key Field'] || 'timestamp';
     code = `# Hudi Write: ${p.name}\n(df_${inputVar}.write\n  .format("hudi")\n  .option("hoodie.table.name", "${table}")\n  .option("hoodie.datasource.write.recordkey.field", "${recordKey}")\n  .option("hoodie.datasource.write.precombine.field", "${precombineKey}")\n  .option("hoodie.datasource.write.operation", "upsert")\n  .mode("append")\n  .save("${path}/${table}")\n)\nprint(f"[HUDI] Wrote to ${table}")`;

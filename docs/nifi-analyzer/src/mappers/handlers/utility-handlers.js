@@ -49,7 +49,7 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
       '        spark.sql("UPDATE workflow_signals SET status = \'consumed\' WHERE signal_id = \'' + signalId + '\'")\n\n' +
       '(df_' + varName + '.writeStream\n' +
       '    .foreachBatch(_on_signal_' + varName + ')\n' +
-      '    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/<volume>/tmp/checkpoints/wait_' + signalId + '")\n' +
+      '    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/tmp/checkpoints/wait_' + signalId + '")\n' +
       '    .trigger(processingTime="5 seconds")\n' +
       '    .start()\n' +
       '    .awaitTermination(timeout=300)\n' +
@@ -206,7 +206,7 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
   // -- SpringContextProcessor --
   if (p.type === 'SpringContextProcessor') {
     code = `# Spring Context: ${p.name}\ndf_${varName} = df_${inputVar}\nprint("[SPRING] Migrated Spring bean logic")`;
-    conf = 0.90;
+    conf = 0.25;
     return { code, conf };
   }
 

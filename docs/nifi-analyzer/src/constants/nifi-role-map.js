@@ -56,15 +56,3 @@ export const ROLE_TIER_LABELS = {
   utility: 'UTILITY — Logging & Control'
 };
 
-// Classify a NiFi processor type into a role tier
-export function classifyNiFiProcessor(type) {
-  return NIFI_ROLE_MAP[type] || (
-    /^(Get|List|Consume|Listen|Fetch|Tail|Query)/i.test(type) ? 'source' :
-    /^(Put|Publish|Send|Post)/i.test(type) ? 'sink' :
-    /^(Route|Distribute|Control|Validate|Detect)/i.test(type) ? 'route' :
-    /^(Convert|Split|Merge|Replace|Transform|Extract|Evaluate|Flatten|Compress|Encrypt|Hash)/i.test(type) ? 'transform' :
-    /^(Execute|Invoke|Lookup|Handle)/i.test(type) ? 'process' :
-    /^(Log|Debug|Count|Wait|Notify)/i.test(type) ? 'utility' :
-    'process'
-  );
-}

@@ -229,6 +229,11 @@ export function applyNELFunction(base, call, mode) {
       ? "regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(" + base + ", '&amp;', '&'), '&lt;', '<'), '&gt;', '>'), '&quot;', '\"'), '&apos;', \"'\")"
       : base + ".replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '\"').replace(\"&apos;\", \"'\")";
   }
+  if (name === 'escapexml') {
+    return mode === 'col'
+      ? "regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(" + base + ", '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), '\"', '&quot;'), \"'\", '&apos;')"
+      : base + ".replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\"', '&quot;').replace(\"'\", '&apos;')";
+  }
   if (name === 'unescapecsv') {
     // Strip surrounding quotes and unescape internal doubled quotes
     return mode === 'col'
@@ -236,7 +241,28 @@ export function applyNELFunction(base, call, mode) {
       : base + '[1:-1].replace(\'"\' * 2, \'"\') if ' + base + '.startswith(\'"\') and ' + base + '.endswith(\'"\') else ' + base;
   }
   if (name === 'escapejson') {
-    return mode === 'col' ? 'to_json(' + base + ')' : 'json.dumps(' + base + ')';
+    // to_json works on struct/array columns; for string columns it's a best-effort escape
+    return mode === 'col' ? 'to_json(struct(' + base + '))' : 'json.dumps(str(' + base + '))[1:-1]';
+  }
+  if (name === 'urlencode') {
+    return mode === 'col'
+      ? "regexp_replace(regexp_replace(" + base + ", ' ', '%20'), '[^A-Za-z0-9_.~-]', '')"
+      : "urllib.parse.quote(str(" + base + "), safe='')";
+  }
+  if (name === 'urldecode') {
+    return mode === 'col'
+      ? "regexp_replace(" + base + ", '%20', ' ')"
+      : "urllib.parse.unquote(str(" + base + "))";
+  }
+  if (name === 'base64encode') {
+    return mode === 'col'
+      ? "base64(" + base + ")"
+      : "base64.b64encode(str(" + base + ").encode()).decode()";
+  }
+  if (name === 'base64decode') {
+    return mode === 'col'
+      ? "unbase64(" + base + ").cast('string')"
+      : "base64.b64decode(str(" + base + ")).decode()";
   }
   if (name === 'escapecsv') {
     // Wrap value in quotes and escape internal quotes if it contains comma, quote, or newline

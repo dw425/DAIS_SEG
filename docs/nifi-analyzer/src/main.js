@@ -32,17 +32,15 @@ import '../styles/animations.css';
 import { createStore, getState, setState, resetState, snapshotState, rollbackState } from './core/state.js';
 import bus from './core/event-bus.js';
 import { loadDbxConfig, saveDbxConfig, getDbxConfig, DBX_CONFIG_DEFAULTS } from './core/config.js';
-import { PipelineOrchestrator } from './core/pipeline.js';
-import { handleError, AppError, wrapAsync, clearErrorLog } from './core/errors.js';
+import { handleError, AppError, clearErrorLog } from './core/errors.js';
 
 // ================================================================
 // 3. UI Modules
 // ================================================================
-import { initTabs, switchTab, setTabStatus, unlockTab } from './ui/tabs.js';
+import { initTabs, setTabStatus, unlockTab } from './ui/tabs.js';
 import { escapeHTML } from './security/html-sanitizer.js';
 import { initFileUpload, getUploadedContent, getUploadedName, getUploadedBytes } from './ui/file-upload.js';
 import { loadSampleFlow, loadSampleFile } from './ui/sample-flows.js';
-import { parseProgress, parseProgressHide, uiYield } from './ui/progress.js';
 import {
   parseInput,
   runAnalysis,
@@ -84,7 +82,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── 6a. Initialize core infrastructure ──
   const store = createStore();
   const config = loadDbxConfig();
-  const pipeline = new PipelineOrchestrator();
 
   // Global error handler for uncaught promise rejections
   window.addEventListener('unhandledrejection', (event) => {
@@ -314,135 +311,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── 6j. Register pipeline steps with PipelineOrchestrator ──
-  pipeline.register([
-    {
-      name: 'parse',
-      tab: 'load',
-      run: wrapAsync(async () => {
-        bus.emit('step:parse:start');
-        parseProgress(0, 'Starting parse...');
-        await parseInput();
-        bus.emit('step:parse:done', getState());
-      }, { phase: 'parse', code: 'PARSE_FAILED' }),
-    },
-    {
-      name: 'analyze',
-      tab: 'analyze',
-      run: wrapAsync(async () => {
-        bus.emit('step:analyze:start');
-        switchTab('analyze');
-        await runAnalysis();
-        bus.emit('step:analyze:done', getState());
-      }, { phase: 'analyze', code: 'ANALYZE_FAILED' }),
-    },
-    {
-      name: 'assess',
-      tab: 'assess',
-      run: wrapAsync(async () => {
-        bus.emit('step:assess:start');
-        switchTab('assess');
-        await runAssessment();
-        bus.emit('step:assess:done', getState());
-      }, { phase: 'assess', code: 'ASSESS_FAILED' }),
-    },
-    {
-      name: 'generate',
-      tab: 'convert',
-      run: wrapAsync(async () => {
-        bus.emit('step:generate:start');
-        switchTab('convert');
-        await generateNotebook();
-        bus.emit('step:generate:done', getState());
-      }, { phase: 'generate', code: 'GENERATE_FAILED' }),
-    },
-    {
-      name: 'report',
-      tab: 'report',
-      run: wrapAsync(async () => {
-        bus.emit('step:report:start');
-        switchTab('report');
-        await generateReport();
-        bus.emit('step:report:done', getState());
-      }, { phase: 'report', code: 'REPORT_FAILED' }),
-    },
-    {
-      name: 'reportFinal',
-      tab: 'reportFinal',
-      run: wrapAsync(async () => {
-        bus.emit('step:reportFinal:start');
-        switchTab('reportFinal');
-        if (typeof window.generateFinalReport === 'function') {
-          await window.generateFinalReport();
-        }
-        bus.emit('step:reportFinal:done', getState());
-      }, { phase: 'reportFinal', code: 'FINAL_REPORT_FAILED' }),
-    },
-    {
-      name: 'validate',
-      tab: 'validate',
-      run: wrapAsync(async () => {
-        bus.emit('step:validate:start');
-        switchTab('validate');
-        if (typeof window.runValidation === 'function') {
-          await window.runValidation();
-        }
-        bus.emit('step:validate:done', getState());
-      }, { phase: 'validate', code: 'VALIDATE_FAILED' }),
-    },
-    {
-      name: 'value',
-      tab: 'value',
-      run: wrapAsync(async () => {
-        bus.emit('step:value:start');
-        switchTab('value');
-        if (typeof window.runValueAnalysis === 'function') {
-          await window.runValueAnalysis();
-        }
-        bus.emit('step:value:done', getState());
-      }, { phase: 'value', code: 'VALUE_ANALYSIS_FAILED' }),
-    },
-  ]);
-
-  // ── 6k. Wire EventBus listeners for decoupled communication ──
-
-  // When a flow is parsed, automatically kick off the full pipeline
-  bus.on('flow:loaded', () => {
-    resetState();
-    clearErrorLog();
-    pipeline.execute();
-  });
-
-  // Progress events update the progress bar
-  bus.on('pipeline:step:start', ({ step }) => {
-    const stepLabels = {
-      parse: 'Parsing flow...',
-      analyze: 'Analyzing flow...',
-      assess: 'Assessing migration readiness...',
-      generate: 'Generating notebook...',
-      report: 'Generating reports...',
-      reportFinal: 'Building final report...',
-      validate: 'Running validation...',
-      value: 'Running value analysis...',
-    };
-    const stepIndex = [
-      'parse', 'analyze', 'assess', 'generate',
-      'report', 'reportFinal', 'validate', 'value',
-    ].indexOf(step);
-    const pct = stepIndex >= 0 ? Math.round(((stepIndex + 1) / 8) * 100) : 0;
-    parseProgress(pct, stepLabels[step] || step);
-  });
-
-  bus.on('pipeline:done', () => {
-    parseProgress(100, 'All steps complete!');
-    setTimeout(parseProgressHide, 1500);
-  });
-
-  bus.on('pipeline:step:error', ({ step, error }) => {
-    console.error(`[main] Pipeline step "${step}" failed:`, error);
-  });
-
-  // ── 6l. Wire dynamically-created download buttons in rendered HTML ──
+  // ── 6j. Wire dynamically-created download buttons in rendered HTML ──
   //
   // Because step-handlers.js renders HTML with onclick attributes for
   // download buttons (legacy pattern), we intercept those via event delegation
@@ -468,6 +337,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── 6m. Expose minimal API on window for legacy compatibility ──
   //
+  // Public API: exposed for console debugging and external tool integration
   // Some step-handlers still reference window.* functions during the
   // incremental migration. These will be removed as extraction completes.
   window.downloadNotebook = () => downloadNotebook(getState());
@@ -556,7 +426,7 @@ document.addEventListener('DOMContentLoaded', () => {
       setState({ validation: result });
       if (el) {
         const score = result.overallScore || 0;
-        const cls = score >= 80 ? 'green' : score >= 50 ? 'amber' : 'red';
+        const cls = score >= 90 ? 'green' : score >= 70 ? 'amber' : 'red';
         let vh = `<hr class="divider"><div class="score-big" style="color:var(--${cls})">Validation Score: ${Math.round(score)}%</div>`;
         vh += metricsHTML([
           { label: 'Intent Match', value: Math.round(result.intentScore || 0) + '%' },
@@ -606,7 +476,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.runValueAnalysis = () => {
+  window.runValueAnalysis = async () => {
     const STATE = getState();
     if (!STATE.parsed || !STATE.parsed._nifi || !STATE.notebook) return;
     const snapshot = snapshotState();

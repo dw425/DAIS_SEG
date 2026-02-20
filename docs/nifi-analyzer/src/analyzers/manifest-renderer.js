@@ -122,7 +122,7 @@ export function renderManifestHTML(manifest) {
         `<code style="font-size:0.7rem">${escapeHTML((t.dbx_code || '').substring(0, 100))}</code>`,
         `<span style="font-size:0.72rem;color:var(--text2)">${escapeHTML((t.dbx_notes || '').substring(0, 120))}</span>`,
       ]);
-      h += '<div class="expander"><div class="expander-header" onclick="this.parentElement.classList.toggle(\'open\')">'
+      h += '<div class="expander"><div class="expander-header" data-expander-toggle>'
         + `<span><strong>${escapeHTML(tool)}</strong> \u2014 ${items.length} invocation${items.length > 1 ? 's' : ''}</span><span class="expander-arrow">&#9654;</span></div>`
         + '<div class="expander-body"><div class="table-scroll"><table style="font-size:0.75rem"><thead><tr><th>Subtype</th><th>Processor</th><th>Group</th><th>Command</th><th>DBX Equivalent</th><th>Priority</th><th>DBX Code</th><th>Notes</th></tr></thead><tbody>'
         + rows.map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('')

@@ -40,16 +40,16 @@ export function handleNoSQLProcessor(p, props, varName, inputVar, existingCode, 
 
   // -- MongoDB --
   if (/^(Get|Put|Delete)Mongo/.test(p.type)) {
-    const uri = props['Mongo URI'] || 'mongodb://mongo_host:27017';
+    const uri = props['Mongo URI'] ? `"${props['Mongo URI']}"` : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
     const db = props['Mongo Database Name'] || 'mydb';
     const coll = props['Mongo Collection Name'] || 'mycollection';
     const isWrite = /^(Put|Delete)/.test(p.type);
     if (isWrite && p.type !== 'DeleteMongo') {
-      code = `# MongoDB Write: ${p.name}\n# URI: ${uri} | DB: ${db} | Collection: ${coll}\nfrom pymongo import MongoClient\n_client = MongoClient("${uri}")\n_db = _client["${db}"]\n_coll = _db["${coll}"]\n\n_records = df_${inputVar}.limit(10000).toPandas().to_dict(orient="records")\n_result = _coll.insert_many(_records)\nprint(f"[MONGO] Inserted {len(_result.inserted_ids)} documents into ${db}.${coll}")\n_client.close()`;
+      code = `# MongoDB Write: ${p.name}\n# DB: ${db} | Collection: ${coll}\nfrom pymongo import MongoClient\n_mongo_uri = ${uri}\n_client = MongoClient(_mongo_uri)\n_db = _client["${db}"]\n_coll = _db["${coll}"]\n\n_records = df_${inputVar}.limit(10000).toPandas().to_dict(orient="records")\n_result = _coll.insert_many(_records)\nprint(f"[MONGO] Inserted {len(_result.inserted_ids)} documents into ${db}.${coll}")\n_client.close()`;
     } else if (p.type === 'DeleteMongo') {
-      code = `# MongoDB Delete: ${p.name}\nfrom pymongo import MongoClient\n_client = MongoClient("${uri}")\n_coll = _client["${db}"]["${coll}"]\n_result = _coll.delete_many({})\nprint(f"[MONGO] Deleted {_result.deleted_count} documents from ${db}.${coll}")\n_client.close()\ndf_${varName} = df_${inputVar}`;
+      code = `# MongoDB Delete: ${p.name}\nfrom pymongo import MongoClient\n_mongo_uri = ${uri}\n_client = MongoClient(_mongo_uri)\n_coll = _client["${db}"]["${coll}"]\n_result = _coll.delete_many({})\nprint(f"[MONGO] Deleted {_result.deleted_count} documents from ${db}.${coll}")\n_client.close()\ndf_${varName} = df_${inputVar}`;
     } else {
-      code = `# MongoDB Read: ${p.name}\n# URI: ${uri} | DB: ${db} | Collection: ${coll}\nfrom pymongo import MongoClient\n_client = MongoClient("${uri}")\n_db = _client["${db}"]\n_coll = _db["${coll}"]\n\n_docs = list(_coll.find({}, {"_id": 0}).limit(50000))\ndf_${varName} = spark.createDataFrame(_docs) if _docs else spark.createDataFrame([], "id STRING")\nprint(f"[MONGO] Read {len(_docs)} documents from ${db}.${coll}")\n_client.close()`;
+      code = `# MongoDB Read: ${p.name}\n# DB: ${db} | Collection: ${coll}\nfrom pymongo import MongoClient\n_mongo_uri = ${uri}\n_client = MongoClient(_mongo_uri)\n_db = _client["${db}"]\n_coll = _db["${coll}"]\n\n_docs = list(_coll.find({}, {"_id": 0}).limit(50000))\ndf_${varName} = spark.createDataFrame(_docs) if _docs else spark.createDataFrame([], "id STRING")\nprint(f"[MONGO] Read {len(_docs)} documents from ${db}.${coll}")\n_client.close()`;
     }
     conf = 0.90;
     return { code, conf };
@@ -57,29 +57,29 @@ export function handleNoSQLProcessor(p, props, varName, inputVar, existingCode, 
 
   // -- GetMongoRecord --
   if (p.type === 'GetMongoRecord') {
-    const uri = props['Mongo URI'] || 'mongodb://mongo:27017';
+    const uri = props['Mongo URI'] ? `"${props['Mongo URI']}"` : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
     const db = props['Mongo Database Name'] || 'mydb';
     const coll = props['Mongo Collection Name'] || 'collection';
-    code = `# Mongo Record: ${p.name}\nfrom pymongo import MongoClient\n_client = MongoClient("${uri}")\n_docs = list(_client["${db}"]["${coll}"].find({}, {"_id": 0}).limit(50000))\ndf_${varName} = spark.createDataFrame(_docs) if _docs else spark.createDataFrame([], "id STRING")\n_client.close()`;
+    code = `# Mongo Record: ${p.name}\nfrom pymongo import MongoClient\n_mongo_uri = ${uri}\n_client = MongoClient(_mongo_uri)\n_docs = list(_client["${db}"]["${coll}"].find({}, {"_id": 0}).limit(50000))\ndf_${varName} = spark.createDataFrame(_docs) if _docs else spark.createDataFrame([], "id STRING")\n_client.close()`;
     conf = 0.90;
     return { code, conf };
   }
 
   // -- RunMongoAggregation --
   if (p.type === 'RunMongoAggregation') {
-    const uri = props['Mongo URI'] || 'mongodb://mongo:27017';
+    const uri = props['Mongo URI'] ? `"${props['Mongo URI']}"` : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
     const db = props['Mongo Database Name'] || 'mydb';
     const coll = props['Mongo Collection Name'] || 'collection';
-    code = `# Mongo Aggregation: ${p.name}\nfrom pymongo import MongoClient\n_client = MongoClient("${uri}")\n_results = list(_client["${db}"]["${coll}"].aggregate([]))\ndf_${varName} = spark.createDataFrame(_results) if _results else df_${inputVar}\n_client.close()`;
+    code = `# Mongo Aggregation: ${p.name}\nfrom pymongo import MongoClient\n_mongo_uri = ${uri}\n_client = MongoClient(_mongo_uri)\n_results = list(_client["${db}"]["${coll}"].aggregate([]))\ndf_${varName} = spark.createDataFrame(_results) if _results else df_${inputVar}\n_client.close()`;
     conf = 0.90;
     return { code, conf };
   }
 
   // -- GridFS --
   if (/^(Fetch|Put|Delete)GridFS$/.test(p.type)) {
-    const uri = props['Mongo URI'] || 'mongodb://mongo:27017';
+    const uri = props['Mongo URI'] ? `"${props['Mongo URI']}"` : 'dbutils.secrets.get(scope="nosql", key="mongo-uri")';
     const db = props['Mongo Database Name'] || 'files_db';
-    code = `# GridFS ${p.type}: ${p.name}\nfrom pymongo import MongoClient\nimport gridfs\n_client = MongoClient("${uri}")\n_fs = gridfs.GridFS(_client["${db}"])\ndf_${varName} = df_${inputVar}\n_client.close()`;
+    code = `# GridFS ${p.type}: ${p.name}\nfrom pymongo import MongoClient\nimport gridfs\n_mongo_uri = ${uri}\n_client = MongoClient(_mongo_uri)\n_fs = gridfs.GridFS(_client["${db}"])\ndf_${varName} = df_${inputVar}\n_client.close()`;
     conf = 0.90;
     return { code, conf };
   }

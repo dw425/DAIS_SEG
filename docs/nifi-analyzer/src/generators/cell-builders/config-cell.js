@@ -26,8 +26,8 @@ import { DBX_CONFIG_DEFAULTS } from '../../core/config.js';
  */
 export function buildConfigCell({ smartImportsCode, catalogName, schemaName, secretScope }) {
   let configCode = smartImportsCode + '\n\n# Databricks notebook configuration\nspark.conf.set("spark.sql.adaptive.enabled", "true")';
-  if (catalogName) configCode += `\nspark.sql("USE CATALOG ${catalogName}")`;
-  configCode += `\nspark.sql("USE SCHEMA ${schemaName}")`;
+  if (catalogName) configCode += `\nspark.sql("USE CATALOG \`${catalogName}\`")`;
+  configCode += `\nspark.sql("USE SCHEMA \`${schemaName}\`")`;
   if (secretScope) configCode += `\n\nSECRET_SCOPE = "${secretScope}"`;
 
   // FIX HIGH: Use config-driven checkpoint path instead of hardcoded /tmp/

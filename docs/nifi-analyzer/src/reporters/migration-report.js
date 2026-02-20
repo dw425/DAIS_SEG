@@ -50,6 +50,8 @@ export function generateMigrationReport(mappings, nifi) {
   const coveragePct = total ? Math.round(mapped / total * 100) : 0;
 
   // Weighted effort: accounts for processor type complexity
+  // Note: 'script' and 'custom' roles are not currently assigned by the classifier;
+  // these weights exist as placeholders for future role expansion
   const EFFORT_WEIGHTS = {
     source: 2, sink: 2, transform: 1, route: 1.5, process: 3, script: 4, custom: 5
   };

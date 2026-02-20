@@ -85,7 +85,7 @@ const STEP_PREREQUISITES = Object.freeze({
   assess:      ['parsed', 'analysis'],
   convert:     ['parsed', 'assessment'],
   report:      ['parsed', 'notebook'],
-  reportFinal: ['parsed'],
+  reportFinal: ['parsed', 'notebook', 'migrationReport'],
   validate:    ['parsed', 'notebook'],
   value:       ['parsed', 'notebook'],
 });

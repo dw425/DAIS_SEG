@@ -227,7 +227,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
   if (p.type === 'ExecuteGroovyScript') {
     const body = (props['Script Body'] || '').substring(0, 200).replace(/"/g, "'").replace(/\n/g, ' ');
     code = `# Groovy->Python: ${p.name}\nfrom pyspark.sql.functions import udf, col, struct\nfrom pyspark.sql.types import StringType\nimport json\n@udf(StringType())\ndef groovy_migrated(row_json):\n    """Migrated from Groovy: ${body}"""\n    data = json.loads(row_json)\n    data["_migrated"] = True\n    return json.dumps(data)\ndf_${varName} = df_${inputVar}.withColumn("_result", groovy_migrated(col("value")))`;
-    conf = 0.90;
+    conf = 0.25;
     return { code, conf };
   }
 
@@ -252,11 +252,11 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
   if (p.type === 'EvaluateXPath') {
     const xpathExprs = Object.entries(props).filter(([k]) => !['Destination','Return Type'].includes(k));
     if (xpathExprs.length) {
-      const lines = [`# XPath Evaluation: ${p.name}`, 'from pyspark.sql.functions import xpath_string, col'];
+      const lines = [`# XPath Evaluation: ${p.name}`, 'from pyspark.sql.functions import col, expr'];
       lines.push(`df_${varName} = df_${inputVar}`);
       xpathExprs.forEach(([attr, xpath]) => {
         const colName = attr.replace(/[^a-zA-Z0-9_]/g, '_');
-        lines.push(`df_${varName} = df_${varName}.withColumn("${colName}", xpath_string(col("xml"), "${xpath}"))`);
+        lines.push(`df_${varName} = df_${varName}.withColumn("${colName}", expr("xpath_string(xml, '${xpath}')"))`);
       });
       code = lines.join('\n');
       conf = 0.90;
@@ -274,7 +274,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
   // -- SplitXml --
   if (p.type === 'SplitXml') {
     const tag = props['Record Tag'] || 'record';
-    code = `# Split XML: ${p.name}\ndf_${varName} = spark.read.format("xml").option("rowTag", "${tag}").load("/Volumes/<catalog>/<schema>/<volume>/data/*.xml")\nprint(f"[XML] Split XML by <${tag}>")`;
+    code = `# Split XML: ${p.name}\ndf_${varName} = spark.read.format("xml").option("rowTag", "${tag}").load("/Volumes/<catalog>/<schema>/data/*.xml")\nprint(f"[XML] Split XML by <${tag}>")`;
     conf = 0.92;
     return { code, conf };
   }
@@ -428,7 +428,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
   // -- GeoIP --
   if (p.type === 'GeoEnrichIP' || p.type === 'ISPEnrichIP') {
     const ipAttr = props['IP Address Attribute'] || 'ip_address';
-    code = `# GeoIP: ${p.name}\nfrom pyspark.sql.functions import udf, col\nfrom pyspark.sql.types import StructType, StructField, StringType, FloatType\nimport geoip2.database\n_reader = geoip2.database.Reader("/dbfs/geo/GeoLite2-City.mmdb")\n@udf(StructType([StructField("city",StringType()),StructField("country",StringType())]))\ndef geo_lookup(ip):\n    try:\n        r = _reader.city(ip)\n        return (r.city.name, r.country.name)\n    except: return (None, None)\ndf_${varName} = df_${inputVar}.withColumn("_geo", geo_lookup(col("${ipAttr}")))`;
+    code = `# GeoIP: ${p.name}\nfrom pyspark.sql.functions import udf, col\nfrom pyspark.sql.types import StructType, StructField, StringType, FloatType\nimport geoip2.database\n_reader = geoip2.database.Reader("/Volumes/<catalog>/<schema>/geo/GeoLite2-City.mmdb")\n@udf(StructType([StructField("city",StringType()),StructField("country",StringType())]))\ndef geo_lookup(ip):\n    try:\n        r = _reader.city(ip)\n        return (r.city.name, r.country.name)\n    except: return (None, None)\ndf_${varName} = df_${inputVar}.withColumn("_geo", geo_lookup(col("${ipAttr}")))`;
     conf = 0.90;
     return { code, conf };
   }
@@ -484,7 +484,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
 
   // -- ValidateCsv --
   if (p.type === 'ValidateCsv') {
-    code = `# Validate CSV: ${p.name}\nfrom pyspark.sql.functions import col\ndf_${varName} = spark.read.option("header", "true").option("mode", "PERMISSIVE").csv("/Volumes/<catalog>/<schema>/<volume>/data/*.csv")\n_corrupt = df_${varName}.filter(col("_corrupt_record").isNotNull())`;
+    code = `# Validate CSV: ${p.name}\nfrom pyspark.sql.functions import col\ndf_${varName} = spark.read.option("header", "true").option("mode", "PERMISSIVE").csv("/Volumes/<catalog>/<schema>/data/*.csv")\n_corrupt = df_${varName}.filter(col("_corrupt_record").isNotNull())`;
     conf = 0.93;
     return { code, conf };
   }
@@ -509,14 +509,14 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
 
   // -- Avro metadata --
   if (p.type === 'ExtractAvroMetadata') {
-    code = `# Avro Metadata: ${p.name}\ndf_${varName} = spark.read.format("avro").load("${props['Path'] || '/Volumes/<catalog>/<schema>/<volume>/data/*.avro'}")\nprint(f"[AVRO] Schema: {df_${varName}.schema.simpleString()}")`;
+    code = `# Avro Metadata: ${p.name}\ndf_${varName} = spark.read.format("avro").load("${props['Path'] || '/Volumes/<catalog>/<schema>/data/*.avro'}")\nprint(f"[AVRO] Schema: {df_${varName}.schema.simpleString()}")`;
     conf = 0.93;
     return { code, conf };
   }
 
   // -- Parquet --
   if (p.type === 'FetchParquet') {
-    code = `# Parquet: ${p.name}\ndf_${varName} = spark.read.format("parquet").load("${props['Path'] || '/Volumes/<catalog>/<schema>/<volume>/data/*.parquet'}")`;
+    code = `# Parquet: ${p.name}\ndf_${varName} = spark.read.format("parquet").load("${props['Path'] || '/Volumes/<catalog>/<schema>/data/*.parquet'}")`;
     conf = 0.95;
     return { code, conf };
   }

@@ -68,6 +68,11 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
     qualifiedSchema
   }));
 
+  // Pip install cell (if third-party packages are needed)
+  if (smartImports.pipCell) {
+    cells.push(smartImports.pipCell);
+  }
+
   // Smart Imports & Config cell (IMPROVEMENT #2)
   cells.push(buildConfigCell({
     smartImportsCode: smartImports.code,

@@ -67,7 +67,7 @@ export function downloadNotebook(STATE) {
   }
 
   const pyCells = cells.map(c => {
-    if (c.type === 'md') {
+    if (c.type === 'md' || c.type === 'markdown' || c.role === 'markdown') {
       return '# MAGIC %md\n' + c.source.split('\n').map(l => '# MAGIC ' + l).join('\n');
     }
     if (c.type === 'sql') {

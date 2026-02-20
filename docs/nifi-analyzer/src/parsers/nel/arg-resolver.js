@@ -33,7 +33,7 @@ export function resolveNELArg(arg, mode) {
  * @returns {{ name: string, args: string[] }}
  */
 export function extractNELFuncArgs(call) {
-  var m = call.match(/^(\w+)\((.*)\)$/s);
+  var m = call.match(/^([\w:]+)\((.*)\)$/s);
   if (!m) return { name: call, args: [] };
   var name = m[1];
   var rawArgs = m[2].trim();

@@ -45,7 +45,7 @@ export function handleSinkProcessor(p, props, varName, inputVar, existingCode, e
     const port = props['Port'] || '22';
     const user = props['Username'] || 'sftp_user';
     const remotePath = props['Remote Path'] || '/exports/';
-    code = `# ${p.type}: ${p.name}\n# Host: ${host}:${port} | Path: ${remotePath}\nimport paramiko\n_ssh = paramiko.SSHClient()\n_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())\n_ssh.connect("${host}", port=int("${port}"), username="${user}",\n    password=dbutils.secrets.get(scope="sftp", key="password"))\n_sftp = _ssh.open_sftp()\n\n_pdf = df_${inputVar}.toPandas()\n_output_path = f"${remotePath}/{_pdf.shape[0]}_records.csv"\n_pdf.to_csv(f"/Volumes/<catalog>/<schema>/<volume>/tmp/_sftp_out.csv", index=False)\n_sftp.put("/Volumes/<catalog>/<schema>/<volume>/tmp/_sftp_out.csv", _output_path)\n\n_sftp.close()\n_ssh.close()\nprint(f"[SFTP] Uploaded {_pdf.shape[0]} records to ${host}:${remotePath}")`;
+    code = `# ${p.type}: ${p.name}\n# Host: ${host}:${port} | Path: ${remotePath}\nimport paramiko\n_ssh = paramiko.SSHClient()\n_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())\n_ssh.connect("${host}", port=int("${port}"), username="${user}",\n    password=dbutils.secrets.get(scope="sftp", key="password"))\n_sftp = _ssh.open_sftp()\n\n_pdf = df_${inputVar}.toPandas()\n_output_path = f"${remotePath}/{_pdf.shape[0]}_records.csv"\n_pdf.to_csv(f"/Volumes/<catalog>/<schema>/tmp/_sftp_out.csv", index=False)\n_sftp.put("/Volumes/<catalog>/<schema>/tmp/_sftp_out.csv", _output_path)\n\n_sftp.close()\n_ssh.close()\nprint(f"[SFTP] Uploaded {_pdf.shape[0]} records to ${host}:${remotePath}")`;
     conf = 0.90;
     return { code, conf };
   }

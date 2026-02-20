@@ -55,7 +55,7 @@ const NIFI_ROLE_MAP = {
   PutDatabaseRecord:'sink',PutSyslog:'sink',PutTCP:'sink',
   // Utility
   LogMessage:'utility',LogAttribute:'utility',Wait:'utility',Notify:'utility',
-  DebugFlow:'utility',CountText:'utility',AttributesToJSON:'utility',
+  DebugFlow:'utility',CountText:'utility',
 };
 
 /**

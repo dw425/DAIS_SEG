@@ -59,13 +59,19 @@ export function exportAsJupyterNotebook(cells) {
       kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' },
       language_info: { name: 'python', version: '3.10.0' }
     },
-    cells: cells.map(cell => ({
-      cell_type: (cell.type === 'markdown' || cell.type === 'md' || cell.role === 'markdown') ? 'markdown' : 'code',
-      metadata: {},
-      source: (cell.source || cell.code || '').split('\n').map((l, i, a) => i < a.length - 1 ? l + '\n' : l),
-      outputs: [],
-      execution_count: null
-    }))
+    cells: cells.map(cell => {
+      const isMarkdown = (cell.type === 'markdown' || cell.type === 'md' || cell.role === 'markdown');
+      const c = {
+        cell_type: isMarkdown ? 'markdown' : 'code',
+        metadata: {},
+        source: (cell.source || cell.code || '').split('\n').map((l, i, a) => i < a.length - 1 ? l + '\n' : l),
+      };
+      if (!isMarkdown) {
+        c.outputs = [];
+        c.execution_count = null;
+      }
+      return c;
+    })
   };
   const blob = new Blob([JSON.stringify(nbJson, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

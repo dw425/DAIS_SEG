@@ -120,6 +120,7 @@ export async function parseInput() {
     return;
   }
 
+  const snapshot = snapshotState();
   const btn = document.getElementById('parseBtn');
   if (btn) btn.disabled = true;
   setTabStatus('load', 'processing');
@@ -144,6 +145,7 @@ export async function parseInput() {
   try {
     parsed = await parseFlow(raw, uploadedName || 'NiFi Flow', { bytes: uploadedBytesData });
   } catch (e) {
+    rollbackState(snapshot);
     handleError(new AppError('Parse failed: ' + e.message, { code: 'PARSE_FAILED', phase: 'parse', severity: 'high', cause: e }));
     showStepError('parseResults', 'Failed to parse: ' + e.message);
     if (btn) btn.disabled = false;

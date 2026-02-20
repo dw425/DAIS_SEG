@@ -52,7 +52,7 @@ export function wrapBatchSinkForStreaming(code, procName, varName, inputVar, isS
         indentedBody.replace(/df_\w+\.(?:limit\(\d+\)\.)?collect\(\)/g, 'batch_df.collect()') + '\n\n' +
         '(df_' + inputVar + '.writeStream\n' +
         '    .foreachBatch(_process_batch_' + varName + ')\n' +
-        '    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/<volume>/checkpoints/' + varName + '")\n' +
+        '    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/data/checkpoints/' + varName + '")\n' +
         '    .trigger(processingTime="10 seconds")\n' +
         '    .start()\n)';
     }

@@ -10,6 +10,7 @@ import {
   decompressGzip,
   extractZipContents,
   extractTarGz,
+  parseTar,
   parseSqlFile,
   extractDocxText,
   extractXlsxData,
@@ -45,6 +46,7 @@ export {
   decompressGzip,
   extractZipContents,
   extractTarGz,
+  parseTar,
   parseSqlFile,
   extractDocxText,
   extractXlsxData,
@@ -129,6 +131,20 @@ export async function parseFlow(raw, filename, options = {}) {
     return parseFlow(best.content, best.filename);
   }
 
+  // ---- 1b. Standalone TAR ----
+  if (lower.endsWith('.tar')) {
+    const bytes2 = raw instanceof ArrayBuffer ? new Uint8Array(raw) : new TextEncoder().encode(raw);
+    const entries = parseTar(bytes2);
+    if (entries.error) return { processors: [], _nifi: {}, parse_warnings: [entries.error] };
+    if (!entries.length) return { processors: [], _nifi: {}, parse_warnings: ['No parseable files found in tar archive'] };
+    // Parse best entry
+    const best = entries.sort((a,b) => {
+      const pri = n => /flow\.xml/i.test(n) ? 0 : /flow\.json/i.test(n) ? 1 : /template/i.test(n) ? 2 : /\.xml$/i.test(n) ? 3 : /\.json$/i.test(n) ? 4 : 5;
+      return pri(a.filename) - pri(b.filename);
+    })[0];
+    return parseFlow(best.content, best.filename);
+  }
+
   // ---- 2. GZIP (.gz, .xml.gz, .json.gz) ----
   if (lower.endsWith('.gz')) {
     if (!bytes) throw new Error('Binary data required for .gz files');
@@ -180,7 +196,21 @@ export async function parseFlow(raw, filename, options = {}) {
     return parseSqlFile(content, filename);
   }
 
-  // ---- 7. Standard text-based formats (XML, JSON, CSV, TXT) ----
+  // ---- 7. Unsupported ancillary formats (graceful rejection) ----
+  if (/\.(csv|tsv)$/i.test(lower)) {
+    return { processors: [], _nifi: {}, parse_warnings: ['CSV/TSV files are not NiFi flow definitions. Please upload a NiFi template (.xml), flow definition (.json), or flow.xml.gz archive.'] };
+  }
+  if (/\.(ya?ml)$/i.test(lower)) {
+    return { processors: [], _nifi: {}, parse_warnings: ['YAML files are not directly supported as NiFi flow definitions. If this is a NiFi Registry export, try converting to JSON first.'] };
+  }
+  if (/\.(avro)$/i.test(lower)) {
+    return { processors: [], _nifi: {}, parse_warnings: ['Avro files are data files, not NiFi flow definitions. Please upload a NiFi template (.xml) or flow definition (.json).'] };
+  }
+  if (/\.(parquet)$/i.test(lower)) {
+    return { processors: [], _nifi: {}, parse_warnings: ['Parquet files are data files, not NiFi flow definitions. Please upload a NiFi template (.xml) or flow definition (.json).'] };
+  }
+
+  // ---- 8. Standard text-based formats (XML, JSON, TXT) ----
   const content = cleanInput(raw || '');
   if (!content) {
     throw new Error('Empty or invalid file content');

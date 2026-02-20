@@ -105,7 +105,7 @@ export async function runValidationEngine({
   });
 
   // ── Overall Score ──
-  progress(88, 'Computing overall score...');
+  progress(95, 'Computing overall score...');
   await new Promise(r => setTimeout(r, 0));
 
   const overallScore = Math.round(

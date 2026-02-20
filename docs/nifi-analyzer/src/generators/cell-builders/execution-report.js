@@ -72,6 +72,6 @@ export function generateExecutionReportCell(mappings, qualifiedSchema) {
 'print("EXECUTION REPORT")\n' +
 'print("=" * 60)\n' +
 'print(f"Successes: {_successes} | Failures: {_failures} | Recovered: {_recovered}")\n' +
-'print(f"Success Rate: {_exec_report[\\"summary\\"][\\"success_rate\\"]}%")\n' +
+'print(f"Success Rate: {_exec_report[\'summary\'][\'success_rate\']}%")\n' +
 'print("=" * 60)';
 }
