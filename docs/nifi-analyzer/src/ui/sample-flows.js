@@ -269,7 +269,7 @@ export const SAMPLE_FLOWS = {
  * @param {string}   flowType   — key in SAMPLE_FLOWS ('etl', 'streaming', 'full')
  * @param {Function} parseFn    — the parseInput function to call after loading
  */
-export function loadSampleFlow(flowType, parseFn) {
+export async function loadSampleFlow(flowType, parseFn) {
   const xml = SAMPLE_FLOWS[flowType];
   if (!xml) return;
   const labels = {
@@ -285,7 +285,7 @@ export function loadSampleFlow(flowType, parseFn) {
   }
   const pasteInput = document.getElementById('pasteInput');
   if (pasteInput) pasteInput.value = '';
-  if (typeof parseFn === 'function') parseFn();
+  if (typeof parseFn === 'function') await parseFn();
 }
 
 /**
@@ -310,7 +310,7 @@ export async function loadSampleFile(path, filename, parseFn) {
     if (el) el.textContent = 'Sample: ' + filename;
     const pasteInput = document.getElementById('pasteInput');
     if (pasteInput) pasteInput.value = '';
-    if (typeof parseFn === 'function') parseFn();
+    if (typeof parseFn === 'function') await parseFn();
   } catch (e) {
     if (el) {
       el.textContent = 'Failed to load ' + filename + ' — ' + e.message;

@@ -81,17 +81,17 @@ export function handleDatabaseProcessor(p, props, varName, inputVar, existingCod
     return { code, conf };
   }
 
-  // -- Phoenix --
+  // -- Phoenix (use JDBC — org.apache.phoenix.spark is deprecated/broken on Spark 3+) --
   if (/^(Query|Put)Phoenix/.test(p.type)) {
     const zkUrl = props['Phoenix URL'] || props['ZooKeeper Quorum'] || 'zk_host:2181';
     const table = props['Table Name'] || 'phoenix_table';
     const isWrite = /^Put/.test(p.type);
     if (isWrite) {
-      code = `# Phoenix Write: ${p.name}\n(df_${inputVar}.write\n  .format("org.apache.phoenix.spark")\n  .option("table", "${table}")\n  .option("zkUrl", "${zkUrl}")\n  .mode("overwrite")\n  .save()\n)\nprint(f"[PHOENIX] Wrote to ${table}")`;
+      code = `# Phoenix Write: ${p.name} (via JDBC — phoenix-spark connector is deprecated on Spark 3+)\n(df_${inputVar}.write\n  .format("jdbc")\n  .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver")\n  .option("url", "jdbc:phoenix:${zkUrl}")\n  .option("dbtable", "${table}")\n  .mode("overwrite")\n  .save()\n)\nprint(f"[PHOENIX] Wrote to ${table} via JDBC")`;
     } else {
-      code = `# Phoenix Read: ${p.name}\ndf_${varName} = (spark.read\n  .format("org.apache.phoenix.spark")\n  .option("table", "${table}")\n  .option("zkUrl", "${zkUrl}")\n  .load()\n)\nprint(f"[PHOENIX] Read from ${table}")`;
+      code = `# Phoenix Read: ${p.name} (via JDBC — phoenix-spark connector is deprecated on Spark 3+)\ndf_${varName} = (spark.read\n  .format("jdbc")\n  .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver")\n  .option("url", "jdbc:phoenix:${zkUrl}")\n  .option("dbtable", "${table}")\n  .load()\n)\nprint(f"[PHOENIX] Read from ${table} via JDBC")`;
     }
-    conf = 0.90;
+    conf = 0.70;
     return { code, conf };
   }
 

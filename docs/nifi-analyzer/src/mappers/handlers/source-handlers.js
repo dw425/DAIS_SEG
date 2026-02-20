@@ -126,13 +126,15 @@ export function handleSourceProcessor(p, props, varName, inputVar, existingCode,
     return { code, conf };
   }
 
-  // -- MySQL CDC --
+  // -- MySQL CDC (CaptureChangeMySQL) --
   if (p.type === 'CaptureChangeMySQL') {
-    const host = props['MySQL Hostname'] || 'mysql_host';
-    const db = props['Database/Schema'] || 'source_db';
-    const table = props['Table'] || 'source_table';
-    code = `# MySQL CDC: ${p.name}\n# Host: ${host}\ndf_${varName} = (spark.readStream\n  .format("delta")\n  .option("readChangeFeed", "true")\n  .table("${db}.${table}")\n)\nprint(f"[CDC] Streaming changes via DLT")`;
-    conf = 0.92;
+    const host = props['MySQL Hostname'] || props['Hosts'] || 'mysql_host';
+    const port = props['MySQL Port'] || props['Port'] || '3306';
+    const db = props['Database/Schema'] || props['Database'] || 'source_db';
+    const table = props['Table'] || props['Table Name Pattern'] || 'source_table';
+    const serverId = props['Server ID'] || '1';
+    code = `# CaptureChangeMySQL (CDC): ${p.name}\n# MySQL Host: ${host}:${port} | DB: ${db} | Table: ${table}\n#\n# OPTION 1 (RECOMMENDED): Use Auto Loader to ingest CDC events from a landing zone\n# Assumes MySQL CDC events (e.g., from Debezium) land as JSON files in a Volume\ndf_${varName} = (spark.readStream\n  .format("cloudFiles")\n  .option("cloudFiles.format", "json")\n  .option("cloudFiles.schemaLocation", "/Volumes/<catalog>/<schema>/<volume>/tmp/cdc_schema/${db}_${table}")\n  .option("cloudFiles.inferColumnTypes", "true")\n  .load("/Volumes/<catalog>/<schema>/<volume>/cdc/${db}/${table}/")\n)\nprint(f"[CDC] Auto Loader ingesting MySQL CDC events for ${db}.${table}")\n\n# OPTION 2: Read directly from MySQL via JDBC (batch, not streaming)\n# df_${varName} = (spark.read\n#   .format("jdbc")\n#   .option("url", f"jdbc:mysql://{dbutils.secrets.get(scope='mysql', key='host')}:${port}/${db}")\n#   .option("dbtable", "${table}")\n#   .option("driver", "com.mysql.cj.jdbc.Driver")\n#   .option("user", dbutils.secrets.get(scope="mysql", key="user"))\n#   .option("password", dbutils.secrets.get(scope="mysql", key="pass"))\n#   .load()\n# )`;
+    conf = 0.85;
     return { code, conf };
   }
 

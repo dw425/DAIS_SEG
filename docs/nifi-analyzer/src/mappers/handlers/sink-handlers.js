@@ -24,8 +24,8 @@ export function handleSinkProcessor(p, props, varName, inputVar, existingCode, e
   // -- HandleHttpResponse --
   if (p.type === 'HandleHttpResponse') {
     const statusCode = props['HTTP Status Code'] || '200';
-    code = `# HTTP Response: ${p.name}\n# NiFi sends HTTP response with status ${statusCode}\nprint(f"[HTTP] Response: status=${statusCode} for request")`;
-    conf = 0.92;
+    code = `# HandleHttpResponse: ${p.name} (LOW CONFIDENCE - NO DIRECT EQUIVALENT)\n# NiFi HTTP response with status ${statusCode} has no direct Databricks equivalent.\n# In NiFi, HandleHttpResponse sends an HTTP reply back to the caller of HandleHttpRequest.\n#\n# To replicate this in Databricks, you would need one of:\n# 1. Databricks Model Serving endpoint — return response via serving framework\n# 2. Databricks Apps (Flask/Gradio) — return HTTP response from app route handler\n# 3. External API Gateway — return response via Lambda/Function integration\n#\n# Placeholder: write response payload to a Delta table for downstream consumption\nfrom pyspark.sql.functions import lit, current_timestamp\ndf_${varName} = df_${inputVar}.withColumn("_http_status", lit(${statusCode})).withColumn("_responded_at", current_timestamp())\nprint(f"[HTTP] Response status=${statusCode} — requires serving endpoint for real HTTP reply")`;
+    conf = 0.40;
     return { code, conf };
   }
 
@@ -45,7 +45,7 @@ export function handleSinkProcessor(p, props, varName, inputVar, existingCode, e
     const port = props['Port'] || '22';
     const user = props['Username'] || 'sftp_user';
     const remotePath = props['Remote Path'] || '/exports/';
-    code = `# ${p.type}: ${p.name}\n# Host: ${host}:${port} | Path: ${remotePath}\nimport paramiko\n_ssh = paramiko.SSHClient()\n_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())\n_ssh.connect("${host}", port=int("${port}"), username="${user}",\n    password=dbutils.secrets.get(scope="sftp", key="password"))\n_sftp = _ssh.open_sftp()\n\n_pdf = df_${inputVar}.toPandas()\n_output_path = f"${remotePath}/{_pdf.shape[0]}_records.csv"\n_pdf.to_csv(f"/tmp/_sftp_out.csv", index=False)\n_sftp.put("/tmp/_sftp_out.csv", _output_path)\n\n_sftp.close()\n_ssh.close()\nprint(f"[SFTP] Uploaded {_pdf.shape[0]} records to ${host}:${remotePath}")`;
+    code = `# ${p.type}: ${p.name}\n# Host: ${host}:${port} | Path: ${remotePath}\nimport paramiko\n_ssh = paramiko.SSHClient()\n_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())\n_ssh.connect("${host}", port=int("${port}"), username="${user}",\n    password=dbutils.secrets.get(scope="sftp", key="password"))\n_sftp = _ssh.open_sftp()\n\n_pdf = df_${inputVar}.toPandas()\n_output_path = f"${remotePath}/{_pdf.shape[0]}_records.csv"\n_pdf.to_csv(f"/Volumes/<catalog>/<schema>/<volume>/tmp/_sftp_out.csv", index=False)\n_sftp.put("/Volumes/<catalog>/<schema>/<volume>/tmp/_sftp_out.csv", _output_path)\n\n_sftp.close()\n_ssh.close()\nprint(f"[SFTP] Uploaded {_pdf.shape[0]} records to ${host}:${remotePath}")`;
     conf = 0.90;
     return { code, conf };
   }

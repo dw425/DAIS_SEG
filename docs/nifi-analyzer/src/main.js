@@ -29,9 +29,9 @@ import '../styles/animations.css';
 // ================================================================
 // 2. Core Modules
 // ================================================================
-import { createStore, getState, setState, resetState } from './core/state.js';
+import { createStore, getState, setState, resetState, snapshotState, rollbackState } from './core/state.js';
 import bus from './core/event-bus.js';
-import { loadDbxConfig, saveDbxConfig, getDbxConfig } from './core/config.js';
+import { loadDbxConfig, saveDbxConfig, getDbxConfig, DBX_CONFIG_DEFAULTS } from './core/config.js';
 import { PipelineOrchestrator } from './core/pipeline.js';
 import { handleError, AppError, wrapAsync, clearErrorLog } from './core/errors.js';
 
@@ -43,8 +43,6 @@ import { escapeHTML } from './security/html-sanitizer.js';
 import { initFileUpload, getUploadedContent, getUploadedName, getUploadedBytes } from './ui/file-upload.js';
 import { loadSampleFlow, loadSampleFile } from './ui/sample-flows.js';
 import { parseProgress, parseProgressHide, uiYield } from './ui/progress.js';
-import { showPathToast, hidePathToast, flashNoPath } from './ui/toast.js';
-import { showPanel, hidePanel } from './ui/panels.js';
 import {
   parseInput,
   runAnalysis,
@@ -76,28 +74,7 @@ import {
   exportWorkflowYAML,
 } from './reporters/index.js';
 import { NIFI_DATABRICKS_MAP } from './constants/nifi-databricks-map.js';
-
-// ================================================================
-// 5. Initial State
-// ================================================================
-
-/** @type {object} Application initial state shape */
-const INITIAL_STATE = {
-  flowData: null,
-  processors: [],
-  connections: [],
-  controllerServices: [],
-  variables: {},
-  blueprint: null,
-  mappings: [],
-  notebook: null,
-  workflow: null,
-  validationResults: null,
-  reportData: null,
-  currentStep: 0,
-  isProcessing: false,
-  errors: [],
-};
+import { analyzeFlowGraph } from './analyzers/flow-graph-analyzer.js';
 
 // ================================================================
 // 6. Application Bootstrap
@@ -105,7 +82,7 @@ const INITIAL_STATE = {
 
 document.addEventListener('DOMContentLoaded', () => {
   // ── 6a. Initialize core infrastructure ──
-  const store = createStore(INITIAL_STATE);
+  const store = createStore();
   const config = loadDbxConfig();
   const pipeline = new PipelineOrchestrator();
 
@@ -141,7 +118,6 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInput.addEventListener('change', async () => {
       resetState();
       clearErrorLog();
-      setState(INITIAL_STATE);
       // Wait for FileReader to finish before parsing
       const { handleFile } = await import('./ui/file-upload.js');
       await handleFile();
@@ -155,7 +131,6 @@ document.addEventListener('DOMContentLoaded', () => {
     parseBtn.addEventListener('click', () => {
       resetState();
       clearErrorLog();
-      setState(INITIAL_STATE);
       parseInput();
     });
   }
@@ -167,7 +142,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const flowType = btn.dataset.sampleFlow;
       resetState();
       clearErrorLog();
-      setState(INITIAL_STATE);
       loadSampleFlow(flowType, parseInput);
     });
   });
@@ -180,7 +154,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const filename = btn.dataset.sampleName || path.split('/').pop();
       resetState();
       clearErrorLog();
-      setState(INITIAL_STATE);
       loadSampleFile(path, filename, parseInput);
     });
   });
@@ -321,7 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const cfgResetBtn = document.getElementById('cfgResetBtn');
   if (cfgResetBtn) {
     cfgResetBtn.addEventListener('click', () => {
-      const defaults = loadDbxConfig();
+      const defaults = { ...DBX_CONFIG_DEFAULTS };
       // Populate form fields from defaults
       const fields = {
         cfgCatalog: defaults.catalog,
@@ -359,7 +332,7 @@ document.addEventListener('DOMContentLoaded', () => {
       run: wrapAsync(async () => {
         bus.emit('step:analyze:start');
         switchTab('analyze');
-        runAnalysis();
+        await runAnalysis();
         bus.emit('step:analyze:done', getState());
       }, { phase: 'analyze', code: 'ANALYZE_FAILED' }),
     },
@@ -369,7 +342,7 @@ document.addEventListener('DOMContentLoaded', () => {
       run: wrapAsync(async () => {
         bus.emit('step:assess:start');
         switchTab('assess');
-        runAssessment();
+        await runAssessment();
         bus.emit('step:assess:done', getState());
       }, { phase: 'assess', code: 'ASSESS_FAILED' }),
     },
@@ -379,7 +352,7 @@ document.addEventListener('DOMContentLoaded', () => {
       run: wrapAsync(async () => {
         bus.emit('step:generate:start');
         switchTab('convert');
-        generateNotebook();
+        await generateNotebook();
         bus.emit('step:generate:done', getState());
       }, { phase: 'generate', code: 'GENERATE_FAILED' }),
     },
@@ -389,7 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
       run: wrapAsync(async () => {
         bus.emit('step:report:start');
         switchTab('report');
-        generateReport();
+        await generateReport();
         bus.emit('step:report:done', getState());
       }, { phase: 'report', code: 'REPORT_FAILED' }),
     },
@@ -424,7 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
         bus.emit('step:value:start');
         switchTab('value');
         if (typeof window.runValueAnalysis === 'function') {
-          window.runValueAnalysis();
+          await window.runValueAnalysis();
         }
         bus.emit('step:value:done', getState());
       }, { phase: 'value', code: 'VALUE_ANALYSIS_FAILED' }),
@@ -437,7 +410,6 @@ document.addEventListener('DOMContentLoaded', () => {
   bus.on('flow:loaded', () => {
     resetState();
     clearErrorLog();
-    setState(INITIAL_STATE);
     pipeline.execute();
   });
 
@@ -520,6 +492,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.generateNotebookAndWorkflow = generateNotebookAndWorkflow;
   window.runValidationEngine = runValidationEngine;
   window.generateReportSuite = generateReportSuite;
+  window.analyzeFlowGraph = analyzeFlowGraph;
 
   // Steps 6-8: Final Report, Validation, Value Analysis
   const metricsHTML = (items) => '<div class="metrics">' + items.map(item => {
@@ -533,92 +506,136 @@ document.addEventListener('DOMContentLoaded', () => {
   window.generateFinalReport = async () => {
     const STATE = getState();
     if (!STATE.parsed) return;
+    const snapshot = snapshotState();
     setTabStatus('reportFinal', 'processing');
-    const { html, report } = generateFinalReport(STATE, metricsHTML, escapeHTML);
-    setState({ finalReport: report });
-    const el = document.getElementById('reportFinalResults');
-    if (el) el.innerHTML = html;
-    setTabStatus('reportFinal', 'done');
-    unlockTab('validate');
-    const notReady = document.getElementById('validateNotReady');
-    const ready = document.getElementById('validateReady');
-    if (notReady) notReady.classList.add('hidden');
-    if (ready) ready.classList.remove('hidden');
+    try {
+      const { html, report } = generateFinalReport(STATE, metricsHTML, escapeHTML);
+      setState({ finalReport: report });
+      const el = document.getElementById('reportFinalResults');
+      if (el) el.innerHTML = html;
+
+      // Attach event listener for download button rendered in the HTML
+      const dlBtn = el && el.querySelector('.btn-primary, .btn');
+      if (dlBtn && dlBtn.textContent.includes('Download Full Report')) {
+        dlBtn.removeAttribute('onclick');
+        dlBtn.addEventListener('click', () => downloadFinalReport(getState()));
+      }
+
+      setTabStatus('reportFinal', 'done');
+      unlockTab('validate');
+      const notReady = document.getElementById('validateNotReady');
+      const ready = document.getElementById('validateReady');
+      if (notReady) notReady.classList.add('hidden');
+      if (ready) ready.classList.remove('hidden');
+    } catch (e) {
+      rollbackState(snapshot);
+      handleError(new AppError('Final report failed: ' + e.message, { code: 'FINAL_REPORT_FAILED', phase: 'reportFinal', cause: e }));
+      const el = document.getElementById('reportFinalResults');
+      if (el) el.innerHTML = `<div class="alert alert-error">${escapeHTML('Final report failed: ' + e.message)}</div>`;
+      setTabStatus('reportFinal', 'ready');
+    }
   };
 
   window.runValidation = async () => {
     const STATE = getState();
     if (!STATE.parsed || !STATE.parsed._nifi || !STATE.notebook) return;
+    const snapshot = snapshotState();
     setTabStatus('validate', 'processing');
     const el = document.getElementById('validateResults');
-    const result = await runValidationEngine({
-      nifi: STATE.parsed._nifi,
-      mappings: STATE.notebook.mappings || STATE.assessment?.mappings || [],
-      cells: STATE.notebook.cells || [],
-      systems: STATE.assessment?.systems || {},
-      nifiDatabricksMap: NIFI_DATABRICKS_MAP,
-      onProgress: (pct, msg) => {
-        if (el) el.innerHTML = `<div style="color:var(--text2);padding:16px">${msg} (${pct}%)</div>`;
-      },
-    });
-    setState({ validation: result });
-    if (el) {
-      const score = result.overallScore || 0;
-      const cls = score >= 80 ? 'green' : score >= 50 ? 'amber' : 'red';
-      let vh = `<hr class="divider"><div class="score-big" style="color:var(--${cls})">Validation Score: ${Math.round(score)}%</div>`;
-      vh += metricsHTML([
-        { label: 'Intent Match', value: Math.round(result.intentScore || 0) + '%' },
-        { label: 'Line Coverage', value: Math.round(result.lineScore || 0) + '%' },
-        { label: 'Reverse Eng.', value: Math.round(result.reScore || 0) + '%' },
-        { label: 'Function Map', value: Math.round(result.funcScore || 0) + '%' },
-      ]);
-      if (result.allGaps && result.allGaps.length) {
-        vh += '<hr class="divider"><h3>Gaps (' + result.allGaps.length + ')</h3>';
-        const PAGE = 50;
-        const pages = Math.ceil(result.allGaps.length / PAGE);
-        for (let p = 0; p < pages; p++) {
-          const s = p * PAGE, e = Math.min(s + PAGE, result.allGaps.length);
-          const title = pages > 1 ? `Gaps ${s + 1}-${e}` : 'All Gaps';
-          vh += `<div class="expander ${p === 0 ? 'open' : ''}"><div class="expander-header" data-expander-toggle><span>${title}</span><span class="expander-arrow">\u25B6</span></div><div class="expander-body">`;
-          vh += '<ul style="margin:0;padding-left:20px;font-size:0.85rem">';
-          result.allGaps.slice(s, e).forEach(g => {
-            vh += '<li style="margin:4px 0"><strong>' + escapeHTML(g.processor || g.name || '') + '</strong>: ' + escapeHTML(g.gap || g.reason || g.message || '') + '</li>';
-          });
-          vh += '</ul></div></div>';
+    try {
+      const result = await runValidationEngine({
+        nifi: STATE.parsed._nifi,
+        mappings: STATE.notebook.mappings || STATE.assessment?.mappings || [],
+        cells: STATE.notebook.cells || [],
+        systems: STATE.assessment?.systems || {},
+        nifiDatabricksMap: NIFI_DATABRICKS_MAP,
+        onProgress: (pct, msg) => {
+          if (el) el.innerHTML = `<div style="color:var(--text2);padding:16px">${msg} (${pct}%)</div>`;
+        },
+      });
+      setState({ validation: result });
+      if (el) {
+        const score = result.overallScore || 0;
+        const cls = score >= 80 ? 'green' : score >= 50 ? 'amber' : 'red';
+        let vh = `<hr class="divider"><div class="score-big" style="color:var(--${cls})">Validation Score: ${Math.round(score)}%</div>`;
+        vh += metricsHTML([
+          { label: 'Intent Match', value: Math.round(result.intentScore || 0) + '%' },
+          { label: 'Line Coverage', value: Math.round(result.lineScore || 0) + '%' },
+          { label: 'Reverse Eng.', value: Math.round(result.reScore || 0) + '%' },
+          { label: 'Function Map', value: Math.round(result.funcScore || 0) + '%' },
+        ]);
+        if (result.allGaps && result.allGaps.length) {
+          vh += '<hr class="divider"><h3>Gaps (' + result.allGaps.length + ')</h3>';
+          const PAGE = 50;
+          const pages = Math.ceil(result.allGaps.length / PAGE);
+          for (let p = 0; p < pages; p++) {
+            const s = p * PAGE, e = Math.min(s + PAGE, result.allGaps.length);
+            const title = pages > 1 ? `Gaps ${s + 1}-${e}` : 'All Gaps';
+            vh += `<div class="expander ${p === 0 ? 'open' : ''}"><div class="expander-header" data-expander-toggle><span>${title}</span><span class="expander-arrow">\u25B6</span></div><div class="expander-body">`;
+            vh += '<ul style="margin:0;padding-left:20px;font-size:0.85rem">';
+            result.allGaps.slice(s, e).forEach(g => {
+              vh += '<li style="margin:4px 0"><strong>' + escapeHTML(g.processor || g.name || '') + '</strong>: ' + escapeHTML(g.gap || g.reason || g.message || '') + '</li>';
+            });
+            vh += '</ul></div></div>';
+          }
         }
+        if (result.missingImports && result.missingImports.length) {
+          vh += '<hr class="divider"><h3>Missing Imports (' + result.missingImports.length + ')</h3>';
+          vh += '<ul style="margin:0;padding-left:20px;font-size:0.85rem">';
+          result.missingImports.forEach(mi => {
+            vh += '<li style="margin:4px 0"><code>' + escapeHTML(mi.module || '') + '</code> needed by ' + escapeHTML(mi.cell || '') + '</li>';
+          });
+          vh += '</ul>';
+        }
+        vh += '<hr class="divider"><button class="btn" id="validationDownloadBtn">Download Validation Report</button>';
+        el.innerHTML = vh;
+        const valDlBtn = document.getElementById('validationDownloadBtn');
+        if (valDlBtn) valDlBtn.addEventListener('click', () => downloadValidationReport(getState()));
       }
-      if (result.missingImports && result.missingImports.length) {
-        vh += '<hr class="divider"><h3>Missing Imports (' + result.missingImports.length + ')</h3>';
-        vh += '<ul style="margin:0;padding-left:20px;font-size:0.85rem">';
-        result.missingImports.forEach(mi => {
-          vh += '<li style="margin:4px 0"><code>' + escapeHTML(mi.module || '') + '</code> needed by ' + escapeHTML(mi.cell || '') + '</li>';
-        });
-        vh += '</ul>';
-      }
-      vh += '<hr class="divider"><button class="btn" onclick="downloadValidationReport()">Download Validation Report</button>';
-      el.innerHTML = vh;
+      setTabStatus('validate', 'done');
+      unlockTab('value');
+      const notReady = document.getElementById('valueNotReady');
+      const ready = document.getElementById('valueReady');
+      if (notReady) notReady.classList.add('hidden');
+      if (ready) ready.classList.remove('hidden');
+    } catch (e) {
+      rollbackState(snapshot);
+      handleError(new AppError('Validation failed: ' + e.message, { code: 'VALIDATE_FAILED', phase: 'validate', cause: e }));
+      if (el) el.innerHTML = `<div class="alert alert-error">${escapeHTML('Validation failed: ' + e.message)}</div>`;
+      setTabStatus('validate', 'ready');
     }
-    setTabStatus('validate', 'done');
-    unlockTab('value');
-    const notReady = document.getElementById('valueNotReady');
-    const ready = document.getElementById('valueReady');
-    if (notReady) notReady.classList.add('hidden');
-    if (ready) ready.classList.remove('hidden');
   };
 
   window.runValueAnalysis = () => {
     const STATE = getState();
     if (!STATE.parsed || !STATE.parsed._nifi || !STATE.notebook) return;
+    const snapshot = snapshotState();
     setTabStatus('value', 'processing');
-    const html = runValueAnalysis({
-      nifi: STATE.parsed._nifi,
-      notebook: STATE.notebook,
-      escapeHTML,
-    });
-    setState({ valueAnalysis: html });
-    const el = document.getElementById('valueResults');
-    if (el) el.innerHTML = typeof html === 'string' ? html : (html?.html || '');
-    setTabStatus('value', 'done');
+    try {
+      const result = runValueAnalysis({
+        nifi: STATE.parsed._nifi,
+        notebook: STATE.notebook,
+        escapeHTML,
+      });
+      setState({ valueAnalysis: typeof result === 'object' ? result : { html: result } });
+      const el = document.getElementById('valueResults');
+      if (el) {
+        el.innerHTML = typeof result === 'string' ? result : (result?.html || '');
+        // Attach event listener for download button rendered in the HTML
+        const valDlBtn = el.querySelector('.btn-primary, .btn');
+        if (valDlBtn && valDlBtn.textContent.includes('Download Value Analysis')) {
+          valDlBtn.removeAttribute('onclick');
+          valDlBtn.addEventListener('click', () => downloadValueAnalysis(getState()));
+        }
+      }
+      setTabStatus('value', 'done');
+    } catch (e) {
+      rollbackState(snapshot);
+      handleError(new AppError('Value analysis failed: ' + e.message, { code: 'VALUE_ANALYSIS_FAILED', phase: 'value', cause: e }));
+      const el = document.getElementById('valueResults');
+      if (el) el.innerHTML = `<div class="alert alert-error">${escapeHTML('Value analysis failed: ' + e.message)}</div>`;
+      setTabStatus('value', 'ready');
+    }
   };
 
   // ── Done ──

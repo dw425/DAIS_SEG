@@ -10,8 +10,9 @@
  * @module generators/streaming-wrapper
  */
 
-/** @private Pattern matching batch-only operations */
-const _BATCH_SINK_PATTERN = /\.toPandas\(\)|for\s+row\s+in\s+df_\w+\.(?:limit\(\d+\)\.)?collect\(\)|df_\w+\.limit\(\d+\)\.toPandas|df_\w+\.count\(\)|\.write\.format\(|\.saveAsTable\(|\.save\(|\.show\(|\.display\(/;
+import {
+  _BATCH_SINK_PATTERN
+} from '../constants/streaming-types.js';
 
 /**
  * Wrap batch-only sink code for streaming-safe execution.
@@ -51,7 +52,7 @@ export function wrapBatchSinkForStreaming(code, procName, varName, inputVar, isS
         indentedBody.replace(/df_\w+\.(?:limit\(\d+\)\.)?collect\(\)/g, 'batch_df.collect()') + '\n\n' +
         '(df_' + inputVar + '.writeStream\n' +
         '    .foreachBatch(_process_batch_' + varName + ')\n' +
-        '    .option("checkpointLocation", "/tmp/checkpoints/' + varName + '")\n' +
+        '    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/<volume>/checkpoints/' + varName + '")\n' +
         '    .trigger(processingTime="10 seconds")\n' +
         '    .start()\n)';
     }

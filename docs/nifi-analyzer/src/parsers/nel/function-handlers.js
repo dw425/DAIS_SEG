@@ -66,7 +66,8 @@ export function applyNELFunction(base, call, mode) {
   }
   if (name === 'replacefirst') {
     var pat2 = unquoteArg(args[0] || ''); var rpl2 = unquoteArg(args[1] || '');
-    return mode === 'col' ? 'regexp_replace(' + base + ', "(' + pat2 + ')", "' + rpl2 + '")' : 're.sub(r"' + pat2 + '", "' + rpl2 + '", ' + base + ', count=1)';
+    // col mode: Spark regexp_replace replaces ALL matches (no count param); noted as limitation
+    return mode === 'col' ? 'regexp_replace(' + base + ', "' + pat2 + '", "' + rpl2 + '")' : 're.sub(r"' + pat2 + '", "' + rpl2 + '", str(' + base + '), count=1)';
   }
   if (name === 'startswith') {
     var sw = unquoteArg(args[0] || '');
@@ -223,17 +224,25 @@ export function applyNELFunction(base, call, mode) {
     return mode === 'col' ? 'from_json(' + base + ', "' + schema + '")' : 'json.loads(' + base + ')';
   }
   if (name === 'unescapexml') {
-    var xpath = args[0] ? unquoteArg(args[0]) : '/';
-    return mode === 'col' ? 'xpath_string(' + base + ', "' + xpath + '")' : '__import__("html").unescape(' + base + ')';
+    // Unescape common XML entities (&amp; &lt; &gt; &quot; &apos;)
+    return mode === 'col'
+      ? "regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(" + base + ", '&amp;', '&'), '&lt;', '<'), '&gt;', '>'), '&quot;', '\"'), '&apos;', \"'\")"
+      : base + ".replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '\"').replace(\"&apos;\", \"'\")";
   }
   if (name === 'unescapecsv') {
-    return mode === 'col' ? 'split(' + base + ', ",")' : base + '.split(",")';
+    // Strip surrounding quotes and unescape internal doubled quotes
+    return mode === 'col'
+      ? 'when(' + base + '.startsWith(\'"\') & ' + base + '.endsWith(\'"\'), regexp_replace(' + base + '.substr(lit(2), length(' + base + ') - lit(2)), \'""\', \'"\')' + ').otherwise(' + base + ')'
+      : base + '[1:-1].replace(\'"\' * 2, \'"\') if ' + base + '.startswith(\'"\') and ' + base + '.endswith(\'"\') else ' + base;
   }
   if (name === 'escapejson') {
     return mode === 'col' ? 'to_json(' + base + ')' : 'json.dumps(' + base + ')';
   }
   if (name === 'escapecsv') {
-    return mode === 'col' ? 'concat_ws(",", ' + base + ')' : '",".join(' + base + ')';
+    // Wrap value in quotes and escape internal quotes if it contains comma, quote, or newline
+    return mode === 'col'
+      ? 'when(' + base + '.contains(",") | ' + base + '.contains(\'"\') | ' + base + '.contains("\\n"), concat(lit(\'"\'), regexp_replace(' + base + ', \'"\', \'""\'), lit(\'"\'))).otherwise(' + base + ')'
+      : '\'"\' + ' + base + '.replace(\'"\', \'""\') + \'"\' if "," in ' + base + ' or \'"\' in ' + base + ' or "\\n" in ' + base + ' else ' + base;
   }
 
   // -- Conditional functions --
@@ -246,9 +255,9 @@ export function applyNELFunction(base, call, mode) {
   }
 
   // -- Math namespace functions --
-  if (name === 'math:tonumber' || name === 'tonumber') return mode === 'col' ? base + '.cast("double")' : 'float(' + base + ')';
-  if (name === 'math:floor') return mode === 'col' ? 'floor(' + base + ')' : 'import math; math.floor(' + base + ')';
-  if (name === 'math:ceil' || name === 'math:ceiling') return mode === 'col' ? 'ceil(' + base + ')' : 'import math; math.ceil(' + base + ')';
+  if (name === 'math:tonumber') return mode === 'col' ? base + '.cast("double")' : 'float(' + base + ')';
+  if (name === 'math:floor') return mode === 'col' ? 'floor(' + base + ')' : 'math.floor(' + base + ')';  // requires: import math
+  if (name === 'math:ceil' || name === 'math:ceiling') return mode === 'col' ? 'ceil(' + base + ')' : 'math.ceil(' + base + ')';  // requires: import math
   if (name === 'math:abs') return mode === 'col' ? 'abs(' + base + ')' : 'abs(' + base + ')';
   if (name === 'math:mod') {
     var mathModV = args[0] || '1';

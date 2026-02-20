@@ -139,12 +139,40 @@ export function initFileUpload() {
     dropZone.style.borderColor = 'var(--border)';
   });
 
-  dropZone.addEventListener('drop', e => {
+  dropZone.addEventListener('drop', async (e) => {
     e.preventDefault();
     dropZone.style.borderColor = 'var(--border)';
-    if (e.dataTransfer.files.length) {
-      fileInput.files = e.dataTransfer.files;
-      handleFile();
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      // Read the dropped file directly instead of setting fileInput.files
+      uploadedName = file.name;
+      const fileNameEl = document.getElementById('fileName');
+      if (fileNameEl) {
+        fileNameEl.textContent = 'Loaded: ' + file.name;
+        fileNameEl.classList.remove('hidden');
+      }
+      const binary = isBinaryFile(file.name);
+      await new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onload = ev => {
+          if (binary) {
+            uploadedBytes = new Uint8Array(ev.target.result);
+            uploadedContent = '';
+          } else {
+            uploadedContent = ev.target.result;
+            uploadedBytes = null;
+          }
+          resolve();
+        };
+        reader.onerror = () => resolve();
+        if (binary) {
+          reader.readAsArrayBuffer(file);
+        } else {
+          reader.readAsText(file);
+        }
+      });
+      // Dispatch change event so main.js handler triggers parseInput
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
     }
   });
 

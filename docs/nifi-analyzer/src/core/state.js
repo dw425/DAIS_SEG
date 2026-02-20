@@ -82,7 +82,7 @@ export function resetState() {
  */
 const STEP_PREREQUISITES = Object.freeze({
   analyze:     ['parsed'],
-  assess:      ['parsed'],
+  assess:      ['parsed', 'analysis'],
   convert:     ['parsed', 'assessment'],
   report:      ['parsed', 'notebook'],
   reportFinal: ['parsed'],

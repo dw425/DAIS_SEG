@@ -319,7 +319,7 @@ export function runValueAnalysis({ nifi, notebook, escapeHTML }) {
 
   // Download button
   h += `<div style="margin-top:24px;text-align:center">`;
-  h += `<button class="btn btn-primary" onclick="downloadValueAnalysis()">Download Value Analysis (JSON)</button>`;
+  h += `<button class="btn btn-primary" id="valueAnalysisDownloadBtn">Download Value Analysis (JSON)</button>`;
   h += '</div>';
 
   // Build structured result

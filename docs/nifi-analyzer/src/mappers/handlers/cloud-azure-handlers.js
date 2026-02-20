@@ -45,7 +45,7 @@ export function handleAzureProcessor(p, props, varName, inputVar, existingCode, 
     const hubName = props['Event Hub Name'] || 'my-hub';
     const consumerGroup = props['Consumer Group'] || '$Default';
     const connStr = props['Event Hub Connection String'] || props['Connection String'] || '';
-    code = `# Azure Event Hub Consumer: ${p.name}\n# Namespace: ${namespace} | Hub: ${hubName} | Group: ${consumerGroup}\n_conn_str = dbutils.secrets.get(scope="azure", key="eventhub-conn-str")\n_ehConf = {\n    "eventhubs.connectionString": sc._jvm.org.apache.spark.eventhubs.EventHubsUtils.encrypt(_conn_str),\n    "eventhubs.consumerGroup": "${consumerGroup}",\n    "eventhubs.startingPosition": '{"offset": "-1", "seqNo": -1, "enqueuedTime": null, "isInclusive": true}'\n}\ndf_${varName} = (spark.readStream\n  .format("eventhubs")\n  .options(**_ehConf)\n  .load()\n  .selectExpr("CAST(body AS STRING) as value", "enqueuedTime as timestamp", "offset", "sequenceNumber")\n)\nprint(f"[EVENTHUB] Consuming from ${namespace}/${hubName}")`;
+    code = `# Azure Event Hub Consumer: ${p.name}\n# Namespace: ${namespace} | Hub: ${hubName} | Group: ${consumerGroup}\nimport json as _json\n\n_conn_str = dbutils.secrets.get(scope="azure", key="eventhub-conn-str")\n# Use native PySpark EventHubs connector — pass connection string directly (encrypted at rest)\n_ehConf = {\n    "eventhubs.connectionString": _conn_str,\n    "eventhubs.consumerGroup": "${consumerGroup}",\n    "eventhubs.startingPosition": _json.dumps({"offset": "-1", "seqNo": -1, "enqueuedTime": None, "isInclusive": True})\n}\ndf_${varName} = (spark.readStream\n  .format("eventhubs")\n  .options(**_ehConf)\n  .load()\n  .selectExpr("CAST(body AS STRING) as value", "enqueuedTime as timestamp", "offset", "sequenceNumber")\n)\nprint(f"[EVENTHUB] Consuming from ${namespace}/${hubName}")`;
     conf = 0.92;
     return { code, conf };
   }
@@ -54,7 +54,7 @@ export function handleAzureProcessor(p, props, varName, inputVar, existingCode, 
   if (p.type === 'PutEventHub' || p.type === 'PublishAzureEventHub') {
     const namespace = props['Event Hub Namespace'] || 'my-eventhub-ns';
     const hubName = props['Event Hub Name'] || 'my-hub';
-    code = `# Azure Event Hub Producer: ${p.name}\n# Namespace: ${namespace} | Hub: ${hubName}\n_conn_str = dbutils.secrets.get(scope="azure", key="eventhub-conn-str")\n_ehConf = {\n    "eventhubs.connectionString": sc._jvm.org.apache.spark.eventhubs.EventHubsUtils.encrypt(_conn_str)\n}\n(df_${inputVar}\n  .selectExpr("CAST(value AS STRING) as body")\n  .write\n  .format("eventhubs")\n  .options(**_ehConf)\n  .save()\n)\nprint(f"[EVENTHUB] Published to ${namespace}/${hubName}")`;
+    code = `# Azure Event Hub Producer: ${p.name}\n# Namespace: ${namespace} | Hub: ${hubName}\n_conn_str = dbutils.secrets.get(scope="azure", key="eventhub-conn-str")\n# Use native PySpark EventHubs connector — no JVM reflection needed\n_ehConf = {\n    "eventhubs.connectionString": _conn_str\n}\n(df_${inputVar}\n  .selectExpr("CAST(value AS STRING) as body")\n  .write\n  .format("eventhubs")\n  .options(**_ehConf)\n  .save()\n)\nprint(f"[EVENTHUB] Published to ${namespace}/${hubName}")`;
     conf = 0.92;
     return { code, conf };
   }

@@ -44,8 +44,9 @@ export function resolveControllerService(csName, controllerServices) {
 
   // Distributed Cache
   if (/Cache/i.test(cs.type)) {
-    result.cacheHost = props['Server Hostname'] || 'localhost';
+    result.cacheHost = props['Server Hostname'] || '<cache_host>';
     result.cachePort = props['Server Port'] || '4557';
+    result.cacheHostSecret = 'dbutils.secrets.get(scope="cache", key="host")';
   }
 
   // Record reader/writer

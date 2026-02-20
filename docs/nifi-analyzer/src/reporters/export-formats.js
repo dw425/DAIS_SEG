@@ -24,8 +24,11 @@ export function exportAsDatabricksNotebook(cells) {
   cells.forEach((cell, i) => {
     if (i > 0) nb += '\n# COMMAND ----------\n\n';
     const src = cell.source || cell.code || '';
-    if (cell.type === 'markdown' || cell.role === 'markdown') {
+    if (cell.type === 'markdown' || cell.type === 'md' || cell.role === 'markdown') {
       nb += '# MAGIC %md\n';
+      src.split('\n').forEach(line => { nb += '# MAGIC ' + line + '\n'; });
+    } else if (cell.type === 'sql') {
+      nb += '# MAGIC %sql\n';
       src.split('\n').forEach(line => { nb += '# MAGIC ' + line + '\n'; });
     } else {
       nb += src + '\n';
@@ -57,7 +60,7 @@ export function exportAsJupyterNotebook(cells) {
       language_info: { name: 'python', version: '3.10.0' }
     },
     cells: cells.map(cell => ({
-      cell_type: (cell.type === 'markdown' || cell.role === 'markdown') ? 'markdown' : 'code',
+      cell_type: (cell.type === 'markdown' || cell.type === 'md' || cell.role === 'markdown') ? 'markdown' : 'code',
       metadata: {},
       source: (cell.source || cell.code || '').split('\n').map((l, i, a) => i < a.length - 1 ? l + '\n' : l),
       outputs: [],

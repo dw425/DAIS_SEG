@@ -83,8 +83,6 @@ export function mapNiFiToDatabricks(nifi, deps) {
     detectPHIFields
   } = deps;
 
-  window._lastParsedNiFi = nifi;
-
   const controllerServices = nifi.controllerServices || [];
 
   // REC #4: Parse variable registry & parameter contexts

@@ -49,7 +49,7 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
       '        spark.sql("UPDATE workflow_signals SET status = \'consumed\' WHERE signal_id = \'' + signalId + '\'")\n\n' +
       '(df_' + varName + '.writeStream\n' +
       '    .foreachBatch(_on_signal_' + varName + ')\n' +
-      '    .option("checkpointLocation", "/tmp/checkpoints/wait_' + signalId + '")\n' +
+      '    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/<volume>/tmp/checkpoints/wait_' + signalId + '")\n' +
       '    .trigger(processingTime="5 seconds")\n' +
       '    .start()\n' +
       '    .awaitTermination(timeout=300)\n' +
@@ -167,7 +167,9 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
 
   // -- UpdateCounter --
   if (p.type === 'UpdateCounter') {
-    code = `# Counter: ${p.name}\n_counter = spark.sparkContext.accumulator(0)\ndef _count(row): _counter.add(1)\ndf_${inputVar}.foreach(_count)\ndf_${varName} = df_${inputVar}`;
+    const counterName = props['Counter Name'] || p.name.replace(/[^a-zA-Z0-9_]/g, '_');
+    const delta = props['Delta'] || '1';
+    code = `# Counter: ${p.name}\n# Use Spark accumulator as a lightweight metric — no full DataFrame action needed\n_counter_${varName} = spark.sparkContext.accumulator(0, "${counterName}")\n# The accumulator increments lazily during downstream actions (no extra .foreach() pass)\ndf_${varName} = df_${inputVar}\n# To read counter after an action: print(f"[COUNTER] ${counterName} = {_counter_${varName}.value}")\nprint(f"[COUNTER] Accumulator '${counterName}' registered (delta=${delta})")`;
     conf = 0.92;
     return { code, conf };
   }

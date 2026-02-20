@@ -105,7 +105,7 @@ export async function runValidationEngine({
   });
 
   // ── Overall Score ──
-  progress(95, 'Computing overall score...');
+  progress(88, 'Computing overall score...');
   await new Promise(r => setTimeout(r, 0));
 
   const overallScore = Math.round(
@@ -121,7 +121,7 @@ export async function runValidationEngine({
   });
 
   // ── ANALYSIS 5: Import Validation ──
-  progress(92, 'Checking notebook imports...');
+  progress(95, 'Checking notebook imports...');
   const missingImports = validateImports(cells);
 
   progress(100, 'Validation complete!');

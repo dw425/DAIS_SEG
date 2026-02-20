@@ -129,7 +129,7 @@ export function handleNoSQLProcessor(p, props, varName, inputVar, existingCode, 
   // -- RethinkDB --
   if (/^(Get|Put|Delete)RethinkDB$/.test(p.type)) {
     const host = props['Hostname'] || 'rethinkdb_host';
-    const dbName = props['DB Name'] || 'test';
+    const dbName = props['DB Name'] || '<database_name>';
     const tbl = props['Table Name'] || 'data';
     code = `# RethinkDB: ${p.name}\nfrom rethinkdb import r\n_conn = r.connect(host="${host}", port=28015, db="${dbName}")\n_docs = list(r.table("${tbl}").limit(50000).run(_conn))\ndf_${varName} = spark.createDataFrame(_docs) if _docs else df_${inputVar}\n_conn.close()`;
     conf = 0.90;

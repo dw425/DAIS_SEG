@@ -51,18 +51,23 @@ export {
   buildDocumentFlow
 } from './format-handlers.js';
 
+const MAX_PARSE_SIZE = 50 * 1024 * 1024; // 50 MB
+
 /**
  * Detect input format and dispatch to the appropriate parser.
  *
  * Detection logic:
- *   1. Check filename extension for binary/special formats (.gz, .zip, .sql, etc.)
- *   2. For binary formats, use options.bytes (Uint8Array) to decompress/extract
- *   3. For text formats, clean the raw content (BOM, line endings, smart quotes, etc.)
- *   4. If content starts with '<' or '<?xml', treat as XML
- *   5. If content starts with '{' or '[', treat as JSON
- *   6. Otherwise, attempt XML parse first, fall back to JSON
+ *   1. Check file size limit
+ *   2. Check for empty file
+ *   3. Magic-byte sniffing (gzip, ZIP)
+ *   4. Check filename extension for binary/special formats (.gz, .zip, .sql, etc.)
+ *   5. For binary formats, use options.bytes (Uint8Array) to decompress/extract
+ *   6. For text formats, clean the raw content (BOM, line endings, smart quotes, etc.)
+ *   7. If content starts with '<' or '<?xml', treat as XML
+ *   8. If content starts with '{' or '[', treat as JSON
+ *   9. Otherwise, attempt XML parse first, fall back to JSON
  *
- * @param {string} raw - Raw file content (may be empty for binary-only files)
+ * @param {string|ArrayBuffer} raw - Raw file content (may be empty for binary-only files)
  * @param {string} filename - Original filename (used for display and format hints)
  * @param {Object} [options={}] - Additional options
  * @param {Uint8Array} [options.bytes] - Raw bytes for binary file formats
@@ -70,13 +75,54 @@ export {
  * @throws {Error} If content cannot be parsed
  */
 export async function parseFlow(raw, filename, options = {}) {
-  const lower = (filename || '').toLowerCase();
+  // ---- File size limit ----
+  if (raw && raw.byteLength > MAX_PARSE_SIZE) {
+    return { processors: [], _nifi: {}, parse_warnings: ['File exceeds 50MB parse limit'] };
+  }
+
+  // ---- 0-byte / empty guard ----
+  if (!raw || (raw instanceof ArrayBuffer && raw.byteLength === 0) || (typeof raw === 'string' && raw.trim().length === 0)) {
+    return { processors: [], _nifi: {}, parse_warnings: ['Empty file'] };
+  }
+
+  let lower = (filename || '').toLowerCase();
   const bytes = options.bytes || null;
+
+  // ---- Magic-byte sniffing (before extension-based dispatch) ----
+  {
+    const probe = new Uint8Array(
+      typeof raw === 'string' ? new TextEncoder().encode(raw.slice(0, 4)) :
+      raw instanceof ArrayBuffer ? new Uint8Array(raw, 0, Math.min(4, raw.byteLength)) :
+      (bytes ? bytes.slice(0, 4) : new Uint8Array(0))
+    );
+    if (probe.length >= 2) {
+      // gzip magic: 1f 8b
+      if (probe[0] === 0x1f && probe[1] === 0x8b) {
+        const gzBytes = bytes || new Uint8Array(typeof raw === 'string' ? new TextEncoder().encode(raw) : raw);
+        const inner = await decompressGzip(gzBytes);
+        if (inner && inner.error) return { processors: [], _nifi: {}, parse_warnings: [inner.error] };
+        return parseFlow(inner, filename.replace(/\.gz$/i, ''));
+      }
+      // ZIP/PK magic: 50 4b
+      if (probe[0] === 0x50 && probe[1] === 0x4b) {
+        // Refine extension for proper dispatch if not already set
+        let ext = 'zip';
+        if (lower.endsWith('.docx')) ext = 'docx';
+        else if (lower.endsWith('.xlsx')) ext = 'xlsx';
+        // Let the extension-based dispatch below handle it; just ensure ext is recognized
+        if (ext === 'zip' && !lower.endsWith('.zip') && !lower.endsWith('.nar') && !lower.endsWith('.jar')) {
+          // Unknown extension but ZIP magic — treat as ZIP
+          lower = filename.toLowerCase().replace(/\.[^.]+$/, '') + '.zip';
+        }
+      }
+    }
+  }
 
   // ---- 1. TAR.GZ / TGZ (check before .gz since .tar.gz ends with .gz) ----
   if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
     if (!bytes) throw new Error('Binary data required for .tar.gz/.tgz files');
     const entries = await extractTarGz(bytes);
+    if (entries.error) return { processors: [], _nifi: {}, parse_warnings: [entries.error] };
     if (entries.length === 0) throw new Error('No parseable text files found in tar.gz archive');
     // Parse the highest-priority file
     const best = entries[0];
@@ -87,6 +133,7 @@ export async function parseFlow(raw, filename, options = {}) {
   if (lower.endsWith('.gz')) {
     if (!bytes) throw new Error('Binary data required for .gz files');
     const decompressed = await decompressGzip(bytes);
+    if (decompressed && decompressed.error) return { processors: [], _nifi: {}, parse_warnings: [decompressed.error] };
     // Derive inner filename by removing .gz
     const innerName = filename.replace(/\.gz$/i, '') || filename;
     return parseFlow(decompressed, innerName);
@@ -96,6 +143,7 @@ export async function parseFlow(raw, filename, options = {}) {
   if (lower.endsWith('.zip') || lower.endsWith('.nar') || lower.endsWith('.jar')) {
     if (!bytes) throw new Error('Binary data required for .zip/.nar/.jar files');
     const entries = await extractZipContents(bytes);
+    if (entries.error) return { processors: [], _nifi: {}, parse_warnings: [entries.error] };
     if (entries.length === 0) throw new Error('No parseable text files found in archive');
     // Parse the highest-priority file (sorted by NiFi relevance)
     const best = entries[0];
@@ -105,7 +153,9 @@ export async function parseFlow(raw, filename, options = {}) {
   // ---- 4. DOCX ----
   if (lower.endsWith('.docx')) {
     if (!bytes) throw new Error('Binary data required for .docx files');
-    const { text, tables } = await extractDocxText(bytes);
+    const result = await extractDocxText(bytes);
+    if (result.error) return { processors: [], _nifi: {}, parse_warnings: [result.error] };
+    const { text, tables } = result;
     if (!text && tables.length === 0) throw new Error('No content found in DOCX file');
     return buildDocumentFlow(text, tables, filename);
   }
@@ -113,10 +163,13 @@ export async function parseFlow(raw, filename, options = {}) {
   // ---- 5. XLSX ----
   if (lower.endsWith('.xlsx')) {
     if (!bytes) throw new Error('Binary data required for .xlsx files');
-    const { sheets, sharedStrings } = await extractXlsxData(bytes);
-    // Convert sheet data to a table format compatible with buildDocumentFlow
-    const text = sheets.map(row => row.join('\t')).join('\n');
-    const tables = sheets.length > 0 ? [sheets] : [];
+    const result = await extractXlsxData(bytes);
+    if (result.error) return { processors: [], _nifi: {}, parse_warnings: [result.error] };
+    const { sheets } = result;
+    // Flatten all sheets into rows for document flow
+    const allRows = sheets.flat();
+    const text = allRows.map(row => row.join('\t')).join('\n');
+    const tables = allRows.length > 0 ? [allRows] : [];
     return buildDocumentFlow(text, tables, filename);
   }
 
@@ -178,11 +231,17 @@ export async function parseFlow(raw, filename, options = {}) {
       throw new Error('JSON parse error: ' + e.message);
     }
 
+    // Unwrap versionedFlowSnapshot wrapper if present
+    if (json.versionedFlowSnapshot) json = json.versionedFlowSnapshot;
+
     // Determine the root flow data object
     // NiFi Registry exports may wrap in { "flowContents": {...} } or { "snapshotMetadata": ..., "flowContents": {...} }
     const flowData = json.flowContents || json.flow?.flowContents || json.processGroupFlow?.flow || json;
 
-    return parseNiFiRegistryJSON(flowData, filename);
+    const result = parseNiFiRegistryJSON(flowData, filename);
+    // Attach raw content for downstream use
+    result._rawContent = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    return result;
   }
 
   // Fallback: try XML first, then JSON
@@ -218,9 +277,13 @@ export async function parseFlow(raw, filename, options = {}) {
   } catch (e) { /* fall through to JSON attempt */ }
 
   try {
-    const json = JSON.parse(content);
+    let json = JSON.parse(content);
+    // Unwrap versionedFlowSnapshot wrapper if present
+    if (json.versionedFlowSnapshot) json = json.versionedFlowSnapshot;
     const flowData = json.flowContents || json.flow?.flowContents || json.processGroupFlow?.flow || json;
-    return parseNiFiRegistryJSON(flowData, filename);
+    const result = parseNiFiRegistryJSON(flowData, filename);
+    result._rawContent = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    return result;
   } catch (e) {
     throw new Error('Unable to parse file as XML or JSON. Ensure the file is a valid NiFi template, flow definition, or registry export.');
   }

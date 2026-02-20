@@ -541,7 +541,7 @@ export async function generateNotebook() {
   if (_allPkgs.size) {
     cells.unshift({
       type: 'code', role: 'config', label: 'Package Requirements',
-      source: '# Install required packages\n' + [..._allPkgs].sort().map(p => '%pip install ' + p).join('\n') + '\ndbutils.library.restartPython()'
+      source: '# Install required packages\n' + [..._allPkgs].sort().map(p => '# MAGIC %pip install ' + p).join('\n') + '\ndbutils.library.restartPython()'
     });
   }
 
@@ -571,12 +571,18 @@ export async function generateNotebook() {
   h += '</div>';
 
   h += '<hr class="divider"><div style="display:flex;gap:8px;flex-wrap:wrap">';
-  h += `<button class="btn" onclick="downloadNotebook()">Download .py Notebook</button>`;
-  h += `<button class="btn" onclick="downloadWorkflow()">Download Workflow JSON</button>`;
+  h += `<button class="btn" id="dlNotebookBtnInline">Download .py Notebook</button>`;
+  h += `<button class="btn" id="dlWorkflowBtnInline">Download Workflow JSON</button>`;
   h += '</div>';
 
   const notebookResultsEl = document.getElementById('notebookResults');
-  if (notebookResultsEl) notebookResultsEl.innerHTML = h;
+  if (notebookResultsEl) {
+    notebookResultsEl.innerHTML = h;
+    const dlNbBtn = document.getElementById('dlNotebookBtnInline');
+    if (dlNbBtn) dlNbBtn.addEventListener('click', () => { if (typeof window.downloadNotebook === 'function') window.downloadNotebook(); });
+    const dlWfBtn = document.getElementById('dlWorkflowBtnInline');
+    if (dlWfBtn) dlWfBtn.addEventListener('click', () => { if (typeof window.downloadWorkflow === 'function') window.downloadWorkflow(); });
+  }
   setTabStatus('convert', 'done');
 
   const reportNotReady = document.getElementById('reportNotReady');
@@ -668,11 +674,15 @@ export async function generateReport() {
   }
 
   h += '<hr class="divider"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
-  h += `<button class="btn" onclick="downloadReport()">Download Report (Markdown)</button>`;
+  h += `<button class="btn" id="dlReportBtnInline">Download Report (Markdown)</button>`;
   h += '</div>';
 
   const reportResultsEl = document.getElementById('reportResults');
-  if (reportResultsEl) reportResultsEl.innerHTML = h;
+  if (reportResultsEl) {
+    reportResultsEl.innerHTML = h;
+    const dlRptBtn = document.getElementById('dlReportBtnInline');
+    if (dlRptBtn) dlRptBtn.addEventListener('click', () => { if (typeof window.downloadReport === 'function') window.downloadReport(); });
+  }
   setTabStatus('report', 'done');
 
   const reportFinalNotReady = document.getElementById('reportFinalNotReady');

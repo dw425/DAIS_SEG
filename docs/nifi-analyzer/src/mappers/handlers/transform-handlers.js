@@ -198,7 +198,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
     const algo = props['Encryption Algorithm'] || 'AES/GCM/NoPadding';
     const isAES = /AES/i.test(algo);
     if (isAES) {
-      code = `# Encryption: ${p.name}\n# Algorithm: ${algo}\nfrom pyspark.sql.functions import col, expr, lit\n\n# Use Spark built-in aes_encrypt with secret scope key\n_enc_key = dbutils.secrets.get(scope="encryption", key="aes-key")\n\ndf_${varName} = df_${inputVar}\nfor _col in df_${inputVar}.columns:\n    if _col not in ["id", "key", "timestamp"]:\n        df_${varName} = df_${varName}.withColumn(_col,\n            expr(f"base64(aes_encrypt(CAST({_col} AS STRING), '{_enc_key}', 'GCM', 'DEFAULT', ''))"))\nprint(f"[ENCRYPT] AES-GCM encryption applied via aes_encrypt()")`;
+      code = `# Encryption: ${p.name}\n# Algorithm: ${algo}\nfrom pyspark.sql.functions import col, expr, lit, base64\n\n# Retrieve encryption key from Databricks secret scope (never hardcode keys)\n_enc_key = dbutils.secrets.get(scope="encryption", key="aes-key")\n\n# Store key as a Spark SQL config so it's not interpolated into query plans\nspark.conf.set("spark.nifi.migration.enc_key", _enc_key)\n\ndf_${varName} = df_${inputVar}\nfor _col in df_${inputVar}.columns:\n    if _col not in ["id", "key", "timestamp"]:\n        df_${varName} = df_${varName}.withColumn(_col,\n            expr(f"base64(aes_encrypt(CAST({_col} AS STRING), current_config('spark.nifi.migration.enc_key'), 'GCM', 'DEFAULT', ''))"))\nprint(f"[ENCRYPT] AES-GCM encryption applied via aes_encrypt() with secret scope key")`;
     } else {
       code = `# Encryption: ${p.name}\n# Algorithm: ${algo}\nfrom cryptography.fernet import Fernet\nfrom pyspark.sql.functions import udf, col\nfrom pyspark.sql.types import StringType\n\n_key = dbutils.secrets.get(scope="encryption", key="fernet-key")\n_fernet = Fernet(_key.encode() if isinstance(_key, str) else _key)\n\n@udf(StringType())\ndef encrypt_value(val):\n    if val is None: return None\n    return _fernet.encrypt(val.encode()).decode()\n\ndf_${varName} = df_${inputVar}\nfor _col in df_${inputVar}.columns:\n    if _col not in ["id", "key", "timestamp"]:\n        df_${varName} = df_${varName}.withColumn(_col, encrypt_value(col(_col)))\nprint(f"[ENCRYPT] ${algo} encryption applied")`;
     }
@@ -243,7 +243,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
 
   // -- FlattenJson --
   if (p.type === 'FlattenJson' && !code.includes('flatten')) {
-    code = `# FlattenJson: ${p.name}\nfrom pyspark.sql.functions import col\n# Flatten nested JSON structure\ndef _flatten_df(df, prefix=""):\n    cols = []\n    for field in df.schema.fields:\n        name = f"{prefix}{field.name}" if prefix else field.name\n        if hasattr(field.dataType, "fields"):\n            cols += _flatten_df(df.select(f"{prefix}{field.name}.*"), f"{name}_")\n        else:\n            cols.append(col(f"{prefix}{field.name}").alias(name.replace(".", "_")))\n    return cols\ndf_${varName} = df_${inputVar}.select(_flatten_df(df_${inputVar}))`;
+    code = `# FlattenJson: ${p.name}\nfrom pyspark.sql.functions import col, explode\nfrom pyspark.sql.types import StructType, ArrayType\n\ndef _flatten_df(df, prefix=""):\n    """Recursively flatten struct and array fields into top-level columns."""\n    flat_cols = []\n    for field in df.schema.fields:\n        col_name = f"{prefix}{field.name}" if prefix else field.name\n        if isinstance(field.dataType, StructType):\n            # Expand struct fields: df.select("col.*")\n            nested = [col(f"{col_name}.{sub.name}").alias(f"{col_name}_{sub.name}") for sub in field.dataType.fields]\n            flat_cols.extend(nested)\n        elif isinstance(field.dataType, ArrayType):\n            # Flatten array using explode\n            flat_cols.append(explode(col(col_name)).alias(f"{col_name}_exploded"))\n        else:\n            flat_cols.append(col(col_name).alias(col_name.replace(".", "_")))\n    return flat_cols\n\ndf_${varName} = df_${inputVar}.select(_flatten_df(df_${inputVar}))\n# For deeply nested structs, call _flatten_df iteratively until no StructType remains\nprint(f"[FLATTEN] Flattened nested JSON struct/array fields")`;
     conf = 0.92;
     return { code, conf };
   }
@@ -274,7 +274,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
   // -- SplitXml --
   if (p.type === 'SplitXml') {
     const tag = props['Record Tag'] || 'record';
-    code = `# Split XML: ${p.name}\ndf_${varName} = spark.read.format("xml").option("rowTag", "${tag}").load("/mnt/data/*.xml")\nprint(f"[XML] Split XML by <${tag}>")`;
+    code = `# Split XML: ${p.name}\ndf_${varName} = spark.read.format("xml").option("rowTag", "${tag}").load("/Volumes/<catalog>/<schema>/<volume>/data/*.xml")\nprint(f"[XML] Split XML by <${tag}>")`;
     conf = 0.92;
     return { code, conf };
   }
@@ -484,7 +484,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
 
   // -- ValidateCsv --
   if (p.type === 'ValidateCsv') {
-    code = `# Validate CSV: ${p.name}\nfrom pyspark.sql.functions import col\ndf_${varName} = spark.read.option("header", "true").option("mode", "PERMISSIVE").csv("/mnt/data/*.csv")\n_corrupt = df_${varName}.filter(col("_corrupt_record").isNotNull())`;
+    code = `# Validate CSV: ${p.name}\nfrom pyspark.sql.functions import col\ndf_${varName} = spark.read.option("header", "true").option("mode", "PERMISSIVE").csv("/Volumes/<catalog>/<schema>/<volume>/data/*.csv")\n_corrupt = df_${varName}.filter(col("_corrupt_record").isNotNull())`;
     conf = 0.93;
     return { code, conf };
   }
@@ -509,14 +509,14 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
 
   // -- Avro metadata --
   if (p.type === 'ExtractAvroMetadata') {
-    code = `# Avro Metadata: ${p.name}\ndf_${varName} = spark.read.format("avro").load("${props['Path'] || '/mnt/data/*.avro'}")\nprint(f"[AVRO] Schema: {df_${varName}.schema.simpleString()}")`;
+    code = `# Avro Metadata: ${p.name}\ndf_${varName} = spark.read.format("avro").load("${props['Path'] || '/Volumes/<catalog>/<schema>/<volume>/data/*.avro'}")\nprint(f"[AVRO] Schema: {df_${varName}.schema.simpleString()}")`;
     conf = 0.93;
     return { code, conf };
   }
 
   // -- Parquet --
   if (p.type === 'FetchParquet') {
-    code = `# Parquet: ${p.name}\ndf_${varName} = spark.read.format("parquet").load("${props['Path'] || '/mnt/data/*.parquet'}")`;
+    code = `# Parquet: ${p.name}\ndf_${varName} = spark.read.format("parquet").load("${props['Path'] || '/Volumes/<catalog>/<schema>/<volume>/data/*.parquet'}")`;
     conf = 0.95;
     return { code, conf };
   }

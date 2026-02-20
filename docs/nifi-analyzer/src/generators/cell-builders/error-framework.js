@@ -33,8 +33,13 @@ export function wrapWithErrorFramework(m, qualifiedSchema, cellIndex, lineage) {
   const outputVar = li.outputVar || ('df_' + varName);
   const indent = m.code.split('\n').map(l => '        ' + l).join('\n');
   const safeName = m.name.replace(/"/g, '\\"').replace(/'/g, "''");
-  return '# [' + m.role.toUpperCase() + '] ' + m.name + '\n' +
-    '# ' + m.desc + (m.notes ? '  |  ' + m.notes : '') + '\n' +
+  const safeType = m.type.replace(/'/g, "''");
+  const safeRole = m.role.replace(/'/g, "''");
+  const safeDesc = (m.desc || '').replace(/'/g, "''");
+  const safeNotes = (m.notes || '').replace(/'/g, "''");
+  const safeUpstream = (li.inputVars || []).map(v => v.procName.replace(/'/g, "''")).join(',');
+  return '# [' + safeRole.toUpperCase() + '] ' + m.name + '\n' +
+    '# ' + safeDesc + (safeNotes ? '  |  ' + safeNotes : '') + '\n' +
     '_cell_start_' + varName + ' = datetime.now()\n' +
     '_cell_status_' + varName + ' = "SUCCESS"\n' +
     '_cell_error_' + varName + ' = ""\n' +
@@ -46,14 +51,14 @@ export function wrapWithErrorFramework(m, qualifiedSchema, cellIndex, lineage) {
     '        print(f"[OK] ' + safeName + ' ({_cell_rows_' + varName + '} rows)")\n' +
     'except Exception as _e:\n' +
     '        _cell_status_' + varName + ' = "FAILED"\n' +
-    '        _cell_error_' + varName + ' = str(_e)\n' +
+    '        _cell_error_' + varName + " = str(_e).replace(\"'\", \"''\")\n" +
     '        print(f"[ERROR] ' + safeName + ': {_e}")\n' +
     '        spark.sql(f"""INSERT INTO ' + qualifiedSchema + '.__execution_log VALUES (\n' +
-    "            '" + safeName + "', '" + m.type + "', '" + m.role + "',\n" +
+    "            '" + safeName + "', '" + safeType + "', '" + safeRole + "',\n" +
     "            current_timestamp(), '{_cell_status_" + varName + "}',\n" +
     "            '{_cell_error_" + varName + "}', {_cell_rows_" + varName + "},\n" +
     "            '{str(datetime.now() - _cell_start_" + varName + ")}',\n" +
     '            ' + Math.round(m.confidence * 100) + ",\n" +
-    "            '" + (li.inputVars || []).map(v => v.procName).join(',') + "'\n" +
+    "            '" + safeUpstream + "'\n" +
     '        )""")';
 }

@@ -8,9 +8,12 @@
 
 import {
   _STREAMING_SOURCE_TYPES,
-  _BATCH_SINK_PATTERN,
   _BATCH_BREAKING_TYPES
 } from '../constants/streaming-types.js';
+
+// Canonical implementation lives in generators/streaming-wrapper.js — re-export here
+// so existing imports from this module continue to work.
+export { wrapBatchSinkForStreaming } from '../generators/streaming-wrapper.js';
 
 /**
  * Propagate streaming context through the NiFi connection graph.
@@ -50,89 +53,3 @@ export function propagateStreamingContext(processors, conns) {
   return streamingProcs;
 }
 
-/**
- * Wrap batch sink operations in foreachBatch when upstream is streaming.
- * Converts .write.format() to .writeStream.format(), .saveAsTable() to .toTable(),
- * and wraps collect()/toPandas() patterns in foreachBatch callbacks.
- *
- * @param {string} code - Generated PySpark code
- * @param {string} procName - Processor name
- * @param {string} varName - Sanitized variable name
- * @param {string} inputVar - Input variable name
- * @param {boolean} isStreamingContext - Whether this processor is in a streaming context
- * @returns {string} - Potentially wrapped code
- */
-export function wrapBatchSinkForStreaming(code, procName, varName, inputVar, isStreamingContext) {
-  if (!isStreamingContext) return code;
-  if (!_BATCH_SINK_PATTERN.test(code)) return code;
-
-  let fixed = code;
-
-  // Replace for row in df_X.limit(N).collect() -> foreachBatch pattern
-  if (/for\s+row\s+in\s+df_\w+/.test(fixed)) {
-    const loopStart = fixed.indexOf('for row');
-    if (loopStart >= 0) {
-      const beforeLoop = fixed.substring(0, loopStart);
-      const loopBody = fixed.substring(loopStart);
-      const indentedBody = loopBody.split('\n').map(l => '    ' + l).join('\n');
-      fixed = beforeLoop +
-        '# Streaming-safe sink using foreachBatch\n' +
-        'def _process_batch_' + varName + '(batch_df, batch_id):\n' +
-        '    """Process each micro-batch (streaming-safe)"""\n' +
-        indentedBody.replace(/df_\w+\.(?:limit\(\d+\)\.)?collect\(\)/g, 'batch_df.collect()') + '\n\n' +
-        '(df_' + inputVar + '.writeStream\n' +
-        '    .foreachBatch(_process_batch_' + varName + ')\n' +
-        '    .option("checkpointLocation", "/tmp/checkpoints/' + varName + '")\n' +
-        '    .trigger(processingTime="10 seconds")\n' +
-        '    .start()\n)';
-    }
-  }
-
-  // Replace .toPandas().to_dict() -> foreachBatch
-  if (/\.toPandas\(\)\.to_dict/.test(fixed)) {
-    fixed = fixed.replace(
-      /df_(\w+)(?:\.limit\(\d+\))?\.toPandas\(\)\.to_dict\(orient="records"\)/g,
-      'None  # Resolved in foreachBatch below'
-    );
-    fixed = '# Streaming-safe: collect via foreachBatch, not .toPandas()\n' +
-      'def _process_batch_' + varName + '(batch_df, batch_id):\n' +
-      '    _records = batch_df.toPandas().to_dict(orient="records")\n' +
-      '    # Process _records here\n' +
-      '    return _records\n\n' + fixed;
-  }
-
-  // df_X.count() on streaming -> warning
-  fixed = fixed.replace(/df_(\w+)\.count\(\)/g, '0  # Cannot call .count() on streaming DataFrame; use watermark/window aggregation');
-  // .show() / .display() on streaming -> warning
-  fixed = fixed.replace(/df_(\w+)\.show\([^)]*\)/g, '# Cannot call .show() on streaming DataFrame — use display() in notebook');
-  fixed = fixed.replace(/display\(df_(\w+)\)/g, '# display() streams automatically in Databricks notebooks');
-
-  // .write.format() -> .writeStream.format() with checkpoint
-  if (/\.write\.format\(/.test(fixed) && !/\.writeStream/.test(fixed)) {
-    fixed = fixed.replace(
-      /(\w+)\.write\.format\(([^)]+)\)((?:\s*\.option\([^)]+\))*)\s*\.(?:save|mode)\(/g,
-      function(match, df, fmt, opts) {
-        return df + '.writeStream.format(' + fmt + ')' + opts +
-          '\n    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/checkpoints/' + varName + '")\n    .trigger(availableNow=True)\n    .start(';
-      }
-    );
-  }
-
-  // .saveAsTable() -> .writeStream...toTable() with checkpoint
-  if (/\.write\.(?:mode\([^)]+\)\.)?saveAsTable\(/.test(fixed) && !/\.writeStream/.test(fixed)) {
-    fixed = fixed.replace(
-      /\.write\.(?:mode\([^)]+\)\.)?saveAsTable\(([^)]+)\)/g,
-      '.writeStream\n    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/checkpoints/' + varName + '")\n    .trigger(availableNow=True)\n    .toTable($1)'
-    );
-  }
-
-  // Auto-inject checkpoint for writeStream that's missing it
-  if (/\.writeStream/.test(fixed) && !/checkpointLocation/.test(fixed)) {
-    fixed = fixed.replace(
-      /\.writeStream/g,
-      '.writeStream\n    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/checkpoints/' + varName + '")'
-    );
-  }
-
-  return fixed;
-}

@@ -82,13 +82,15 @@ export function handleRouteProcessor(p, props, varName, inputVar, existingCode, 
       const lines = [
         'from pyspark.sql.functions import col, regexp_extract, when, lit',
         `# RouteOnContent: ${p.name}`,
-        `# Match: ${matchReq}`,
-        `df_${varName} = df_${inputVar}`
+        `# Match: ${matchReq}`
       ];
+      const routeVars = [];
       routeEntries.forEach(([routeName, pattern]) => {
         const safe = routeName.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+        const rv = `df_${varName}_${safe}`;
+        routeVars.push(rv);
         lines.push(`# Route "${routeName}" — pattern: ${pattern.substring(0,60)}`);
-        lines.push(`df_${varName}_${safe} = df_${inputVar}.filter(col("value").rlike("${pattern.replace(/"/g, '\\"')}"))`);
+        lines.push(`${rv} = df_${inputVar}.filter(col("value").rlike("${pattern.replace(/"/g, '\\"')}"))`);
       });
       // MIME-type routing via content header extraction
       lines.push(`# GAP FIX: MIME-type routing — extract Content-Type from headers if present`);
@@ -96,7 +98,13 @@ export function handleRouteProcessor(p, props, varName, inputVar, existingCode, 
       lines.push(`    df_${varName}_json = df_${inputVar}.filter(col("content_type").rlike("application/json"))`);
       lines.push(`    df_${varName}_xml = df_${inputVar}.filter(col("content_type").rlike("(application|text)/xml"))`);
       lines.push(`    df_${varName}_csv = df_${inputVar}.filter(col("content_type").rlike("text/csv"))`);
-      lines.push(`df_${varName}_unmatched = df_${inputVar}.subtract(df_${varName})`);
+      // Unmatched: subtract all matched route DataFrames from input
+      lines.push(`# Unmatched: rows not matching any content route`);
+      lines.push(`df_${varName}_unmatched = df_${inputVar}`);
+      routeVars.forEach(rv => {
+        lines.push(`df_${varName}_unmatched = df_${varName}_unmatched.subtract(${rv})`);
+      });
+      lines.push(`df_${varName} = df_${inputVar}  # Pass-through for default routing`);
       code = lines.join('\n');
     } else {
       code = `# RouteOnContent: ${p.name}\nfrom pyspark.sql.functions import col\n# Route based on content matching\ndf_${varName}_matched = df_${inputVar}.filter(col("value").rlike("${contentReq}"))\ndf_${varName}_unmatched = df_${inputVar}.subtract(df_${varName}_matched)\ndf_${varName} = df_${inputVar}`;

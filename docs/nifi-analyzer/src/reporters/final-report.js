@@ -126,7 +126,7 @@ export function generateFinalReport(STATE, metricsHTML, escapeHTML) {
   h += '<pre style="max-height:400px;overflow:auto;font-size:0.75rem">' + escapeHTML(preview) + (JSON.stringify(r).length > 5000 ? '\n... (truncated)' : '') + '</pre>';
 
   h += '<hr class="divider"><div style="display:flex;gap:8px">';
-  h += '<button class="btn btn-primary" onclick="downloadFinalReport()">Download Full Report (JSON)</button>';
+  h += '<button class="btn btn-primary" id="finalReportDownloadBtn">Download Full Report (JSON)</button>';
   h += '</div>';
 
   return { html: h, report };

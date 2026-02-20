@@ -83,8 +83,9 @@ export function handleMessagingProcessor(p, props, varName, inputVar, existingCo
 
   // -- WebSocket --
   if (p.type === 'ConnectWebSocket' || p.type === 'ListenWebSocket' || p.type === 'PutWebSocket') {
-    const wsUrl = props['WebSocket URI'] || props['URL'] || 'ws://localhost:8080';
-    code = `# WebSocket: ${p.name}\nimport websocket, json\n_ws = websocket.create_connection("${wsUrl}")\ndf_${varName} = df_${inputVar}`;
+    const wsUrl = props['WebSocket URI'] || props['URL'] || '';
+    const wsUrlExpr = wsUrl ? `"${wsUrl}"` : 'dbutils.secrets.get(scope="websocket", key="url")';
+    code = `# WebSocket: ${p.name}\nimport websocket, json\n_ws_url = ${wsUrlExpr}\n_ws = websocket.create_connection(_ws_url)\ndf_${varName} = df_${inputVar}`;
     conf = 0.90;
     return { code, conf };
   }
@@ -98,7 +99,9 @@ export function handleMessagingProcessor(p, props, varName, inputVar, existingCo
 
   // -- TCP/UDP listeners --
   if (p.type === 'ListenTCPRecord' || p.type === 'ListenUDPRecord') {
-    code = `# ${p.type}: ${p.name}\ndf_${varName} = (spark.readStream\n  .format("socket")\n  .option("host", "${props['Local Network Interface'] || 'localhost'}")\n  .option("port", "${props['Port'] || '9999'}")\n  .load())`;
+    const listenHost = props['Local Network Interface'] || '0.0.0.0';
+    const listenPort = props['Port'] || '9999';
+    code = `# ${p.type}: ${p.name}\n# Note: Spark structured streaming socket source is for development only\ndf_${varName} = (spark.readStream\n  .format("socket")\n  .option("host", "${listenHost}")\n  .option("port", "${listenPort}")\n  .load())`;
     conf = 0.90;
     return { code, conf };
   }
