@@ -150,14 +150,7 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
     role: 'config'
   });
 
-  // Footer with comprehensive status
-  cells.push({
-    type: 'code', label: 'Pipeline Complete',
-    source: `# Final status\nimport json\ntry:\n    _exec_log = spark.sql("SELECT status, count(*) as cnt FROM ${qualifiedSchema}.__execution_log GROUP BY status").collect()\n    _counts = {r.status: r.cnt for r in _exec_log}\n    _ok = _counts.get("SUCCESS", 0)\n    _fail = _counts.get("FAILED", 0)\n    _recov = sum(v for k,v in _counts.items() if k in ("RECOVERED","PASSTHROUGH","DLQ"))\n    print("=" * 60)\n    print(f"PIPELINE COMPLETE: {_ok} success, {_fail} failed, {_recov} recovered")\n    print(f"Success rate: {round(_ok/max(_ok+_fail+_recov,1)*100,1)}%")\n    print("=" * 60)\n    if _fail > 0:\n        display(spark.sql("SELECT * FROM ${qualifiedSchema}.__execution_log WHERE status='FAILED'"))\n    dbutils.notebook.exit(json.dumps({"status":"COMPLETE","success":_ok,"failed":_fail,"recovered":_recov}))\nexcept Exception as _e:\n    print(f"[WARN] Status check failed: {_e}")\n    dbutils.notebook.exit("COMPLETE")`,
-    role: 'utility'
-  });
-
-  // GAP #12: Detect cycles -> generate loop cells
+  // GAP #12: Detect cycles -> generate loop cells (before footer so they run before dbutils.notebook.exit)
   try {
     // analyzeFlowGraph may not be available as a module yet; guard import
     let analyzeFlowGraph;
@@ -183,6 +176,13 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
       }
     }
   } catch (e) { console.warn('Cycle-to-loop generation:', e); }
+
+  // Footer with comprehensive status (after cycle cells so dbutils.notebook.exit runs last)
+  cells.push({
+    type: 'code', label: 'Pipeline Complete',
+    source: `# Final status\nimport json\ntry:\n    _exec_log = spark.sql("SELECT status, count(*) as cnt FROM ${qualifiedSchema}.__execution_log GROUP BY status").collect()\n    _counts = {r.status: r.cnt for r in _exec_log}\n    _ok = _counts.get("SUCCESS", 0)\n    _fail = _counts.get("FAILED", 0)\n    _recov = sum(v for k,v in _counts.items() if k in ("RECOVERED","PASSTHROUGH","DLQ"))\n    print("=" * 60)\n    print(f"PIPELINE COMPLETE: {_ok} success, {_fail} failed, {_recov} recovered")\n    print(f"Success rate: {round(_ok/max(_ok+_fail+_recov,1)*100,1)}%")\n    print("=" * 60)\n    if _fail > 0:\n        display(spark.sql("SELECT * FROM ${qualifiedSchema}.__execution_log WHERE status='FAILED'"))\n    dbutils.notebook.exit(json.dumps({"status":"COMPLETE","success":_ok,"failed":_fail,"recovered":_recov}))\nexcept Exception as _e:\n    print(f"[WARN] Status check failed: {_e}")\n    dbutils.notebook.exit("COMPLETE")`,
+    role: 'utility'
+  });
 
   // Apply placeholder resolution — always run so <catalog>.<schema> placeholders in
   // handler-generated code are resolved even when catalog is empty.

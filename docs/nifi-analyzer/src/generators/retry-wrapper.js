@@ -31,10 +31,10 @@ export function generateRetryWrapper(procName, procType, code, penaltyDuration, 
   const isNetworkOp = /^(InvokeHTTP|PutElasticsearch|PutMongo|PutS3|PutDynamoDB|ExecuteSQL|PutSQL|PutDatabaseRecord|ConsumeKafka|PublishKafka|Fetch|Get(HTTP|SQS|DynamoDB))/.test(procType);
   if (!isNetworkOp) return code;
 
-  const safeFuncName = procType.toLowerCase().replace(/[^a-z0-9]/g, '_') + '_' + safeVarName;
   // Use sanitizeVarName so the df_ variable matches what the rest of codegen produces
   // (lowercased, non-alphanum replaced with _, truncated to 40 chars).
   const safeVarName = sanitizeVarName(procName);
+  const safeFuncName = procType.toLowerCase().replace(/[^a-z0-9]/g, '_') + '_' + safeVarName;
   const indented = code.split('\n').map(l => '    ' + l).join('\n');
 
   return `# ${procName} — with retry logic\n` +

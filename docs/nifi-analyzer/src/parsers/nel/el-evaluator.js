@@ -49,7 +49,7 @@ function safeMathEval(expression) {
       const right = parseFactor();
       if (left === null || right === null) return null;
       if (op === '*') left = left * right;
-      else if (op === '/') left = right !== 0 ? Math.floor(left / right) : 0;
+      else if (op === '/') left = right !== 0 ? left / right : 0;
       else left = right !== 0 ? left % right : 0;
     }
     return left;
@@ -156,7 +156,7 @@ export function evaluateNiFiEL(expr, attributes) {
       } else if (fn.startsWith('multiply(')) {
         const arg = fn.match(/multiply\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n * parseInt(arg[1])); }
       } else if (fn.startsWith('divide(')) {
-        const arg = fn.match(/divide\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(Math.floor(n / parseInt(arg[1]))); }
+        const arg = fn.match(/divide\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n / parseInt(arg[1])); }
       } else if (fn.startsWith('literal(')) {
         const arg = fn.match(/literal\(["']([^"']*)["']\)/); if (arg) val = arg[1];
       } else if (fn === 'not()') { val = String(val === 'false' || val === '0' || val === '' || val === 'null'); }

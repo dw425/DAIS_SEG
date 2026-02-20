@@ -16,5 +16,5 @@
 export function javaDateToPython(fmt) {
   return fmt.replace(/yyyy/g, '%Y').replace(/MM/g, '%m').replace(/dd/g, '%d')
     .replace(/HH/g, '%H').replace(/mm/g, '%M').replace(/ss/g, '%S')
-    .replace(/SSS/g, '%f').replace(/E+/g, '%a').replace(/Z/g, '%z');
+    .replace(/SSS/g, '%f').replace(/EEEE/g, '%A').replace(/E{1,3}/g, '%a').replace(/Z/g, '%z');
 }

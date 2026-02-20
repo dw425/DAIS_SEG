@@ -40,8 +40,8 @@ export function generateDLQWrapper(code, procName, varName, inputVar, qualifiedS
   const safeProc = procName.replace(/[^a-zA-Z0-9_]/g, '_');
   const schema = qualifiedSchema || 'nifi_migration';
   const indented = code.split('\n').map(l => '        ' + l).join('\n')
-    .replace(new RegExp(`df_${inputVar}`, 'g'), 'df_input');
-  const indented2 = code.split('\n').map(l => '                ' + l).join('\n').replace(new RegExp(`df_${inputVar}`, 'g'), '_single_df');
+    .replace(new RegExp(`df_${inputVar}\\b`, 'g'), 'df_input');
+  const indented2 = code.split('\n').map(l => '                ' + l).join('\n').replace(new RegExp(`df_${inputVar}\\b`, 'g'), '_single_df');
 
   // Check for PHI fields if detector is provided
   const opts = options || {};
