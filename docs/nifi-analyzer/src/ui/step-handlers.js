@@ -605,7 +605,7 @@ export async function generateReport() {
     ['Unmapped', s.unmappedProcessors],
     ['Process Groups', s.totalProcessGroups],
     ['Connections', s.totalConnections],
-    ['Effort', `<span class="badge badge-${report.effort === 'Low' ? 'green' : report.effort === 'Medium' ? 'amber' : 'red'}">${report.effort}</span>`]
+    ['Effort', report.effort]
   ]);
 
   // Coverage by Role
