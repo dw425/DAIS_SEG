@@ -467,7 +467,7 @@ document.addEventListener('DOMContentLoaded', () => {
         systems: STATE.assessment?.systems || {},
         nifiDatabricksMap: NIFI_DATABRICKS_MAP,
         onProgress: (pct, msg) => {
-          if (el) el.innerHTML = `<div style="color:var(--text2);padding:16px">${msg} (${pct}%)</div>`;
+          if (el) el.innerHTML = `<div style="color:var(--text2);padding:16px">${escapeHTML(msg)} (${pct}%)</div>`;
         },
       });
       setState({ validation: result });
@@ -529,6 +529,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const snapshot = snapshotState();
     setTabStatus('value', 'processing');
     try {
+      // escapeHTML is passed to runValueAnalysis which uses it internally to escape
+      // all user-derived values (processor names, types, system names) in the built HTML.
+      // The returned result.html is safe pre-built HTML and must NOT be double-escaped.
       const result = runValueAnalysis({
         nifi: STATE.parsed._nifi,
         notebook: STATE.notebook,

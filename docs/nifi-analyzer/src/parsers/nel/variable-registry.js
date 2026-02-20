@@ -52,9 +52,11 @@ export function resolveVariables(text, varRegistry) {
   let resolved = text;
   // Replace ${var_name} with actual values
   for (const [name, value] of Object.entries(varRegistry)) {
-    resolved = resolved.replace(new RegExp('\\$\\{' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\}', 'g'), value);
+    // Escape $ in replacement string to prevent $&, $1 etc. being interpreted as backreferences
+    const safeValue = String(value).replace(/\$/g, '$$$$');
+    resolved = resolved.replace(new RegExp('\\$\\{' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\}', 'g'), safeValue);
     // Also replace #{param_name} (parameter context syntax)
-    resolved = resolved.replace(new RegExp('#\\{' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\}', 'g'), value);
+    resolved = resolved.replace(new RegExp('#\\{' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\}', 'g'), safeValue);
   }
   return resolved;
 }

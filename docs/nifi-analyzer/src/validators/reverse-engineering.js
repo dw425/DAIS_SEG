@@ -101,7 +101,12 @@ export async function checkReverseEngineering({
     }
   });
   const errorHandled = allCellTextLower.includes('try:') || allCellTextLower.includes('except') || allCellTextLower.includes('.option("failonerror"');
-  const errorPct = errorHandled ? 70 : (autoTerminated.length > 0 ? 30 : 50);
+  // Calculate error handling score based on actual coverage
+  let errorPct = 0;
+  if (errorHandled) errorPct += 50;  // try/except found in generated code
+  if (autoTerminated.length > 0) errorPct += Math.min(autoTerminated.length * 10, 30);  // auto-terminated relationships
+  if (allCellTextLower.includes('dead_letter') || allCellTextLower.includes('dlq')) errorPct += 20;  // DLQ handling
+  errorPct = Math.min(errorPct, 100);
   reChecks.push({ label: 'Error Handling Coverage', score: errorPct, detail: errorHandled ? 'Try/except or error options found in notebook' : 'No explicit error handling — ' + autoTerminated.length + ' processors have auto-terminated failure relationships' });
 
   reScore = Math.round(reChecks.reduce((s, c) => s + c.score, 0) / reChecks.length);

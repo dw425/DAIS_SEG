@@ -25,10 +25,10 @@ export function handleMonitoringProcessor(p, props, varName, inputVar, existingC
     const isWrite = /^Put/.test(p.type);
     if (isWrite) {
       const url = props['HTTP Event Collector URL'] || 'https://splunk:8088/services/collector';
-      code = `# Splunk HEC: ${p.name}\nimport requests\n_token = dbutils.secrets.get(scope="splunk", key="hec_token")\n_sent = 0\nfor row in df_${inputVar}.limit(10000).collect():\n    requests.post("${url}",\n        json={"event": row.asDict()},\n        headers={"Authorization": f"Splunk {_token}"},\n        verify=False)\n    _sent += 1\nprint(f"[SPLUNK] Sent {_sent} events to HEC")`;
+      code = `# Splunk HEC: ${p.name}\nimport requests\n_token = dbutils.secrets.get(scope="splunk", key="hec_token")\n_sent = 0\nfor row in df_${inputVar}.limit(10000).collect():\n    requests.post("${url}",\n        json={"event": row.asDict()},\n        headers={"Authorization": f"Splunk {_token}"},\n        verify=True)  # Override with CA cert path if using self-signed certs\n    _sent += 1\nprint(f"[SPLUNK] Sent {_sent} events to HEC")`;
     } else {
       const url = props['Splunk URL'] || 'https://splunk:8089';
-      code = `# Splunk Search: ${p.name}\nimport requests\n_token = dbutils.secrets.get(scope="splunk", key="api_token")\n_resp = requests.post("${url}/services/search/jobs/export",\n    data={"search": "${props['Splunk Query'] || 'search index=main | head 1000'}",\n          "output_mode": "json"},\n    headers={"Authorization": f"Bearer {_token}"},\n    verify=False)\n_events = [e for e in _resp.json().get("results", [])]\ndf_${varName} = spark.createDataFrame(_events) if _events else df_${inputVar}\nprint(f"[SPLUNK] Retrieved {len(_events)} events")`;
+      code = `# Splunk Search: ${p.name}\nimport requests\n_token = dbutils.secrets.get(scope="splunk", key="api_token")\n_resp = requests.post("${url}/services/search/jobs/export",\n    data={"search": "${props['Splunk Query'] || 'search index=main | head 1000'}",\n          "output_mode": "json"},\n    headers={"Authorization": f"Bearer {_token}"},\n    verify=True)  # Override with CA cert path if using self-signed certs\n_events = [e for e in _resp.json().get("results", [])]\ndf_${varName} = spark.createDataFrame(_events) if _events else df_${inputVar}\nprint(f"[SPLUNK] Retrieved {len(_events)} events")`;
     }
     conf = 0.90;
     return { code, conf };

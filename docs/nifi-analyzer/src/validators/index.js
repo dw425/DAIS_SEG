@@ -121,7 +121,7 @@ export async function runValidationEngine({
   });
 
   // ── ANALYSIS 5: Import Validation ──
-  progress(95, 'Checking notebook imports...');
+  progress(97, 'Checking notebook imports...');
   const missingImports = validateImports(cells);
 
   progress(100, 'Validation complete!');

@@ -155,7 +155,7 @@ export function parseNiFiXML(doc, sourceName) {
   // Use Set for O(1) deduplication instead of .some() O(n) scan
   const connKeys = new Set();
   connections.forEach(c => {
-    connKeys.add(`${c.sourceId}|${c.destinationId}|${c.relationships.sort().join(',')}`);
+    connKeys.add(`${c.sourceId}|${c.destinationId}|${[...c.relationships].sort().join(',')}`);
   });
   allTopConnEls.forEach(conn => {
     const srcId = conn.querySelector('source > id')?.textContent || getChildText(conn, 'sourceId') || '';
@@ -167,7 +167,7 @@ export function parseNiFiXML(doc, sourceName) {
     if (!rels.length) conn.querySelectorAll(':scope > relationship').forEach(r => { if(r.textContent) rels.push(r.textContent); });
     const bp = getChildText(conn, 'backPressureObjectThreshold');
     // Avoid duplicate connections using Set for O(1) lookup
-    const connKey = `${srcId}|${dstId}|${rels.sort().join(',')}`;
+    const connKey = `${srcId}|${dstId}|${[...rels].sort().join(',')}`;
     if (!connKeys.has(connKey)) {
       connKeys.add(connKey);
       connections.push({sourceId:srcId, destinationId:dstId, sourceType:srcType, destinationType:dstType, relationships:rels, backPressure:bp});

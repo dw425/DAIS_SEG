@@ -22,7 +22,7 @@ export function parseNiFiRegistryJSON(flowData, sourceName) {
     (group.processors || []).forEach(p => {
       const props = {};
       if (Array.isArray(p.properties)) {
-        p.properties.forEach(pr => { if (pr.name && pr.value) props[pr.name] = pr.value; });
+        p.properties.forEach(pr => { if (pr.name !== undefined && pr.name !== null) props[pr.name] = pr.value; });
       } else if (p.properties) {
         Object.entries(p.properties).forEach(([k, v]) => { if (v !== null) props[k] = String(v); });
       }

@@ -101,13 +101,17 @@ export function exportWorkflowYAML(nifiFlow, generateWorkflowDAG) {
   yaml += 'name: nifi_migration_workflow\n';
   yaml += 'tasks:\n';
   dag.tasks.forEach(t => {
+    if (!t.task_key || !t.notebook_task?.notebook_path) return;
     yaml += '  - task_key: "' + t.task_key.replace(/"/g, '\\"') + '"\n';
     yaml += '    notebook_task:\n';
     yaml += '      notebook_path: "' + t.notebook_task.notebook_path.replace(/"/g, '\\"') + '"\n';
     yaml += '      source: WORKSPACE\n';
     if (t.depends_on && t.depends_on.length > 0) {
       yaml += '    depends_on:\n';
-      t.depends_on.forEach(d => { yaml += '      - task_key: "' + d.task_key.replace(/"/g, '\\"') + '"\n'; });
+      t.depends_on.forEach(d => {
+        if (!d.task_key) return;
+        yaml += '      - task_key: "' + d.task_key.replace(/"/g, '\\"') + '"\n';
+      });
     }
     yaml += '\n';
   });

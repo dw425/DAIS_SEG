@@ -87,7 +87,7 @@ function _buildLoopBody(loopProcs, lineage) {
     // Indent each line of the processor code for the loop body
     const indented = proc.code.split('\n').map(l => '    ' + l).join('\n');
     codeLines.push(indented);
-    codeLines.push(`    result = ${outputVar}`);
+    codeLines.push(`    _loop_result = ${outputVar}`);
   }
   return codeLines.length > 0 ? codeLines.join('\n') : null;
 }
