@@ -115,7 +115,11 @@ export function evaluateNiFiEL(expr, attributes) {
         if (args) val = String(val).split(args[1]).join(args[2]);
       } else if (fn.startsWith('substring(')) {
         const args = fn.match(/substring\((\d+)(?:\s*,\s*(\d+))?\)/);
-        if (args) val = String(val).substring(parseInt(args[1]), args[2] ? parseInt(args[2]) : undefined);
+        if (args) {
+          const start = parseInt(args[1]);
+          const len = args[2] ? parseInt(args[2]) : undefined;
+          val = len !== undefined ? String(val).substring(start, start + len) : String(val).substring(start);
+        }
       } else if (fn === 'toUpper()') val = String(val).toUpperCase();
       else if (fn === 'toLower()') val = String(val).toLowerCase();
       else if (fn === 'trim()') val = String(val).trim();
@@ -183,8 +187,11 @@ export function evaluateNiFiEL(expr, attributes) {
           if (result !== null) val = String(result);
         }
       }
-      else if (fn === 'escapeJson()') { val = JSON.stringify(val).slice(1, -1); }
-      else if (fn === 'unescapeJson()') { try { val = JSON.parse('"' + val + '"'); } catch(e) {} }
+      else if (fn === 'escapeJson()') {
+        const s = JSON.stringify(val);
+        val = (s[0] === '"' && s[s.length - 1] === '"') ? s.slice(1, -1) : s;
+      }
+      else if (fn === 'unescapeJson()') { try { val = JSON.parse('"' + String(val).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'); } catch(e) { /* preserve original value */ } }
       else if (fn === 'escapeXml()') { val = String(val).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
       else if (fn === 'escapeCsv()') { val = val.includes(',') ? '"' + val.replace(/"/g, '""') + '"' : val; }
       else if (fn === 'urlEncode()') { val = encodeURIComponent(val); }

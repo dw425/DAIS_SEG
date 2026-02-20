@@ -185,11 +185,13 @@ export function renderNodes(container, tierData, nodeEls, _ms, detailEl, diagram
         // Colored stat badges
         const statsDiv = document.createElement('div');
         statsDiv.className = 'node-stats';
-        if (node.srcCount) statsDiv.innerHTML += `<span class="ns ns-tx">${node.srcCount} src</span>`;
-        if ((node.transformCount || 0) + (node.routeCount || 0)) statsDiv.innerHTML += `<span class="ns" style="background:#A855F7;color:white">${(node.transformCount || 0) + (node.routeCount || 0)} xfm</span>`;
-        if (node.processCount) statsDiv.innerHTML += `<span class="ns ns-ext">${node.processCount} proc</span>`;
-        if (node.sinkCount) statsDiv.innerHTML += `<span class="ns" style="background:#21C354;color:white">${node.sinkCount} sink</span>`;
-        if (node.utilityCount) statsDiv.innerHTML += `<span class="ns" style="background:#808495;color:white">${node.utilityCount} util</span>`;
+        let statsHtml = '';
+        if (node.srcCount) statsHtml += `<span class="ns ns-tx">${node.srcCount} src</span>`;
+        if ((node.transformCount || 0) + (node.routeCount || 0)) statsHtml += `<span class="ns" style="background:#A855F7;color:white">${(node.transformCount || 0) + (node.routeCount || 0)} xfm</span>`;
+        if (node.processCount) statsHtml += `<span class="ns ns-ext">${node.processCount} proc</span>`;
+        if (node.sinkCount) statsHtml += `<span class="ns" style="background:#21C354;color:white">${node.sinkCount} sink</span>`;
+        if (node.utilityCount) statsHtml += `<span class="ns" style="background:#808495;color:white">${node.utilityCount} util</span>`;
+        statsDiv.innerHTML = statsHtml;
         el.appendChild(statsDiv);
         // Expand indicator
         const expandInd = document.createElement('div');

@@ -53,6 +53,7 @@ export function generateLoopFromCycle(cycle, mappings, lineage) {
 
   // Conditional loop
   const whileBody = loopBodyLines || '    _loop_result = _loop_df_' + varName + '  # passthrough (no mapped code)';
+  const indentedBody = whileBody.split('\n').map(l => l ? '    ' + l : l).join('\n');
   return `# Cycle detected: ${cycle.join(' \u2192 ')} \u2192 (loop back)\n` +
     `# Pattern: Conditional loop \u2014 converted to while iteration\n` +
     `_max_iterations = 100\n` +
@@ -60,7 +61,7 @@ export function generateLoopFromCycle(cycle, mappings, lineage) {
     `_loop_df_${varName} = df_${varName}\n` +
     `while _iteration < _max_iterations:\n` +
     `    _iteration += 1\n` +
-    `${whileBody}\n` +
+    `${indentedBody}\n` +
     `    if _loop_result.count() == 0:\n` +
     `        break  # No more records to process\n` +
     `    _loop_df_${varName} = _loop_result\n` +

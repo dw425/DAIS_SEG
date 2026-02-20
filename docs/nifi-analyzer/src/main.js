@@ -195,6 +195,31 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // ── 6f-2. Wire step buttons (steps 6-8: final report, validation, value) ──
+  const finalReportBtn = document.getElementById('finalReportBtn');
+  if (finalReportBtn) {
+    finalReportBtn.addEventListener('click', async () => {
+      finalReportBtn.disabled = true;
+      try { await window.generateFinalReport(); } finally { finalReportBtn.disabled = false; }
+    });
+  }
+
+  const validateBtn = document.getElementById('validateBtn');
+  if (validateBtn) {
+    validateBtn.addEventListener('click', async () => {
+      validateBtn.disabled = true;
+      try { await window.runValidation(); } finally { validateBtn.disabled = false; }
+    });
+  }
+
+  const valueBtn = document.getElementById('valueBtn');
+  if (valueBtn) {
+    valueBtn.addEventListener('click', async () => {
+      valueBtn.disabled = true;
+      try { await window.runValueAnalysis(); } finally { valueBtn.disabled = false; }
+    });
+  }
+
   // ── 6g. Wire download buttons ──
   const dlNotebookBtn = document.getElementById('downloadNotebookBtn');
   if (dlNotebookBtn) {

@@ -225,8 +225,8 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
     return { code, conf };
   }
   if (p.type === 'PostSlack') {
-    const webhook = props['Webhook URL'] || '';
-    code = `# Slack: ${p.name}\nimport requests\nrequests.post("${webhook}", json={"text": "Pipeline notification"})\ndf_${varName} = df_${inputVar}`;
+    const webhook = (props['Webhook URL'] || '').replace(/"/g, '\\"');
+    code = `# Slack: ${p.name}\nimport requests\n_webhook_url = "${webhook}"\nrequests.post(_webhook_url, json={"text": "Pipeline notification"})\ndf_${varName} = df_${inputVar}`;
     conf = 0.92;
     return { code, conf };
   }

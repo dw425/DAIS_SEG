@@ -19,18 +19,21 @@ export function parseVariableRegistry(nifiData) {
   const vars = {};
   // Parse from XML variable elements
   if (nifiData._rawXml) {
-    const varMatches = nifiData._rawXml.match(/<variable\s+name="([^"]+)"\s+value="([^"]*)"\s*\/>/g) || [];
+    const varMatches = (nifiData._rawXml.match(/<variable\s+(?:name="[^"]+"\s+value="[^"]*"|value="[^"]*"\s+name="[^"]+")\s*\/>/g)) || [];
     varMatches.forEach(m => {
-      const name = m.match(/name="([^"]+)"/)[1];
-      const val = m.match(/value="([^"]*)"/)[1];
-      vars[name] = val;
+      const nameMatch = m.match(/name="([^"]+)"/);
+      const valMatch = m.match(/value="([^"]*)"/);
+      if (nameMatch && valMatch) {
+        vars[nameMatch[1]] = valMatch[1];
+      }
     });
     // Parse parameter contexts
     const paramMatches = nifiData._rawXml.match(/<parameter>\s*<name>([^<]+)<\/name>\s*<value>([^<]*)<\/value>/g) || [];
     paramMatches.forEach(m => {
-      const name = m.match(/<name>([^<]+)<\/name>/)[1];
-      const val = m.match(/<value>([^<]*)<\/value>/);
-      if (val) vars[name] = val[1];
+      const nameMatch = m.match(/<name>([^<]+)<\/name>/);
+      const valMatch = m.match(/<value>([^<]*)<\/value>/);
+      if (!nameMatch || !valMatch) return;  // skip malformed entries
+      vars[nameMatch[1]] = valMatch[1];
     });
   }
   return vars;

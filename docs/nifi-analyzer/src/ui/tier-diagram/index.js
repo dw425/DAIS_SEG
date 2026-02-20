@@ -12,6 +12,9 @@ import { clearRouteTrace } from './route-trace.js';
 import { applySidebarFilter, clearSidebarFilter } from './sidebar-filter.js';
 import { tierFilter } from './filter-toolbar.js';
 
+/** Module-level escape handler reference for cleanup between renders. */
+let _escapeHandler = null;
+
 /**
  * Render the full tier diagram into the specified container elements.
  * Extracted from index.html lines 6267-6664.
@@ -88,9 +91,11 @@ export function renderTierDiagram(tierData, containerId, detailId, legendId) {
   });
 
   // Escape clears route trace; click empty space clears
-  document.addEventListener('keydown', (e) => {
+  if (_escapeHandler) document.removeEventListener('keydown', _escapeHandler);
+  _escapeHandler = (e) => {
     if (e.key === 'Escape' && _ms.active) clearRouteTrace(_ms, nodeEls, container);
-  });
+  };
+  document.addEventListener('keydown', _escapeHandler);
   container.addEventListener('click', (e) => {
     if ((e.target === container || e.target.classList.contains('tier-band') || e.target.classList.contains('tier-band-label')) && _ms.active) {
       clearRouteTrace(_ms, nodeEls, container);

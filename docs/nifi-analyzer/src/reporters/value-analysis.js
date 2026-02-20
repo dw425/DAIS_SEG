@@ -251,7 +251,7 @@ export function runValueAnalysis({ nifi, notebook, escapeHTML }) {
   // Complexity scoring formula:
   // - Processors (x2): Each processor represents a discrete transformation step
   // - Connections (x1): Data flow links between processors
-  // - Controller services (x3): Shared services add cross-cutting complexity
+  // - Controller services (x4): Shared services add cross-cutting complexity
   // - External systems (x5): Each external integration adds deployment/config complexity
   // - Nested group depth (x3): Deeper nesting increases maintenance burden
   // - Routing multiplier (1 + routes x 0.15): Conditional routing adds branching complexity

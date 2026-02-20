@@ -30,7 +30,7 @@ export function showPathToast(ms) {
   toast.style.display = 'flex';
   const clearBtn = document.getElementById('pathTraceToastClear');
   if (clearBtn) {
-    clearBtn.onclick = () => { toast.style.display = 'none'; };
+    clearBtn.addEventListener('click', () => { toast.style.display = 'none'; });
   }
 }
 
