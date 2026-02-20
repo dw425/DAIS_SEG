@@ -23,11 +23,12 @@ function _highlightConnected(nodeId, nodes, connections, nodeEls, container) {
   const pathNodes = new Set([nodeId]);
   const pathEdges = new Set();
 
-  // BFS downstream
+  // BFS downstream — guard on pathNodes (not pathEdges) to prevent infinite
+  // recursion when the graph contains cycle edges (A→B and B→A).
   function traceDown(id) {
     connections.forEach(c => {
       const key = c.from + '|' + c.to;
-      if (c.from === id && !pathEdges.has(key)) {
+      if (c.from === id && !pathNodes.has(c.to)) {
         pathEdges.add(key);
         pathNodes.add(c.to);
         traceDown(c.to);
@@ -35,11 +36,11 @@ function _highlightConnected(nodeId, nodes, connections, nodeEls, container) {
     });
   }
 
-  // BFS upstream
+  // BFS upstream — same node-based guard.
   function traceUp(id) {
     connections.forEach(c => {
       const key = c.from + '|' + c.to;
-      if (c.to === id && !pathEdges.has(key)) {
+      if (c.to === id && !pathNodes.has(c.from)) {
         pathEdges.add(key);
         pathNodes.add(c.from);
         traceUp(c.from);

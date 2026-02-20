@@ -184,10 +184,20 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
     }
   } catch (e) { console.warn('Cycle-to-loop generation:', e); }
 
-  // Apply placeholder resolution
-  if (cfg.catalog) {
-    cells.forEach(c => { c.source = resolveNotebookPlaceholders(c.source, cfg); });
-  }
+  // Apply placeholder resolution — always run so <catalog>.<schema> placeholders in
+  // handler-generated code are resolved even when catalog is empty.
+  cells.forEach(c => {
+    if (!c.source) return;
+    if (catalogName) {
+      c.source = resolveNotebookPlaceholders(c.source, cfg);
+    } else {
+      // No-catalog mode: strip "<catalog>." prefix and resolve <schema> to schemaName.
+      c.source = c.source
+        .replace(/<catalog>\./g, '')
+        .replace(/<schema>/g, schemaName)
+        .replace(/\{schema\}/g, schemaName);
+    }
+  });
 
   // Validate generated code
   const _codeValidation = validateGeneratedCode(cells.map(c => c.source || ''));

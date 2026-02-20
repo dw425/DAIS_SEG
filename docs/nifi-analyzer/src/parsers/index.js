@@ -174,7 +174,9 @@ export async function parseFlow(raw, filename, options = {}) {
     if (result.error) return { processors: [], _nifi: {}, parse_warnings: [result.error] };
     const { text, tables } = result;
     if (!text && tables.length === 0) throw new Error('No content found in DOCX file');
-    return buildDocumentFlow(text, tables, filename);
+    const docResult = buildDocumentFlow(text, tables, filename);
+    if (docResult.error) return { processors: [], _nifi: {}, parse_warnings: [docResult.error] };
+    return docResult;
   }
 
   // ---- 5. XLSX ----
@@ -187,14 +189,18 @@ export async function parseFlow(raw, filename, options = {}) {
     const allRows = sheets.flat();
     const text = allRows.map(row => row.join('\t')).join('\n');
     const tables = allRows.length > 0 ? [allRows] : [];
-    return buildDocumentFlow(text, tables, filename);
+    const xlsxResult = buildDocumentFlow(text, tables, filename);
+    if (xlsxResult.error) return { processors: [], _nifi: {}, parse_warnings: [xlsxResult.error] };
+    return xlsxResult;
   }
 
   // ---- 6. SQL files ----
   if (lower.endsWith('.sql')) {
     const content = raw || '';
     if (!content.trim()) throw new Error('Empty SQL file');
-    return parseSqlFile(content, filename);
+    const sqlResult = parseSqlFile(content, filename);
+    if (sqlResult.error) return { processors: [], _nifi: {}, parse_warnings: [sqlResult.error] };
+    return sqlResult;
   }
 
   // ---- 7. Unsupported ancillary formats (graceful rejection) ----
