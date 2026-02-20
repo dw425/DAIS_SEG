@@ -46,10 +46,13 @@ export function buildProcessorCell(m, { lineage, qualifiedSchema, nifi, fullProp
   const routing = generateRelationshipRouting(m, nifi, lineage);
 
   // Build cell with IMPROVEMENT #5 (error framework) + #6 (auto recovery)
+  // Use a shallow copy of m so that the adaptive-enhanced code is wrapped by the
+  // error framework without mutating the original mapping object.
   let cellCode;
   if (m.mapped && m.code && !m.code.startsWith('# TODO')) {
-    cellCode = wrapWithErrorFramework(m, qualifiedSchema, cellIndex, lineage);
-    cellCode += generateAutoRecovery(m, qualifiedSchema, lineage);
+    const mWithAdaptive = code !== m.code ? { ...m, code } : m;
+    cellCode = wrapWithErrorFramework(mWithAdaptive, qualifiedSchema, cellIndex, lineage);
+    cellCode += generateAutoRecovery(mWithAdaptive, qualifiedSchema, lineage);
   } else {
     cellCode = `# ${lbl}\n# ${m.desc}${m.notes ? '  |  ' + m.notes : ''}\n# Input: ${inputInfo}\n${code}`;
   }

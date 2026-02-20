@@ -80,12 +80,12 @@ export async function parseFlow(raw, filename, options = {}) {
   // ---- File size limit ----
   const rawSize = typeof raw === 'string' ? raw.length : (raw?.byteLength ?? 0);
   if (rawSize > MAX_PARSE_SIZE) {
-    return { processors: [], _nifi: {}, parse_warnings: ['File exceeds 50MB parse limit'] };
+    return { processors: [], _nifi: { processors: [] }, parse_warnings: ['File exceeds 50MB parse limit'] };
   }
 
   // ---- 0-byte / empty guard ----
   if (!raw || (raw instanceof ArrayBuffer && raw.byteLength === 0) || (typeof raw === 'string' && raw.trim().length === 0)) {
-    return { processors: [], _nifi: {}, parse_warnings: ['Empty file'] };
+    return { processors: [], _nifi: { processors: [] }, parse_warnings: ['Empty file'] };
   }
 
   let lower = (filename || '').toLowerCase();
@@ -103,7 +103,7 @@ export async function parseFlow(raw, filename, options = {}) {
       if (probe[0] === 0x1f && probe[1] === 0x8b) {
         const gzBytes = bytes || new Uint8Array(typeof raw === 'string' ? new TextEncoder().encode(raw) : raw);
         const inner = await decompressGzip(gzBytes);
-        if (inner && inner.error) return { processors: [], _nifi: {}, parse_warnings: [inner.error] };
+        if (inner && inner.error) return { processors: [], _nifi: { processors: [] }, parse_warnings: [inner.error] };
         return parseFlow(inner, (filename || '').replace(/\.gz$/i, '') || 'flow');
       }
       // ZIP/PK magic: 50 4b
@@ -125,7 +125,7 @@ export async function parseFlow(raw, filename, options = {}) {
   if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
     if (!bytes) throw new Error('Binary data required for .tar.gz/.tgz files');
     const entries = await extractTarGz(bytes);
-    if (entries.error) return { processors: [], _nifi: {}, parse_warnings: [entries.error] };
+    if (entries.error) return { processors: [], _nifi: { processors: [] }, parse_warnings: [entries.error] };
     if (entries.length === 0) throw new Error('No parseable text files found in tar.gz archive');
     // Parse the highest-priority file
     const best = entries[0];
@@ -136,8 +136,8 @@ export async function parseFlow(raw, filename, options = {}) {
   if (lower.endsWith('.tar')) {
     const bytes2 = raw instanceof ArrayBuffer ? new Uint8Array(raw) : new TextEncoder().encode(raw);
     const entries = parseTar(bytes2);
-    if (entries.error) return { processors: [], _nifi: {}, parse_warnings: [entries.error] };
-    if (!entries.length) return { processors: [], _nifi: {}, parse_warnings: ['No parseable files found in tar archive'] };
+    if (entries.error) return { processors: [], _nifi: { processors: [] }, parse_warnings: [entries.error] };
+    if (!entries.length) return { processors: [], _nifi: { processors: [] }, parse_warnings: ['No parseable files found in tar archive'] };
     // Parse best entry
     const best = entries.sort((a,b) => {
       const pri = n => /flow\.xml/i.test(n) ? 0 : /flow\.json/i.test(n) ? 1 : /template/i.test(n) ? 2 : /\.xml$/i.test(n) ? 3 : /\.json$/i.test(n) ? 4 : 5;
@@ -150,7 +150,7 @@ export async function parseFlow(raw, filename, options = {}) {
   if (lower.endsWith('.gz')) {
     if (!bytes) throw new Error('Binary data required for .gz files');
     const decompressed = await decompressGzip(bytes);
-    if (decompressed && decompressed.error) return { processors: [], _nifi: {}, parse_warnings: [decompressed.error] };
+    if (decompressed && decompressed.error) return { processors: [], _nifi: { processors: [] }, parse_warnings: [decompressed.error] };
     // Derive inner filename by removing .gz
     const innerName = (filename || '').replace(/\.gz$/i, '') || filename || 'flow';
     return parseFlow(decompressed, innerName);
@@ -160,7 +160,7 @@ export async function parseFlow(raw, filename, options = {}) {
   if (lower.endsWith('.zip') || lower.endsWith('.nar') || lower.endsWith('.jar')) {
     if (!bytes) throw new Error('Binary data required for .zip/.nar/.jar files');
     const entries = await extractZipContents(bytes);
-    if (entries.error) return { processors: [], _nifi: {}, parse_warnings: [entries.error] };
+    if (entries.error) return { processors: [], _nifi: { processors: [] }, parse_warnings: [entries.error] };
     if (entries.length === 0) throw new Error('No parseable text files found in archive');
     // Parse the highest-priority file (sorted by NiFi relevance)
     const best = entries[0];
@@ -171,11 +171,11 @@ export async function parseFlow(raw, filename, options = {}) {
   if (lower.endsWith('.docx')) {
     if (!bytes) throw new Error('Binary data required for .docx files');
     const result = await extractDocxText(bytes);
-    if (result.error) return { processors: [], _nifi: {}, parse_warnings: [result.error] };
+    if (result.error) return { processors: [], _nifi: { processors: [] }, parse_warnings: [result.error] };
     const { text, tables } = result;
     if (!text && tables.length === 0) throw new Error('No content found in DOCX file');
     const docResult = buildDocumentFlow(text, tables, filename);
-    if (docResult.error) return { processors: [], _nifi: {}, parse_warnings: [docResult.error] };
+    if (docResult.error) return { processors: [], _nifi: { processors: [] }, parse_warnings: [docResult.error] };
     return docResult;
   }
 
@@ -183,14 +183,14 @@ export async function parseFlow(raw, filename, options = {}) {
   if (lower.endsWith('.xlsx')) {
     if (!bytes) throw new Error('Binary data required for .xlsx files');
     const result = await extractXlsxData(bytes);
-    if (result.error) return { processors: [], _nifi: {}, parse_warnings: [result.error] };
+    if (result.error) return { processors: [], _nifi: { processors: [] }, parse_warnings: [result.error] };
     const { sheets } = result;
     // Flatten all sheets into rows for document flow
     const allRows = sheets.flat();
     const text = allRows.map(row => row.join('\t')).join('\n');
     const tables = allRows.length > 0 ? [allRows] : [];
     const xlsxResult = buildDocumentFlow(text, tables, filename);
-    if (xlsxResult.error) return { processors: [], _nifi: {}, parse_warnings: [xlsxResult.error] };
+    if (xlsxResult.error) return { processors: [], _nifi: { processors: [] }, parse_warnings: [xlsxResult.error] };
     return xlsxResult;
   }
 
@@ -199,22 +199,22 @@ export async function parseFlow(raw, filename, options = {}) {
     const content = raw || '';
     if (!content.trim()) throw new Error('Empty SQL file');
     const sqlResult = parseSqlFile(content, filename);
-    if (sqlResult.error) return { processors: [], _nifi: {}, parse_warnings: [sqlResult.error] };
+    if (sqlResult.error) return { processors: [], _nifi: { processors: [] }, parse_warnings: [sqlResult.error] };
     return sqlResult;
   }
 
   // ---- 7. Unsupported ancillary formats (graceful rejection) ----
   if (/\.(csv|tsv)$/i.test(lower)) {
-    return { processors: [], _nifi: {}, parse_warnings: ['CSV/TSV files are not NiFi flow definitions. Please upload a NiFi template (.xml), flow definition (.json), or flow.xml.gz archive.'] };
+    return { processors: [], _nifi: { processors: [] }, parse_warnings: ['CSV/TSV files are not NiFi flow definitions. Please upload a NiFi template (.xml), flow definition (.json), or flow.xml.gz archive.'] };
   }
   if (/\.(ya?ml)$/i.test(lower)) {
-    return { processors: [], _nifi: {}, parse_warnings: ['YAML files are not directly supported as NiFi flow definitions. If this is a NiFi Registry export, try converting to JSON first.'] };
+    return { processors: [], _nifi: { processors: [] }, parse_warnings: ['YAML files are not directly supported as NiFi flow definitions. If this is a NiFi Registry export, try converting to JSON first.'] };
   }
   if (/\.(avro)$/i.test(lower)) {
-    return { processors: [], _nifi: {}, parse_warnings: ['Avro files are data files, not NiFi flow definitions. Please upload a NiFi template (.xml) or flow definition (.json).'] };
+    return { processors: [], _nifi: { processors: [] }, parse_warnings: ['Avro files are data files, not NiFi flow definitions. Please upload a NiFi template (.xml) or flow definition (.json).'] };
   }
   if (/\.(parquet)$/i.test(lower)) {
-    return { processors: [], _nifi: {}, parse_warnings: ['Parquet files are data files, not NiFi flow definitions. Please upload a NiFi template (.xml) or flow definition (.json).'] };
+    return { processors: [], _nifi: { processors: [] }, parse_warnings: ['Parquet files are data files, not NiFi flow definitions. Please upload a NiFi template (.xml) or flow definition (.json).'] };
   }
 
   // ---- 8. Standard text-based formats (XML, JSON, TXT) ----

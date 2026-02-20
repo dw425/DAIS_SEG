@@ -80,7 +80,7 @@ export function generateDLQWrapper(code, procName, varName, inputVar, qualifiedS
     '            try:\n' +
     '                _single_df = spark.createDataFrame([_row], schema=df_input.schema)\n' +
     indented2 + '\n' +
-    '                _success_records.append(_row)\n' +
+    '                _success_records.append(df_' + varName + '.collect()[0])\n' +
     '            except Exception as _row_err:\n' +
     '                _failed_records.append({\n' +
     '                    "source_processor": "' + procName + '",\n' +
