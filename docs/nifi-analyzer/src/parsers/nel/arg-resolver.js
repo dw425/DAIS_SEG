@@ -17,7 +17,10 @@ import { parseNELExpression } from './parser.js';
  */
 export function resolveNELArg(arg, mode) {
   arg = arg.trim();
-  if (/^'([^']*)'$/.test(arg)) return mode === 'col' ? 'lit("' + arg.slice(1,-1) + '")' : '"' + arg.slice(1,-1) + '"';
+  if (/^'([^']*)'$/.test(arg)) {
+    var val = arg.slice(1,-1).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    return mode === 'col' ? 'lit("' + val + '")' : '"' + val + '"';
+  }
   if (/^\d+$/.test(arg)) return mode === 'col' ? 'lit(' + arg + ')' : arg;
   if (arg.includes(':')) return parseNELExpression(arg, mode);
   var ctx = resolveNELVariableContext(arg);

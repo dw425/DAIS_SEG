@@ -280,7 +280,7 @@ export async function runAnalysis() {
       const sys = systems[key];
       const procList = sys.processors.map(p => {
         const conf = NIFI_DATABRICKS_MAP[p.type] ? NIFI_DATABRICKS_MAP[p.type].conf : 0;
-        const dot = conf >= CONFIDENCE_THRESHOLDS.MAPPED ? 'high' : conf >= 0.3 ? 'med' : 'low';
+        const dot = conf >= CONFIDENCE_THRESHOLDS.MAPPED ? 'high' : conf >= CONFIDENCE_THRESHOLDS.PARTIAL ? 'med' : 'low';
         return '<span class="conf-dot ' + dot + '"></span>' + escapeHTML(p.name) + ' <span style="color:var(--text2)">(' + p.direction + ')</span>';
       }).join('<br>');
       let body = '<div class="sys-detail-row"><span class="sys-label">Processors:</span><span class="sys-value">' + procList + '</span></div>';
@@ -300,7 +300,7 @@ export async function runAnalysis() {
     const roleColor = ROLE_TIER_COLORS[role] || '#808495';
     const mapEntry = NIFI_DATABRICKS_MAP[p.type];
     const conf = mapEntry ? mapEntry.conf : 0;
-    const confCls = conf >= CONFIDENCE_THRESHOLDS.MAPPED ? 'high' : conf >= 0.3 ? 'med' : 'low';
+    const confCls = conf >= CONFIDENCE_THRESHOLDS.MAPPED ? 'high' : conf >= CONFIDENCE_THRESHOLDS.PARTIAL ? 'med' : 'low';
     const ups = depGraph.upstream[p.name] || [];
     const downs = depGraph.downstream[p.name] || [];
     const fullUps = depGraph.fullUpstream[p.name] || [];
@@ -440,10 +440,10 @@ export async function runAssessment() {
   // Per-Processor Confidence table
   h += '<hr class="divider"><h3>Per-Processor Confidence</h3>';
   const confRows = mappings.map(m => {
-    const confCls = m.confidence >= CONFIDENCE_THRESHOLDS.MAPPED ? 'high' : m.confidence >= 0.3 ? 'med' : 'low';
+    const confCls = m.confidence >= CONFIDENCE_THRESHOLDS.MAPPED ? 'high' : m.confidence >= CONFIDENCE_THRESHOLDS.PARTIAL ? 'med' : 'low';
     const ups = depGraph.fullUpstream[m.name] || [];
     const downs = depGraph.fullDownstream[m.name] || [];
-    return [escapeHTML(m.name), '<span style="color:' + (ROLE_TIER_COLORS[m.role] || '#808495') + '">' + m.role + '</span>', escapeHTML(m.group), '<span class="conf-dot ' + confCls + '"></span>' + Math.round(m.confidence * 100) + '%', m.mapped ? escapeHTML((m.desc || '').substring(0, 50)) : '<em style="color:var(--red)">' + (m.gapReason || 'Unmapped').substring(0, 50) + '</em>', m.confidence >= CONFIDENCE_THRESHOLDS.MAPPED ? '0.5d' : m.confidence >= 0.3 ? '2d' : '5d', ups.length + ' up / ' + downs.length + ' down'];
+    return [escapeHTML(m.name), '<span style="color:' + (ROLE_TIER_COLORS[m.role] || '#808495') + '">' + m.role + '</span>', escapeHTML(m.group), '<span class="conf-dot ' + confCls + '"></span>' + Math.round(m.confidence * 100) + '%', m.mapped ? escapeHTML((m.desc || '').substring(0, 50)) : '<em style="color:var(--red)">' + (m.gapReason || 'Unmapped').substring(0, 50) + '</em>', m.confidence >= CONFIDENCE_THRESHOLDS.MAPPED ? '0.5d' : m.confidence >= CONFIDENCE_THRESHOLDS.PARTIAL ? '2d' : '5d', ups.length + ' up / ' + downs.length + ' down'];
   });
   h += tableHTML(['Processor', 'Role', 'Group', 'Confidence', 'Approach', 'Effort', 'Deps'], confRows);
 

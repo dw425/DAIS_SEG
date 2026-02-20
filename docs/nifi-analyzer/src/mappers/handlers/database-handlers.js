@@ -61,7 +61,8 @@ export function handleDatabaseProcessor(p, props, varName, inputVar, existingCod
       code = `# Hive Write: ${p.name}\n(df_${inputVar}.write\n  .mode("append")\n  .saveAsTable("${table}")\n)\nprint(f"[HIVE] Wrote to ${table}")`;
     } else {
       const sql = query || `SELECT * FROM ${table}`;
-      code = `# Hive Query: ${p.name}\ndf_${varName} = spark.sql("""${sql.substring(0, 300)}""")\nprint(f"[HIVE] Queried ${table}")`;
+      const safeSql = sql.substring(0, 300).replace(/"""/g, '\\"\\"\\"');
+      code = `# Hive Query: ${p.name}\ndf_${varName} = spark.sql("""${safeSql}""")\nprint(f"[HIVE] Queried ${table}")`;
     }
     conf = 0.92;
     return { code, conf };

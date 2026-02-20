@@ -43,7 +43,8 @@ export function parseNELExpression(expr, mode) {
     result = mode === 'col' ? '(rand() * 2147483647).cast("int")' : 'random.randint(0, 2147483647)';
   } else if (/^literal\('((?:[^'\\]|\\.)*)'\)$/i.test(base)) {
     var litVal = base.match(/^literal\('((?:[^'\\]|\\.)*)'\)$/i)[1];
-    result = mode === 'col' ? 'lit("' + litVal + '")' : '"' + litVal + '"';
+    var escaped = litVal.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    result = mode === 'col' ? 'lit("' + escaped + '")' : '"' + escaped + '"';
   } else if (/^literal\((\d+)\)$/i.test(base)) {
     var litNum = base.match(/^literal\((\d+)\)$/i)[1];
     result = mode === 'col' ? 'lit(' + litNum + ')' : litNum;

@@ -25,6 +25,7 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
   // -- Wait --
   if (p.type === 'Wait') {
     const signalId = props['Release Signal Identifier'] || 'batch_signal';
+    const safeSignalId = signalId.replace(/'/g, "''");
     const timeout = props['Expiration Duration'] || '5 min';
     code = '# Wait: ' + p.name + ' | Signal: ' + signalId + '\n' +
       '#\n' +
@@ -41,12 +42,12 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
       '    .option("readChangeFeed", "true")\n' +
       '    .option("startingVersion", "latest")\n' +
       '    .table("workflow_signals")\n' +
-      '    .filter("signal_id = \'' + signalId + '\' AND status = \'ready\'")\n' +
+      '    .filter("signal_id = \'' + safeSignalId + '\' AND status = \'ready\'")\n' +
       ')\n\n' +
       'def _on_signal_' + varName + '(signal_batch, batch_id):\n' +
       '    if signal_batch.count() > 0:\n' +
       '        print(f"[WAIT] Signal ' + signalId + ' received in batch {batch_id}")\n' +
-      '        spark.sql("UPDATE workflow_signals SET status = \'consumed\' WHERE signal_id = \'' + signalId + '\'")\n\n' +
+      '        spark.sql("UPDATE workflow_signals SET status = \'consumed\' WHERE signal_id = \'' + safeSignalId + '\'")\n\n' +
       '(df_' + varName + '.writeStream\n' +
       '    .foreachBatch(_on_signal_' + varName + ')\n' +
       '    .option("checkpointLocation", "/Volumes/<catalog>/<schema>/tmp/checkpoints/wait_' + signalId + '")\n' +
@@ -64,6 +65,7 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
   // -- Notify --
   if (p.type === 'Notify') {
     const signalId = props['Release Signal Identifier'] || 'batch_signal';
+    const safeSignalId = signalId.replace(/'/g, "''");
     code = '# Notify: ' + p.name + ' | Signal: ' + signalId + '\n' +
       '# Ensure signals table exists with CDF enabled\n' +
       'spark.sql("""\n' +
@@ -75,7 +77,7 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
       '# Emit signal for downstream Wait processors\n' +
       'spark.sql(f"""\n' +
       'MERGE INTO workflow_signals t\n' +
-      "USING (SELECT '" + signalId + "' AS signal_id, 'ready' AS status, NULL AS payload, current_timestamp() AS ts) s\n" +
+      "USING (SELECT '" + safeSignalId + "' AS signal_id, 'ready' AS status, NULL AS payload, current_timestamp() AS ts) s\n" +
       'ON t.signal_id = s.signal_id\n' +
       "WHEN MATCHED THEN UPDATE SET status = 'ready', ts = current_timestamp()\n" +
       'WHEN NOT MATCHED THEN INSERT *\n' +
@@ -176,7 +178,8 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
 
   // -- UpdateHiveTable --
   if (p.type === 'UpdateHiveTable') {
-    code = `# Hive DDL: ${p.name}\nspark.sql("ALTER TABLE ${props['Table Name'] || 'hive_table'} SET TBLPROPERTIES ('updated'='true')")\ndf_${varName} = df_${inputVar}`;
+    const tableName = props['Table Name'] || 'hive_table';
+    code = `# Hive DDL: ${p.name}\nspark.sql("ALTER TABLE \`${tableName}\` SET TBLPROPERTIES ('updated'='true')")\ndf_${varName} = df_${inputVar}`;
     conf = 0.92;
     return { code, conf };
   }
