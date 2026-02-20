@@ -212,6 +212,61 @@ export function applyNELFunction(base, call, mode) {
       : 're.search(r"' + resolvedRegex + '", ' + base + ')';
   }
 
+
+  // -- Encoding/escaping functions --
+  if (name === 'evaluateelstring') {
+    // evaluateELString -> f-string / .format()
+    return mode === 'col' ? base : base + '  # evaluateELString: use f-string or .format()';
+  }
+  if (name === 'unescapejson') {
+    var schema = args[0] ? unquoteArg(args[0]) : 'STRING';
+    return mode === 'col' ? 'from_json(' + base + ', "' + schema + '")' : 'json.loads(' + base + ')';
+  }
+  if (name === 'unescapexml') {
+    var xpath = args[0] ? unquoteArg(args[0]) : '/';
+    return mode === 'col' ? 'xpath_string(' + base + ', "' + xpath + '")' : '__import__("html").unescape(' + base + ')';
+  }
+  if (name === 'unescapecsv') {
+    return mode === 'col' ? 'split(' + base + ', ",")' : base + '.split(",")';
+  }
+  if (name === 'escapejson') {
+    return mode === 'col' ? 'to_json(' + base + ')' : 'json.dumps(' + base + ')';
+  }
+  if (name === 'escapecsv') {
+    return mode === 'col' ? 'concat_ws(",", ' + base + ')' : '",".join(' + base + ')';
+  }
+
+  // -- Conditional functions --
+  if (name === 'in') {
+    var inList = args.map(function(a) { return unquoteArg(a); });
+    if (mode === 'col') {
+      return base + '.isin(' + inList.map(function(v) { return '"' + v + '"'; }).join(', ') + ')';
+    }
+    return base + ' in [' + inList.map(function(v) { return '"' + v + '"'; }).join(', ') + ']';
+  }
+
+  // -- Math namespace functions --
+  if (name === 'math:tonumber' || name === 'tonumber') return mode === 'col' ? base + '.cast("double")' : 'float(' + base + ')';
+  if (name === 'math:floor') return mode === 'col' ? 'floor(' + base + ')' : 'import math; math.floor(' + base + ')';
+  if (name === 'math:ceil' || name === 'math:ceiling') return mode === 'col' ? 'ceil(' + base + ')' : 'import math; math.ceil(' + base + ')';
+  if (name === 'math:abs') return mode === 'col' ? 'abs(' + base + ')' : 'abs(' + base + ')';
+  if (name === 'math:mod') {
+    var mathModV = args[0] || '1';
+    return mode === 'col' ? '(' + base + ' % lit(' + mathModV + '))' : '(' + base + ' % ' + mathModV + ')';
+  }
+  if (name === 'math:multiply') {
+    var mathMulV = args[0] || '1';
+    return mode === 'col' ? '(' + base + ' * lit(' + mathMulV + '))' : '(' + base + ' * ' + mathMulV + ')';
+  }
+  if (name === 'math:max') {
+    var maxArg = args[0] ? resolveNELArg(args[0], mode) : '0';
+    return mode === 'col' ? 'greatest(' + base + ', ' + maxArg + ')' : 'max(' + base + ', ' + maxArg + ')';
+  }
+  if (name === 'math:min') {
+    var minArg = args[0] ? resolveNELArg(args[0], mode) : '0';
+    return mode === 'col' ? 'least(' + base + ', ' + minArg + ')' : 'min(' + base + ', ' + minArg + ')';
+  }
+
   // -- Unknown function -> comment --
   return base + '  /* NEL: ' + call + ' */';
 }

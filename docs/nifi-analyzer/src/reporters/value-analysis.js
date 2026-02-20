@@ -248,20 +248,33 @@ export function runValueAnalysis({ nifi, notebook, escapeHTML }) {
   // ════════════════════════════════════════════
   h += '<h3 style="margin:24px 0 12px;color:var(--primary)">5. Migration ROI Summary</h3>';
 
-  const nifiComplexity = procs.length * 2 + conns.length + (nifi.controllerServices || []).length * 3 + Object.keys(extSystems).length * 5;
+  // Complexity scoring: account for nested groups, controller chains, routing multiplier
+  const nestedGroupDepth = nifi.processGroups.reduce((max, pg) => {
+    const depth = (pg.path || pg.name || '').split('/').length;
+    return Math.max(max, depth);
+  }, 1);
+  const routingMultiplier = routes.length > 0 ? 1 + (routes.length * 0.15) : 1;
+  const controllerChainWeight = (nifi.controllerServices || []).length * 4;
+  const nifiComplexity = Math.round(
+    (procs.length * 2 + conns.length + controllerChainWeight + Object.keys(extSystems).length * 5 + nestedGroupDepth * 3) * routingMultiplier
+  );
   const dbxComplexity = essentialCount * 2 + Object.keys(extSystems).length * 3;
   const complexityReduction = nifiComplexity > 0 ? Math.round((1 - dbxComplexity / nifiComplexity) * 100) : 0;
 
-  const newCaps = [
-    { name: 'ACID Transactions', desc: 'Delta Lake provides full ACID guarantees on all data operations', icon: '&#128274;' },
-    { name: 'Time Travel', desc: 'Query and restore previous versions of data with VERSION AS OF', icon: '&#9200;' },
-    { name: 'Unity Catalog Governance', desc: 'Centralized access control, lineage, and audit logging', icon: '&#128737;' },
-    { name: 'ML Integration', desc: 'Seamless integration with MLflow, Feature Store, and model serving', icon: '&#129302;' },
-    { name: 'Auto Scaling', desc: 'Automatic cluster scaling based on workload demand', icon: '&#128200;' },
-    { name: 'Photon Engine', desc: 'Vectorized query engine for 2-8x performance improvement', icon: '&#9889;' },
-    { name: 'Delta Live Tables', desc: 'Declarative data pipelines with built-in quality management', icon: '&#128736;' },
-    { name: 'Liquid Clustering', desc: 'Automatic data layout optimization replacing manual Z-ordering', icon: '&#128204;' }
+  // Context-aware capabilities — only show relevant ones
+  const allCaps = [
+    { name: 'ACID Transactions', desc: 'Delta Lake provides full ACID guarantees on all data operations', icon: '&#128274;', when: () => true },
+    { name: 'Time Travel', desc: 'Query and restore previous versions of data with VERSION AS OF', icon: '&#9200;', when: () => true },
+    { name: 'Unity Catalog Governance', desc: 'Centralized access control, lineage, and audit logging', icon: '&#128737;', when: () => (nifi.controllerServices || []).length > 0 || Object.keys(extSystems).length > 0 },
+    { name: 'ML Integration', desc: 'Seamless integration with MLflow, Feature Store, and model serving', icon: '&#129302;', when: () => procs.some(p => /Execute(Script|Stream)|Predict|ML|Model/i.test(p.type)) },
+    { name: 'Auto Scaling', desc: 'Automatic cluster scaling based on workload demand', icon: '&#128200;', when: () => procs.length > 10 },
+    { name: 'Photon Engine', desc: 'Vectorized query engine for 2-8x performance improvement', icon: '&#9889;', when: () => transforms.length > 3 || procs.some(p => /SQL|Query|Convert/i.test(p.type)) },
+    { name: 'Delta Live Tables', desc: 'Declarative data pipelines with built-in quality management', icon: '&#128736;', when: () => true },
+    { name: 'Liquid Clustering', desc: 'Automatic data layout optimization replacing manual Z-ordering', icon: '&#128204;', when: () => procs.some(p => /Merge|Partition|Sort/i.test(p.type)) },
+    { name: 'Structured Streaming', desc: 'Unified batch and streaming with exactly-once processing', icon: '&#127919;', when: () => procs.some(p => /Consume|Subscribe|Listen|Kafka|JMS/i.test(p.type)) },
+    { name: 'Secret Scopes', desc: 'Secure credential management replacing NiFi controller services', icon: '&#128272;', when: () => (nifi.controllerServices || []).some(cs => /SSL|Password|Credential|DBCP/i.test(cs.type)) },
   ];
+  const newCaps = allCaps.filter(c => c.when());
 
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">';
 

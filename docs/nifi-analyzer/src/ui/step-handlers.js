@@ -5,14 +5,25 @@
  * parseInput, runAnalysis, runAssessment, generateNotebook, generateReport.
  */
 
-import { getState, setState } from '../core/state.js';
+import { getState, setState, snapshotState, rollbackState, validatePrerequisites } from '../core/state.js';
 import { escapeHTML } from '../security/html-sanitizer.js';
 import { isSensitiveProp, maskProperty } from '../security/sensitive-props.js';
 import { switchTab, setTabStatus, unlockTab } from './tabs.js';
-import { getUploadedContent, getUploadedName } from './file-upload.js';
+import { getUploadedContent, getUploadedName, getUploadedBytes } from './file-upload.js';
 import { parseProgress, parseProgressHide, uiYield } from './progress.js';
 import { buildTierData } from './tier-diagram/build-tier-data.js';
 import { renderTierDiagram } from './tier-diagram/index.js';
+import { handleError, AppError } from '../core/errors.js';
+
+/**
+ * Show an error alert in a target element.
+ * @param {string} targetId - DOM element ID for error display
+ * @param {string} message - Error message
+ */
+function showStepError(targetId, message) {
+  const el = document.getElementById(targetId);
+  if (el) el.innerHTML = `<div class="alert alert-error">${escapeHTML(message)}</div>`;
+}
 
 // Parsers
 import { parseFlow } from '../parsers/index.js';
@@ -101,11 +112,11 @@ if (typeof document !== 'undefined') {
  */
 export async function parseInput() {
   const uploadedContent = getUploadedContent();
+  const uploadedBytesData = getUploadedBytes();
   const pasteEl = document.getElementById('pasteInput');
   const raw = uploadedContent || (pasteEl ? pasteEl.value : '');
-  if (!raw.trim()) {
-    const parseResultsEl = document.getElementById('parseResults');
-    if (parseResultsEl) parseResultsEl.innerHTML = '<div class="alert alert-error">Please upload or paste a NiFi flow XML.</div>';
+  if (!raw.trim() && !uploadedBytesData) {
+    showStepError('parseResults', 'Please upload or paste a NiFi flow file (XML, JSON, SQL, or archive).');
     return;
   }
 
@@ -116,24 +127,25 @@ export async function parseInput() {
   const prog = document.getElementById('parseProgress');
   if (prog) prog.style.display = 'flex';
   const bar = document.getElementById('parsePBar');
-  const pct = document.getElementById('parsePPct');
+  const pctEl = document.getElementById('parsePPct');
   const status = document.getElementById('parsePStatus');
   const updateProg = (p, msg) => {
     if (bar) bar.style.width = p + '%';
-    if (pct) pct.textContent = p + '%';
+    if (pctEl) pctEl.textContent = p + '%';
     if (status) status.textContent = msg;
   };
 
   updateProg(10, 'Cleaning & parsing input...');
-  await new Promise(r => setTimeout(r, 50));
+  await new Promise(r => setTimeout(r, 20));
 
   let parsed;
   const uploadedName = getUploadedName();
+
   try {
-    parsed = parseFlow(raw, uploadedName || 'NiFi Flow');
+    parsed = await parseFlow(raw, uploadedName || 'NiFi Flow', { bytes: uploadedBytesData });
   } catch (e) {
-    const parseResultsEl = document.getElementById('parseResults');
-    if (parseResultsEl) parseResultsEl.innerHTML = '<div class="alert alert-error">Failed to parse: ' + escapeHTML(e.message) + '</div>';
+    handleError(new AppError('Parse failed: ' + e.message, { code: 'PARSE_FAILED', phase: 'parse', severity: 'high', cause: e }));
+    showStepError('parseResults', 'Failed to parse: ' + e.message);
     if (btn) btn.disabled = false;
     setTabStatus('load', 'ready');
     if (prog) prog.style.display = 'none';
@@ -141,11 +153,10 @@ export async function parseInput() {
   }
 
   updateProg(20, 'Validating flow...');
-  await new Promise(r => setTimeout(r, 50));
+  await new Promise(r => setTimeout(r, 20));
 
   if (!parsed || !parsed._nifi || parsed._nifi.processors.length === 0) {
-    const parseResultsEl = document.getElementById('parseResults');
-    if (parseResultsEl) parseResultsEl.innerHTML = '<div class="alert alert-error">No NiFi processors found. Please provide a valid NiFi flow XML.</div>';
+    showStepError('parseResults', 'No processors found. Supported formats: NiFi XML/JSON, SQL scripts, .gz/.zip/.nar/.jar archives, .docx/.xlsx documents.');
     if (btn) btn.disabled = false;
     setTabStatus('load', 'ready');
     if (prog) prog.style.display = 'none';
@@ -154,18 +165,23 @@ export async function parseInput() {
 
   updateProg(50, 'Processing flow...');
   if (parsed._deferredProcessorWork) {
-    const work = parsed._deferredProcessorWork;
-    const batchSize = 50;
-    for (let i = 0; i < work.processors.length; i += batchSize) {
-      work.batchFn(work.processors.slice(i, i + batchSize));
-      updateProg(50 + Math.round((i / work.processors.length) * 30), 'Analyzing processor ' + (i + 1) + '/' + work.processors.length + '...');
-      await new Promise(r => setTimeout(r, 0));
+    try {
+      const work = parsed._deferredProcessorWork;
+      const batchSize = 50;
+      for (let i = 0; i < work.processors.length; i += batchSize) {
+        work.batchFn(work.processors.slice(i, i + batchSize));
+        const pct = 50 + Math.round((i / work.processors.length) * 30);
+        updateProg(pct, 'Analyzing processor ' + (i + 1) + '/' + work.processors.length + '...');
+        await new Promise(r => setTimeout(r, 0));
+      }
+      work.finalize();
+    } catch (e) {
+      handleError(new AppError('Deferred processor work failed', { code: 'DEFERRED_WORK_FAILED', phase: 'parse', cause: e }));
     }
-    work.finalize();
   }
 
   updateProg(85, 'Building resource manifest...');
-  await new Promise(r => setTimeout(r, 50));
+  await new Promise(r => setTimeout(r, 20));
 
   setState({ parsed, manifest: buildResourceManifest(parsed._nifi) });
 
@@ -209,31 +225,33 @@ export async function parseInput() {
   if (analyzeReady) analyzeReady.classList.remove('hidden');
   setTimeout(() => { if (prog) prog.style.display = 'none'; }, 500);
 
-  // Auto-run all steps sequentially
-  await new Promise(r => setTimeout(r, 200));
-  switchTab('analyze'); runAnalysis();
-  await new Promise(r => setTimeout(r, 150));
-  switchTab('assess'); runAssessment();
-  await new Promise(r => setTimeout(r, 150));
-  switchTab('convert'); generateNotebook();
-  await new Promise(r => setTimeout(r, 150));
-  switchTab('report'); generateReport();
-  await new Promise(r => setTimeout(r, 150));
-  // Additional steps (reportFinal, validate, value) are called from the
-  // monolithic HTML and will be wired up in later extraction phases.
-  if (typeof window.generateFinalReport === 'function') {
-    switchTab('reportFinal');
-    await window.generateFinalReport();
-  }
-  await new Promise(r => setTimeout(r, 150));
-  if (typeof window.runValidation === 'function') {
-    switchTab('validate');
-    await window.runValidation();
-  }
-  await new Promise(r => setTimeout(r, 150));
-  if (typeof window.runValueAnalysis === 'function') {
-    switchTab('value');
-    window.runValueAnalysis();
+  // Auto-run all steps sequentially with proper await
+  try {
+    await new Promise(r => setTimeout(r, 50));
+    switchTab('analyze'); await runAnalysis();
+    await new Promise(r => setTimeout(r, 50));
+    switchTab('assess'); await runAssessment();
+    await new Promise(r => setTimeout(r, 50));
+    switchTab('convert'); await generateNotebook();
+    await new Promise(r => setTimeout(r, 50));
+    switchTab('report'); await generateReport();
+    await new Promise(r => setTimeout(r, 50));
+    if (typeof window.generateFinalReport === 'function') {
+      switchTab('reportFinal');
+      await window.generateFinalReport();
+    }
+    await new Promise(r => setTimeout(r, 50));
+    if (typeof window.runValidation === 'function') {
+      switchTab('validate');
+      await window.runValidation();
+    }
+    await new Promise(r => setTimeout(r, 50));
+    if (typeof window.runValueAnalysis === 'function') {
+      switchTab('value');
+      await window.runValueAnalysis();
+    }
+  } catch (e) {
+    handleError(new AppError('Auto-run pipeline failed', { code: 'PIPELINE_AUTO_RUN_FAILED', phase: 'pipeline', cause: e }));
   }
 }
 
@@ -245,19 +263,25 @@ export async function parseInput() {
  * Run deep flow analysis.
  * Extracted from index.html lines 7483-7590.
  */
-export function runAnalysis() {
+export async function runAnalysis() {
+  const prereq = validatePrerequisites('analyze');
+  if (!prereq.ok) {
+    showStepError('analyzeResults', 'Prerequisites not met: ' + prereq.missing.join(', ') + '. Please complete earlier steps first.');
+    return;
+  }
   const STATE = getState();
-  if (!STATE.parsed || !STATE.parsed._nifi) return;
+  const snapshot = snapshotState();
   setTabStatus('analyze', 'processing');
 
+  try {
   const nifi = STATE.parsed._nifi;
   const manifest = STATE.manifest;
   const depGraph = buildDependencyGraph(nifi);
   const systems = detectExternalSystems(nifi);
   let h = '';
-  const elCount = Object.keys(nifi.deepPropertyInventory.nifiEL || {}).length;
+  const elCount = Object.keys(nifi.deepPropertyInventory?.nifiEL || {}).length;
   const sqlCount = nifi.sqlTables ? nifi.sqlTables.length : 0;
-  const credCount = Object.keys(nifi.deepPropertyInventory.credentialRefs || {}).length;
+  const credCount = Object.keys(nifi.deepPropertyInventory?.credentialRefs || {}).length;
   const sysCount = Object.keys(systems).length;
   h += metricsHTML([
     { label: 'Processors', value: nifi.processors.length },
@@ -369,13 +393,22 @@ export function runAnalysis() {
   if (analyzeResultsEl) analyzeResultsEl.innerHTML = h;
 
   setState({ analysis: { blueprint, tierData, depGraph, systems } });
-  setTimeout(() => { renderTierDiagram(tierData, 'analysisTierContainer', 'analysisTierDetail', 'analysisTierLegend'); }, 50);
+  setTimeout(() => {
+    try { renderTierDiagram(tierData, 'analysisTierContainer', 'analysisTierDetail', 'analysisTierLegend'); }
+    catch (e) { console.error('[analyze] Tier diagram render error:', e); }
+  }, 50);
   setTabStatus('analyze', 'done');
   unlockTab('assess');
   const assessNotReady = document.getElementById('assessNotReady');
   const assessReady = document.getElementById('assessReady');
   if (assessNotReady) assessNotReady.classList.add('hidden');
   if (assessReady) assessReady.classList.remove('hidden');
+  } catch (e) {
+    rollbackState(snapshot);
+    handleError(new AppError('Analysis failed: ' + e.message, { code: 'ANALYZE_FAILED', phase: 'analyze', cause: e }));
+    showStepError('analyzeResults', 'Analysis failed: ' + e.message);
+    setTabStatus('analyze', 'ready');
+  }
 }
 
 // ================================================================
@@ -386,11 +419,17 @@ export function runAnalysis() {
  * Run migration readiness assessment.
  * Extracted from index.html lines 7596-7696.
  */
-export function runAssessment() {
+export async function runAssessment() {
+  const prereq = validatePrerequisites('assess');
+  if (!prereq.ok) {
+    showStepError('assessResults', 'Prerequisites not met: ' + prereq.missing.join(', ') + '. Please complete earlier steps first.');
+    return;
+  }
   const STATE = getState();
-  if (!STATE.parsed || !STATE.parsed._nifi) return;
+  const snapshot = snapshotState();
   setTabStatus('assess', 'processing');
 
+  try {
   const nifi = STATE.parsed._nifi;
   const mappings = mapNiFiToDatabricks(nifi);
   const depGraph = buildDependencyGraph(nifi);
@@ -462,6 +501,12 @@ export function runAssessment() {
   const convertReady = document.getElementById('convertReady');
   if (convertNotReady) convertNotReady.classList.add('hidden');
   if (convertReady) convertReady.classList.remove('hidden');
+  } catch (e) {
+    rollbackState(snapshot);
+    handleError(new AppError('Assessment failed: ' + e.message, { code: 'ASSESS_FAILED', phase: 'assess', cause: e }));
+    showStepError('assessResults', 'Assessment failed: ' + e.message);
+    setTabStatus('assess', 'ready');
+  }
 }
 
 // ================================================================
@@ -472,14 +517,21 @@ export function runAssessment() {
  * Generate the Databricks notebook.
  * Extracted from index.html lines 7698-7810.
  */
-export function generateNotebook() {
+export async function generateNotebook() {
+  const prereq = validatePrerequisites('convert');
+  if (!prereq.ok) {
+    showStepError('notebookResults', 'Prerequisites not met: ' + prereq.missing.join(', ') + '. Please complete earlier steps first.');
+    return;
+  }
   const STATE = getState();
-  if (!STATE.parsed || !STATE.parsed._nifi) return;
+  const snapshot = snapshotState();
   setTabStatus('convert', 'processing');
 
+  try {
   const nifi = STATE.parsed._nifi;
   const cfg = getDbxConfig();
-  const mappings = STATE.assessment ? STATE.assessment.mappings : mapNiFiToDatabricks(nifi);
+  // Single source of truth: always use assessment mappings if available
+  const mappings = STATE.assessment?.mappings || mapNiFiToDatabricks(nifi);
   const nbResult = generateDatabricksNotebook(mappings, nifi, STATE.analysis ? STATE.analysis.blueprint : assembleBlueprint(STATE.parsed), cfg);
   const cells = nbResult.cells;
 
@@ -532,6 +584,12 @@ export function generateNotebook() {
   if (reportNotReady) reportNotReady.classList.add('hidden');
   if (reportReady) reportReady.classList.remove('hidden');
   unlockTab('report');
+  } catch (e) {
+    rollbackState(snapshot);
+    handleError(new AppError('Notebook generation failed: ' + e.message, { code: 'GENERATE_FAILED', phase: 'convert', cause: e }));
+    showStepError('notebookResults', 'Notebook generation failed: ' + e.message);
+    setTabStatus('convert', 'ready');
+  }
 }
 
 // ================================================================
@@ -542,11 +600,17 @@ export function generateNotebook() {
  * Generate the migration report.
  * Extracted from index.html lines 7844-7938.
  */
-export function generateReport() {
+export async function generateReport() {
+  const prereq = validatePrerequisites('report');
+  if (!prereq.ok) {
+    showStepError('reportResults', 'Prerequisites not met: ' + prereq.missing.join(', ') + '. Please complete earlier steps first.');
+    return;
+  }
   const STATE = getState();
-  if (!STATE.notebook || !STATE.parsed || !STATE.parsed._nifi) return;
+  const snapshot = snapshotState();
   setTabStatus('report', 'processing');
 
+  try {
   const nifi = STATE.parsed._nifi;
   const report = generateMigrationReport(STATE.notebook.mappings, nifi);
   setState({ migrationReport: report });
@@ -616,4 +680,10 @@ export function generateReport() {
   if (reportFinalNotReady) reportFinalNotReady.classList.add('hidden');
   if (reportFinalReady) reportFinalReady.classList.remove('hidden');
   unlockTab('reportFinal');
+  } catch (e) {
+    rollbackState(snapshot);
+    handleError(new AppError('Report generation failed: ' + e.message, { code: 'REPORT_FAILED', phase: 'report', cause: e }));
+    showStepError('reportResults', 'Report generation failed: ' + e.message);
+    setTabStatus('report', 'ready');
+  }
 }

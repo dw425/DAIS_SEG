@@ -77,6 +77,67 @@ export function resetState() {
   _notify(prev);
 }
 
+/**
+ * Step prerequisites — keys required in state before a step can run.
+ */
+const STEP_PREREQUISITES = Object.freeze({
+  analyze:     ['parsed'],
+  assess:      ['parsed'],
+  convert:     ['parsed', 'assessment'],
+  report:      ['parsed', 'notebook'],
+  reportFinal: ['parsed'],
+  validate:    ['parsed', 'notebook'],
+  value:       ['parsed', 'notebook'],
+});
+
+/**
+ * Deep-clone the current state for snapshot/rollback.
+ * @returns {object} Deep copy of state
+ */
+export function snapshotState() {
+  return JSON.parse(JSON.stringify(_state));
+}
+
+/**
+ * Restore state from a previous snapshot.
+ * @param {object} snapshot - Previously captured state
+ */
+export function rollbackState(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return;
+  const prev = { ..._state };
+  _state = { ...snapshot };
+  _notify(prev);
+}
+
+/**
+ * Return a map of step name → boolean indicating completion.
+ * @returns {object}
+ */
+export function getStepStatus() {
+  return {
+    parse:       _state.parsed != null,
+    analyze:     _state.analysis != null,
+    assess:      _state.assessment != null,
+    convert:     _state.notebook != null,
+    report:      _state.migrationReport != null,
+    reportFinal: _state.finalReport != null,
+    validate:    _state.validation != null,
+    value:       _state.valueAnalysis != null,
+  };
+}
+
+/**
+ * Check whether prerequisites for a step are satisfied.
+ * @param {string} stepName - Step key from STEP_PREREQUISITES
+ * @returns {{ok:boolean, missing:string[]}}
+ */
+export function validatePrerequisites(stepName) {
+  const required = STEP_PREREQUISITES[stepName];
+  if (!required) return { ok: true, missing: [] };
+  const missing = required.filter(key => _state[key] == null);
+  return { ok: missing.length === 0, missing };
+}
+
 /* ---- internal ---- */
 
 function _notify(prev) {

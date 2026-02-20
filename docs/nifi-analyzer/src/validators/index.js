@@ -120,6 +120,10 @@ export async function runValidationEngine({
     nifiDatabricksMap,
   });
 
+  // ── ANALYSIS 5: Import Validation ──
+  progress(92, 'Checking notebook imports...');
+  const missingImports = validateImports(cells);
+
   progress(100, 'Validation complete!');
 
   return {
@@ -144,6 +148,50 @@ export async function runValidationEngine({
     allGaps: feedback.allGaps,
     gapsByType: feedback.gapsByType,
     connMap,
+    missingImports,
     timestamp: new Date().toISOString(),
   };
+}
+
+/**
+ * Scan notebook cells for API usage that lacks a corresponding import.
+ * @param {Array} cells - Generated notebook cells
+ * @returns {Array<{symbol:string, usedIn:number, suggestion:string}>}
+ */
+function validateImports(cells) {
+  const IMPORT_PATTERNS = [
+    { pattern: /\bspark\.read/i, symbol: 'SparkSession', suggestion: 'from pyspark.sql import SparkSession' },
+    { pattern: /\bcol\s*\(/i, symbol: 'col', suggestion: 'from pyspark.sql.functions import col' },
+    { pattern: /\blit\s*\(/i, symbol: 'lit', suggestion: 'from pyspark.sql.functions import lit' },
+    { pattern: /\bwhen\s*\(/i, symbol: 'when', suggestion: 'from pyspark.sql.functions import when' },
+    { pattern: /\bexpr\s*\(/i, symbol: 'expr', suggestion: 'from pyspark.sql.functions import expr' },
+    { pattern: /\bstruct\s*\(/i, symbol: 'struct', suggestion: 'from pyspark.sql.functions import struct' },
+    { pattern: /\barray\s*\(/i, symbol: 'array', suggestion: 'from pyspark.sql.functions import array' },
+    { pattern: /\bfrom_json\s*\(/i, symbol: 'from_json', suggestion: 'from pyspark.sql.functions import from_json' },
+    { pattern: /\bto_json\s*\(/i, symbol: 'to_json', suggestion: 'from pyspark.sql.functions import to_json' },
+    { pattern: /\bStructType\s*\(/i, symbol: 'StructType', suggestion: 'from pyspark.sql.types import StructType' },
+    { pattern: /\bStructField\s*\(/i, symbol: 'StructField', suggestion: 'from pyspark.sql.types import StructField' },
+    { pattern: /\bStringType\s*\(/i, symbol: 'StringType', suggestion: 'from pyspark.sql.types import StringType' },
+    { pattern: /\bIntegerType\s*\(/i, symbol: 'IntegerType', suggestion: 'from pyspark.sql.types import IntegerType' },
+    { pattern: /\bpandas_udf/i, symbol: 'pandas_udf', suggestion: 'from pyspark.sql.functions import pandas_udf' },
+    { pattern: /\bWindow\./i, symbol: 'Window', suggestion: 'from pyspark.sql.window import Window' },
+    { pattern: /\bjson\.loads/i, symbol: 'json', suggestion: 'import json' },
+    { pattern: /\bre\./i, symbol: 're', suggestion: 'import re' },
+    { pattern: /\bdatetime\./i, symbol: 'datetime', suggestion: 'from datetime import datetime' },
+    { pattern: /\bbase64\./i, symbol: 'base64', suggestion: 'import base64' },
+    { pattern: /\bhashlib\./i, symbol: 'hashlib', suggestion: 'import hashlib' },
+  ];
+
+  const allText = cells.map(c => c.source || '').join('\n');
+  const importLines = allText.split('\n').filter(l => /^\s*(import |from .+ import )/.test(l)).join('\n');
+  const missing = [];
+
+  for (const { pattern, symbol, suggestion } of IMPORT_PATTERNS) {
+    if (pattern.test(allText) && !importLines.includes(symbol)) {
+      const usedIn = cells.findIndex(c => pattern.test(c.source || ''));
+      missing.push({ symbol, usedIn, suggestion });
+    }
+  }
+
+  return missing;
 }

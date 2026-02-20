@@ -40,7 +40,7 @@ import { handleError, AppError, wrapAsync, clearErrorLog } from './core/errors.j
 // ================================================================
 import { initTabs, switchTab, setTabStatus, unlockTab } from './ui/tabs.js';
 import { escapeHTML } from './security/html-sanitizer.js';
-import { initFileUpload, getUploadedContent, getUploadedName } from './ui/file-upload.js';
+import { initFileUpload, getUploadedContent, getUploadedName, getUploadedBytes } from './ui/file-upload.js';
 import { loadSampleFlow, loadSampleFile } from './ui/sample-flows.js';
 import { parseProgress, parseProgressHide, uiYield } from './ui/progress.js';
 import { showPathToast, hidePathToast, flashNoPath } from './ui/toast.js';
@@ -574,11 +574,25 @@ document.addEventListener('DOMContentLoaded', () => {
       ]);
       if (result.allGaps && result.allGaps.length) {
         vh += '<hr class="divider"><h3>Gaps (' + result.allGaps.length + ')</h3>';
+        const PAGE = 50;
+        const pages = Math.ceil(result.allGaps.length / PAGE);
+        for (let p = 0; p < pages; p++) {
+          const s = p * PAGE, e = Math.min(s + PAGE, result.allGaps.length);
+          const title = pages > 1 ? `Gaps ${s + 1}-${e}` : 'All Gaps';
+          vh += `<div class="expander ${p === 0 ? 'open' : ''}"><div class="expander-header" data-expander-toggle><span>${title}</span><span class="expander-arrow">\u25B6</span></div><div class="expander-body">`;
+          vh += '<ul style="margin:0;padding-left:20px;font-size:0.85rem">';
+          result.allGaps.slice(s, e).forEach(g => {
+            vh += '<li style="margin:4px 0"><strong>' + escapeHTML(g.processor || g.name || '') + '</strong>: ' + escapeHTML(g.gap || g.reason || g.message || '') + '</li>';
+          });
+          vh += '</ul></div></div>';
+        }
+      }
+      if (result.missingImports && result.missingImports.length) {
+        vh += '<hr class="divider"><h3>Missing Imports (' + result.missingImports.length + ')</h3>';
         vh += '<ul style="margin:0;padding-left:20px;font-size:0.85rem">';
-        result.allGaps.slice(0, 30).forEach(g => {
-          vh += '<li style="margin:4px 0">' + escapeHTML(g.processor || g.name || '') + ': ' + escapeHTML(g.gap || g.reason || g.message || '') + '</li>';
+        result.missingImports.forEach(mi => {
+          vh += '<li style="margin:4px 0"><code>' + escapeHTML(mi.module || '') + '</code> needed by ' + escapeHTML(mi.cell || '') + '</li>';
         });
-        if (result.allGaps.length > 30) vh += '<li>... and ' + (result.allGaps.length - 30) + ' more</li>';
         vh += '</ul>';
       }
       vh += '<hr class="divider"><button class="btn" onclick="downloadValidationReport()">Download Validation Report</button>';

@@ -11,6 +11,20 @@
 import { classifyNiFiProcessor } from '../mappers/processor-classifier.js';
 
 /**
+ * Mask sensitive property values including JDBC credentials.
+ * @param {string} key - Property name
+ * @param {string} value - Property value
+ * @returns {string} Masked or original value
+ */
+function maskSensitiveValue(key, value) {
+  if (/password|secret|token|key|credential/i.test(key)) return '***';
+  if (typeof value === 'string') {
+    return value.replace(/(jdbc:\w+:\/\/)([^:]+):([^@]+)@/g, '$1$2:***@');
+  }
+  return value;
+}
+
+/**
  * Build the final analysis report JSON from application state.
  *
  * @param {object} STATE - The application state object
@@ -19,7 +33,7 @@ import { classifyNiFiProcessor } from '../mappers/processor-classifier.js';
 export function buildFinalReportJSON(STATE) {
   const nifi = STATE.parsed ? STATE.parsed._nifi : null;
   const report = {
-    meta: { generated: new Date().toISOString(), tool: 'NiFi Flow Analyzer', version: '1.0' },
+    meta: { generated: new Date().toISOString(), tool: 'NiFi Flow Analyzer', version: '2.0.1', flow_name: STATE.parsed ? STATE.parsed.source_name : 'unknown' },
     flow_summary: {
       source_name: STATE.parsed ? STATE.parsed.source_name : 'Unknown',
       processor_count: nifi ? nifi.processors.length : 0,
@@ -32,7 +46,7 @@ export function buildFinalReportJSON(STATE) {
       name: p.name, type: p.type, group: p.group, state: p.state,
       role: classifyNiFiProcessor(p.type),
       scheduling: { strategy: p.schedulingStrategy, period: p.schedulingPeriod },
-      properties: Object.fromEntries(Object.entries(p.properties).map(([k, v]) => [k, /password|secret|token/i.test(k) ? '***' : v]))
+      properties: Object.fromEntries(Object.entries(p.properties).map(([k, v]) => [k, maskSensitiveValue(k, v)]))
     })) : [],
     connections: nifi ? nifi.connections.map(c => ({
       source: c.sourceName, destination: c.destinationName,
@@ -40,7 +54,7 @@ export function buildFinalReportJSON(STATE) {
     })) : [],
     controller_services: nifi ? nifi.controllerServices.map(cs => ({
       name: cs.name, type: cs.type,
-      properties: Object.fromEntries(Object.entries(cs.properties).map(([k, v]) => [k, /password|secret|token/i.test(k) ? '***' : v]))
+      properties: Object.fromEntries(Object.entries(cs.properties).map(([k, v]) => [k, maskSensitiveValue(k, v)]))
     })) : [],
     assessment: STATE.assessment ? {
       readiness_score: STATE.assessment.readinessScore,

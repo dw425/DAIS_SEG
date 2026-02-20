@@ -48,7 +48,15 @@ export function generateMigrationReport(mappings, nifi) {
   if (mapped > total * 0.8) recs.push('High coverage — prioritize testing the mapped processors before addressing gaps');
   recs.push('Run the generated notebook in a Databricks workspace to validate each cell');
   const coveragePct = total ? Math.round(mapped / total * 100) : 0;
-  const effort = coveragePct >= 85 ? 'Low' : coveragePct >= 60 ? 'Medium' : 'High';
+
+  // Weighted effort: accounts for processor type complexity
+  const EFFORT_WEIGHTS = {
+    source: 2, sink: 2, transform: 1, route: 1.5, process: 3, script: 4, custom: 5
+  };
+  const totalWeight = mappings.reduce((sum, m) => sum + (EFFORT_WEIGHTS[m.role] || 2), 0);
+  const mappedWeight = mappings.filter(m => m.mapped).reduce((sum, m) => sum + (EFFORT_WEIGHTS[m.role] || 2), 0);
+  const weightedCoverage = totalWeight > 0 ? Math.round(mappedWeight / totalWeight * 100) : 0;
+  const effort = weightedCoverage >= 85 ? 'Low' : weightedCoverage >= 60 ? 'Medium' : 'High';
   return {
     summary: {
       totalProcessors: total, mappedProcessors: mapped, unmappedProcessors: total - mapped, coveragePercent: coveragePct,
