@@ -95,7 +95,17 @@ const STEP_PREREQUISITES = Object.freeze({
  * @returns {object} Deep copy of state
  */
 export function snapshotState() {
-  return JSON.parse(JSON.stringify(_state));
+  return _deepClone(_state);
+}
+
+function _deepClone(obj) {
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (obj instanceof Set) return new Set([...obj].map(_deepClone));
+  if (obj instanceof Map) return new Map([...obj].map(([k, v]) => [_deepClone(k), _deepClone(v)]));
+  if (Array.isArray(obj)) return obj.map(_deepClone);
+  const out = {};
+  for (const k of Object.keys(obj)) out[k] = _deepClone(obj[k]);
+  return out;
 }
 
 /**

@@ -44,6 +44,7 @@ export function generateLoopFromCycle(cycle, mappings, lineage) {
       `    """Retry loop for: ${cycle.join(' \u2192 ')}"""\n` +
       `    result = df\n` +
       `${bodyCode}\n` +
+      `    result = _loop_result\n` +
       `    return result\n\n` +
       `try:\n` +
       `    df_${varName} = _retry_loop_${varName}(df_${varName})\n` +
@@ -52,8 +53,8 @@ export function generateLoopFromCycle(cycle, mappings, lineage) {
   }
 
   // Conditional loop
+  // _buildLoopBody already indents code at 4 spaces; use directly (no extra indent)
   const whileBody = loopBodyLines || '    _loop_result = _loop_df_' + varName + '  # passthrough (no mapped code)';
-  const indentedBody = whileBody.split('\n').map(l => l ? '    ' + l : l).join('\n');
   return `# Cycle detected: ${cycle.join(' \u2192 ')} \u2192 (loop back)\n` +
     `# Pattern: Conditional loop \u2014 converted to while iteration\n` +
     `_max_iterations = 100\n` +
@@ -62,7 +63,7 @@ export function generateLoopFromCycle(cycle, mappings, lineage) {
     `_loop_result = _loop_df_${varName}\n` +
     `while _iteration < _max_iterations:\n` +
     `    _iteration += 1\n` +
-    `${indentedBody}\n` +
+    `${whileBody}\n` +
     `    if _loop_result.count() == 0:\n` +
     `        break  # No more records to process\n` +
     `    _loop_df_${varName} = _loop_result\n` +

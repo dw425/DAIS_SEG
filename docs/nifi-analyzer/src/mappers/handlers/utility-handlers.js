@@ -90,11 +90,12 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
 
   // -- LogMessage --
   if (p.type === 'LogMessage') {
-    const level = props['log-level'] || 'info';
+    const nifiLevel = (props['log-level'] || 'info').toLowerCase();
+    const pyLevel = { trace: 'debug', debug: 'debug', info: 'info', warn: 'warning', error: 'error', fatal: 'critical' }[nifiLevel] || 'info';
     const prefix = props['log-prefix'] || '';
     const msg = props['log-message'] || '';
     const msgClean = msg.replace(/"/g, "'").substring(0, 200);
-    code = `# Log: ${p.name}\nimport logging\n_logger = logging.getLogger("nifi_migration")\n_logger.${level}(f"${prefix}${msgClean}")\ndf_${varName} = df_${inputVar}  # Pass through`;
+    code = `# Log: ${p.name}\nimport logging\n_logger = logging.getLogger("nifi_migration")\n_logger.${pyLevel}(f"${prefix}${msgClean}")\ndf_${varName} = df_${inputVar}  # Pass through`;
     conf = 0.95;
     return { code, conf };
   }

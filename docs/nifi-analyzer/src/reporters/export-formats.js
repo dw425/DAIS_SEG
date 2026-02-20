@@ -40,7 +40,7 @@ export function exportAsDatabricksNotebook(cells) {
   a.href = url;
   a.download = 'nifi_migration_notebook.py';
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 /**
@@ -79,7 +79,7 @@ export function exportAsJupyterNotebook(cells) {
   a.href = url;
   a.download = 'nifi_migration_notebook.ipynb';
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 /**
@@ -121,5 +121,5 @@ export function exportWorkflowYAML(nifiFlow, generateWorkflowDAG) {
   a.href = url;
   a.download = 'nifi_migration_workflow.yml';
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 100);
 }

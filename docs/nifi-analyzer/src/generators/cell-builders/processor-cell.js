@@ -52,7 +52,11 @@ export function buildProcessorCell(m, { lineage, qualifiedSchema, nifi, fullProp
   if (m.mapped && m.code && !m.code.startsWith('# TODO')) {
     const mWithAdaptive = code !== m.code ? { ...m, code } : m;
     cellCode = wrapWithErrorFramework(mWithAdaptive, qualifiedSchema, cellIndex, lineage);
-    cellCode += generateAutoRecovery(mWithAdaptive, qualifiedSchema, lineage);
+    const recoveryCode = generateAutoRecovery(mWithAdaptive, qualifiedSchema, lineage);
+    if (recoveryCode) {
+      // Insert recovery code before 'raise _e' so it executes before re-throwing
+      cellCode = cellCode.replace(/(\s+raise _e)$/, recoveryCode + '$1');
+    }
   } else {
     cellCode = `# ${lbl}\n# ${m.desc}${m.notes ? '  |  ' + m.notes : ''}\n# Input: ${inputInfo}\n${code}`;
   }

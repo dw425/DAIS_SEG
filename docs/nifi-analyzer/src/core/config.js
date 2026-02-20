@@ -56,7 +56,7 @@ export function loadDbxConfig() {
  */
 export function saveDbxConfig(cfg) {
   try {
-    safeSetItem(STORAGE_KEY, JSON.stringify(cfg));
+    safeSetItem(STORAGE_KEY, cfg);
   } catch (e) {
     // Silently ignore — storage may be unavailable
   }

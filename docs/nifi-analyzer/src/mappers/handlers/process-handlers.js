@@ -157,7 +157,7 @@ export function handleProcessProcessor(p, props, varName, inputVar, existingCode
   if (p.type === 'ExecuteProcess' || p.type === 'ExecuteProcessBash') {
     const cmd = props['Command'] || props['Command Path'] || '/bin/echo';
     const args = props['Command Arguments'] || '';
-    code = `# ${p.type}: ${p.name}\nimport subprocess\n_result = subprocess.run(["${cmd}", "${args}"], capture_output=True, text=True, timeout=300)\nif _result.returncode != 0:\n    raise RuntimeError(f"Command failed: {_result.stderr[:200]}")\ndf_${varName} = df_${inputVar}\nprint(f"[CMD] ${cmd} -> exit {_result.returncode}")`;
+    code = `# ${p.type}: ${p.name}\nimport subprocess, shlex\n_result = subprocess.run(["${cmd}"] + shlex.split("${args.replace(/"/g, '\\"')}"), capture_output=True, text=True, timeout=300)\nif _result.returncode != 0:\n    raise RuntimeError(f"Command failed: {_result.stderr[:200]}")\ndf_${varName} = df_${inputVar}\nprint(f"[CMD] ${cmd} -> exit {_result.returncode}")`;
     conf = 0.90;
     return { code, conf };
   }

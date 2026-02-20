@@ -72,7 +72,7 @@ export function handleSourceProcessor(p, props, varName, inputVar, existingCode,
     const port = props['Port'] || '22';
     const user = props['Username'] || 'sftp_user';
     const remotePath = props['Remote Path'] || '/';
-    const fileFilter = props['File Filter Regex'] || props['File Filter'] || '*';
+    const fileFilter = props['File Filter Regex'] || props['File Filter'] || '.*';
     code = `# ${p.type}: ${p.name}\n# Host: ${host}:${port} | Path: ${remotePath} | Filter: ${fileFilter}\nimport paramiko\n_ssh = paramiko.SSHClient()\n_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())\n_ssh.connect("${host}", port=int("${port}"), username="${user}",\n    password=dbutils.secrets.get(scope="sftp", key="password"))\n_sftp = _ssh.open_sftp()\n\nimport re as _re\n_files = [f for f in _sftp.listdir("${remotePath}") if _re.match(r"${fileFilter}", f)]\n_data = []\nfor _fname in _files:\n    with _sftp.open(f"${remotePath}/{_fname}") as _f:\n        _data.append({"filename": _fname, "content": _f.read().decode("utf-8", errors="replace")})\n\ndf_${varName} = spark.createDataFrame(_data) if _data else spark.createDataFrame([], "filename STRING, content STRING")\n_sftp.close()\n_ssh.close()\nprint(f"[SFTP] Fetched {len(_files)} files from ${host}:${remotePath}")`;
     conf = 0.90;
     return { code, conf };
