@@ -33,9 +33,9 @@ export function buildDataFrameLineage(mappings, nifi) {
   const upstream = {};
   conns.forEach(c => {
     if (!downstream[c.sourceName]) downstream[c.sourceName] = [];
-    downstream[c.sourceName].push({ dest: c.destinationName, rel: c.relationship || 'success' });
+    downstream[c.sourceName].push({ dest: c.destinationName, rel: (c.relationships && c.relationships[0]) || 'success' });
     if (!upstream[c.destinationName]) upstream[c.destinationName] = [];
-    upstream[c.destinationName].push({ src: c.sourceName, rel: c.relationship || 'success' });
+    upstream[c.destinationName].push({ src: c.sourceName, rel: (c.relationships && c.relationships[0]) || 'success' });
   });
   mappings.forEach(m => {
     const varName = sanitizeVarName(m.name);

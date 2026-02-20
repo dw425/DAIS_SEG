@@ -37,7 +37,7 @@ export function analyzeFlowGraph(processors, connections) {
 
   connections.forEach(c => {
     const srcId = c.sourceId || (c.source && c.source.id);
-    const dstId = c.destId || (c.destination && c.destination.id);
+    const dstId = c.destinationId || (c.destination && c.destination.id);
     if (srcId && dstId && outgoing[srcId] && incoming[dstId]) {
       outgoing[srcId].push(dstId);
       incoming[dstId].push(srcId);

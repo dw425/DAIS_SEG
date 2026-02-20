@@ -32,7 +32,9 @@ export function generateRetryWrapper(procName, procType, code, penaltyDuration, 
   if (!isNetworkOp) return code;
 
   const safeFuncName = procType.toLowerCase().replace(/[^a-z0-9]/g, '_');
-  const safeVarName = procName.replace(/[^a-zA-Z0-9]/g, '_');
+  // Use sanitizeVarName so the df_ variable matches what the rest of codegen produces
+  // (lowercased, non-alphanum replaced with _, truncated to 40 chars).
+  const safeVarName = sanitizeVarName(procName);
   const indented = code.split('\n').map(l => '    ' + l).join('\n');
 
   return `# ${procName} — with retry logic\n` +
