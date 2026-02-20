@@ -62,10 +62,10 @@ export function handleProcessProcessor(p, props, varName, inputVar, existingCode
         code = `# Impala REFRESH -> Spark SQL\nspark.catalog.refreshTable("${tbl?tbl[1]:'<table>'}")\n# Original: ${sqlStr.substring(0,100)}`;
       } else if (/invalidate\s+metadata/i.test(sqlStr)) {
         const tbl = sqlStr.match(/invalidate\s+metadata\s+([\w.]+)/i);
-        code = `# Impala INVALIDATE METADATA -> Spark SQL\nspark.catalog.refreshTable("${tbl?tbl[1]:'<table>'}")\nspark.sql("REFRESH TABLE ${tbl?tbl[1]:'<table>'}")\n# Original: ${sqlStr.substring(0,100)}`;
+        code = `# Impala INVALIDATE METADATA -> Spark SQL\nspark.catalog.refreshTable("${tbl?tbl[1]:'<table>'}")\nspark.sql("REFRESH TABLE \`${tbl?tbl[1]:'<table>'}\`")\n# Original: ${sqlStr.substring(0,100)}`;
       } else if (/compute\s+stats/i.test(sqlStr)) {
         const tbl = sqlStr.match(/compute\s+stats\s+([\w.]+)/i);
-        code = `# Impala COMPUTE STATS -> Spark SQL ANALYZE TABLE\nspark.sql("ANALYZE TABLE ${tbl?tbl[1]:'<table>'} COMPUTE STATISTICS")\n# Original: ${sqlStr.substring(0,100)}`;
+        code = `# Impala COMPUTE STATS -> Spark SQL ANALYZE TABLE\nspark.sql("ANALYZE TABLE \`${tbl?tbl[1]:'<table>'}\` COMPUTE STATISTICS")\n# Original: ${sqlStr.substring(0,100)}`;
       } else if (/select/i.test(sqlStr)) {
         code = `# Impala SELECT -> Spark SQL\ndf_${varName} = spark.sql("""\n${sqlStr.replace(/"/g,'\\"').substring(0,200)}\n""")\n# Note: Impala SQL is mostly Spark-compatible`;
       } else if (/insert/i.test(sqlStr)) {

@@ -221,8 +221,8 @@ export function applyNELFunction(base, call, mode) {
     var grokPattern = unquoteArg(args[0] || '');
     var resolvedRegex = resolveGrokPattern(grokPattern);
     return mode === 'col'
-      ? 'regexp_extract(' + base + ', "' + resolvedRegex + '", 0)'
-      : 're.search(r"' + resolvedRegex + '", ' + base + ')';
+      ? 'regexp_extract(' + base + ', "' + pyEscape(resolvedRegex) + '", 0)'
+      : 're.search(r"' + pyEscape(resolvedRegex) + '", ' + base + ')';
   }
 
 
