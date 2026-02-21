@@ -128,7 +128,7 @@ export function handleProcessProcessor(p, props, varName, inputVar, existingCode
     if (full && !code.includes('dbutils.fs')) {
       const workDir = props['Working Directory'] || '/opt/scripts';
       const argsStr = args ? ', ' + args.split(';').map(a => '"' + a.trim() + '"').join(', ') : '';
-      code = `# Shell Command: ${p.name}\n# Command: ${cmd} ${args}\nimport subprocess\n_result = subprocess.run(\n    ["${cmd}"${argsStr}],\n    capture_output=True, text=True, timeout=300,\n    cwd="${workDir}"\n)\nif _result.returncode != 0:\n    print(f"[CMD ERROR] Return code: {_result.returncode}")\n    raise RuntimeError(f"Command failed: ${cmd}")\nelse:\n    print(f"[CMD OK] {_result.stdout[:200]}")\n    _lines = [l for l in _result.stdout.strip().split("\\\\n") if l]\n    if _lines:\n        df_${varName} = spark.createDataFrame([{"output": l} for l in _lines])\n    else:\n        df_${varName} = df_${inputVar}`;
+      code = `# Shell Command: ${p.name}\n# Command: ${cmd} ${args}\nimport subprocess\n_result = subprocess.run(\n    ["${cmd}"${argsStr}],\n    capture_output=True, text=True, timeout=300,\n    cwd="${workDir}"\n)\nif _result.returncode != 0:\n    print(f"[CMD ERROR] Return code: {_result.returncode}")\n    raise RuntimeError(f"Command failed: ${cmd}")\nelse:\n    print(f"[CMD OK] {_result.stdout[:200]}")\n    _lines = [l for l in _result.stdout.strip().splitlines() if l]\n    if _lines:\n        df_${varName} = spark.createDataFrame([{"output": l} for l in _lines])\n    else:\n        df_${varName} = df_${inputVar}`;
       conf = 0.90;
       return { code, conf };
     }

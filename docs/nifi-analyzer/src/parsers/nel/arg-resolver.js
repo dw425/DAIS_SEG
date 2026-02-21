@@ -22,6 +22,7 @@ export function resolveNELArg(arg, mode) {
     return mode === 'col' ? 'lit("' + val + '")' : '"' + val + '"';
   }
   if (/^\d+$/.test(arg)) return mode === 'col' ? 'lit(' + arg + ')' : arg;
+  if (/^\d+\.\d+$/.test(arg)) return mode === 'col' ? 'lit(' + arg + ')' : arg;
   if (arg.includes(':')) return parseNELExpression(arg, mode);
   var ctx = resolveNELVariableContext(arg);
   return mode === 'col' ? (ctx.type === 'column' ? 'col("' + arg + '")' : ctx.code) :

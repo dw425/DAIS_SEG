@@ -35,7 +35,7 @@ export function generateLoopFromCycle(cycle, mappings, lineage) {
 
   if (hasHTTP) {
     // API retry cycle -> tenacity while-loop
-    const bodyCode = loopBodyLines || '    result = df  # passthrough (no mapped code)';
+    const bodyCode = loopBodyLines || '    _loop_result = df  # passthrough (no mapped code)';
     return `# Cycle detected: ${cycle.join(' \u2192 ')} \u2192 (loop back)\n` +
       `# Pattern: API retry loop \u2014 converted to tenacity retry\n` +
       `from tenacity import retry, stop_after_attempt, wait_exponential, RetryError\n\n` +

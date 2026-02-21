@@ -26,13 +26,9 @@ export function tokenizeNELChain(expr) {
     } else if (ch === ')') {
       depth--; current += ch;
     } else if (ch === ':' && depth === 0) {
-      // Don't split on namespace prefixes (math:floor, ext:func, etc.)
-      // Any word-only token before a colon is treated as a namespace prefix.
-      if (/^\w+$/i.test(current)) {
-        current += ch;
-      } else {
-        parts.push(current); current = '';
-      }
+      // Always split on top-level colons — each segment is a chain step.
+      // Namespace prefixes (math:floor, etc.) are handled at the parser level.
+      parts.push(current); current = '';
     } else {
       current += ch;
     }
