@@ -1,0 +1,97 @@
+# Prefect -> Databricks PySpark Mapping
+# Maps Prefect flow/task patterns to Databricks equivalents
+
+mappings:
+  - type: "flow"
+    category: "Databricks Workflow"
+    template: |
+      # Prefect Flow -> Databricks multi-task job
+      # Configure via Databricks Jobs API or SDK
+      from databricks.sdk import WorkspaceClient
+      w = WorkspaceClient()
+      _job = w.jobs.create(
+          name="{flow_name}",
+          tasks=[
+              {{"task_key": "step_1", "notebook_task": {{"notebook_path": "{notebook_1}"}}}},
+              {{"task_key": "step_2", "notebook_task": {{"notebook_path": "{notebook_2}"}},
+               "depends_on": [{{"task_key": "step_1"}}]}}
+          ])
+    description: "Prefect Flow as Databricks multi-task workflow"
+    imports: ["from databricks.sdk import WorkspaceClient"]
+    confidence: 0.88
+    role: "process"
+
+  - type: "task"
+    category: "Python Function"
+    template: |
+      def {task_name}({params}):
+          """Ported from Prefect @task"""
+          {task_body}
+          return result
+
+      _{task_name}_result = {task_name}({args})
+    description: "Prefect @task as plain Python function"
+    imports: []
+    confidence: 0.92
+    role: "process"
+
+  - type: "ShellTask"
+    category: "Shell Command"
+    template: |
+      import subprocess
+      _result = subprocess.run(["{command}"], shell=True, capture_output=True, text=True, timeout=3600)
+      print(_result.stdout[:1000])
+    description: "Prefect ShellTask via subprocess"
+    imports: ["import subprocess"]
+    confidence: 0.90
+    role: "process"
+
+  - type: "DbtTask"
+    category: "Spark SQL"
+    template: |
+      spark.sql("""
+          CREATE OR REPLACE TABLE {catalog}.{schema}.{model} AS
+          {select_sql}
+      """)
+    description: "Prefect DbtTask as Spark SQL model materialization"
+    imports: []
+    confidence: 0.88
+    role: "transform"
+
+  - type: "GCSDownload"
+    category: "Cloud Storage"
+    template: |
+      df_{name} = spark.read.format("{format}").load("gs://{bucket}/{blob}")
+    description: "GCS download via Spark read"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "S3Download"
+    category: "Cloud Storage"
+    template: |
+      df_{name} = spark.read.format("{format}").load("s3://{bucket}/{key}")
+    description: "S3 download via Spark read"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "SlackTask"
+    category: "Notification"
+    template: |
+      import requests
+      requests.post("{webhook_url}", json={"text": "{message}"})
+    description: "Slack notification via webhook"
+    imports: ["import requests"]
+    confidence: 0.90
+    role: "utility"
+
+  - type: "EmailTask"
+    category: "Notification"
+    template: |
+      # Use Databricks workflow email notifications
+      dbutils.notebook.exit("NOTIFY: {subject}")
+    description: "Email via workflow notification settings"
+    imports: []
+    confidence: 0.85
+    role: "utility"

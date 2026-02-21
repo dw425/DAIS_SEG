@@ -1,0 +1,230 @@
+# Common Packages for Databricks ETL Migration
+# Lists packages needed on Databricks clusters for various migration scenarios
+
+core_packages:
+  - name: "pyspark"
+    description: "Core Spark Python API (pre-installed on Databricks)"
+    pre_installed: true
+    version: ">=3.4.0"
+
+  - name: "delta-spark"
+    description: "Delta Lake Python API (pre-installed on Databricks)"
+    pre_installed: true
+    version: ">=2.4.0"
+
+  - name: "databricks-sdk"
+    description: "Databricks SDK for Python (workspace, jobs, clusters API)"
+    pre_installed: true
+    version: ">=0.20.0"
+
+  - name: "mlflow"
+    description: "MLflow tracking, model registry, model serving (pre-installed)"
+    pre_installed: true
+    version: ">=2.10.0"
+
+  - name: "dbutils"
+    description: "Databricks utilities (pre-installed, accessed via dbutils)"
+    pre_installed: true
+
+cloud_storage:
+  - name: "boto3"
+    description: "AWS SDK for Python (S3, SQS, SNS, Lambda, DynamoDB)"
+    pre_installed: false
+    install: "pip install boto3"
+    used_by: ["nifi", "airflow", "glue", "fivetran"]
+
+  - name: "azure-storage-blob"
+    description: "Azure Blob Storage SDK"
+    pre_installed: false
+    install: "pip install azure-storage-blob"
+    used_by: ["nifi", "adf"]
+
+  - name: "azure-identity"
+    description: "Azure authentication (DefaultAzureCredential)"
+    pre_installed: false
+    install: "pip install azure-identity"
+    used_by: ["adf"]
+
+  - name: "google-cloud-storage"
+    description: "Google Cloud Storage SDK"
+    pre_installed: false
+    install: "pip install google-cloud-storage"
+    used_by: ["beam", "airflow"]
+
+  - name: "azure-eventhub"
+    description: "Azure Event Hubs SDK"
+    pre_installed: false
+    install: "pip install azure-eventhub"
+    used_by: ["nifi", "adf"]
+
+database_connectors:
+  - name: "pymysql"
+    description: "MySQL Python driver"
+    pre_installed: false
+    install: "pip install pymysql"
+    used_by: ["nifi", "talend", "ssis", "airflow"]
+
+  - name: "psycopg2-binary"
+    description: "PostgreSQL Python driver"
+    pre_installed: false
+    install: "pip install psycopg2-binary"
+    used_by: ["nifi", "talend", "airflow"]
+
+  - name: "cx_Oracle"
+    description: "Oracle Python driver"
+    pre_installed: false
+    install: "pip install cx_Oracle"
+    used_by: ["oracle", "datastage", "informatica"]
+
+  - name: "pymongo"
+    description: "MongoDB Python driver"
+    pre_installed: false
+    install: "pip install pymongo"
+    used_by: ["nifi"]
+
+  - name: "redis"
+    description: "Redis Python client"
+    pre_installed: false
+    install: "pip install redis"
+    used_by: ["nifi"]
+
+  - name: "pysolr"
+    description: "Solr Python client"
+    pre_installed: false
+    install: "pip install pysolr"
+    used_by: ["nifi"]
+
+messaging:
+  - name: "kafka-python"
+    description: "Apache Kafka Python client"
+    pre_installed: false
+    install: "pip install kafka-python"
+    used_by: ["nifi", "airflow", "beam"]
+
+  - name: "confluent-kafka"
+    description: "Confluent Kafka Python client (higher performance)"
+    pre_installed: false
+    install: "pip install confluent-kafka"
+    used_by: ["nifi"]
+
+  - name: "pika"
+    description: "RabbitMQ/AMQP Python client"
+    pre_installed: false
+    install: "pip install pika"
+    used_by: ["nifi"]
+
+  - name: "stomp.py"
+    description: "STOMP protocol client (JMS/ActiveMQ)"
+    pre_installed: false
+    install: "pip install stomp.py"
+    used_by: ["nifi"]
+
+  - name: "paho-mqtt"
+    description: "MQTT Python client"
+    pre_installed: false
+    install: "pip install paho-mqtt"
+    used_by: ["nifi"]
+
+file_transfer:
+  - name: "paramiko"
+    description: "SSH/SFTP Python client"
+    pre_installed: false
+    install: "pip install paramiko"
+    used_by: ["nifi", "airflow", "ssis"]
+
+  - name: "requests"
+    description: "HTTP client library (pre-installed on Databricks)"
+    pre_installed: true
+    used_by: ["nifi", "airflow", "adf", "prefect"]
+
+  - name: "httpx"
+    description: "Modern async HTTP client"
+    pre_installed: false
+    install: "pip install httpx"
+    used_by: ["airflow", "prefect"]
+
+data_formats:
+  - name: "avro"
+    description: "Apache Avro (Spark has built-in support)"
+    pre_installed: true
+    spark_package: "org.apache.spark:spark-avro_2.12"
+    used_by: ["nifi", "beam"]
+
+  - name: "lxml"
+    description: "XML processing library"
+    pre_installed: false
+    install: "pip install lxml"
+    used_by: ["nifi", "datastage", "ssis"]
+
+  - name: "openpyxl"
+    description: "Excel file processing"
+    pre_installed: false
+    install: "pip install openpyxl"
+    used_by: ["ssis", "talend", "pentaho"]
+
+  - name: "pyarrow"
+    description: "Apache Arrow columnar format (pre-installed)"
+    pre_installed: true
+    used_by: ["nifi", "beam", "glue"]
+
+  - name: "fastavro"
+    description: "Fast Avro serialization"
+    pre_installed: false
+    install: "pip install fastavro"
+    used_by: ["nifi"]
+
+spark_libraries:
+  - name: "spark-xml"
+    description: "Spark XML data source"
+    pre_installed: false
+    maven_coordinate: "com.databricks:spark-xml_2.12:0.17.0"
+    used_by: ["nifi", "ssis", "datastage", "pentaho"]
+
+  - name: "spark-bigquery"
+    description: "Spark BigQuery connector"
+    pre_installed: false
+    maven_coordinate: "com.google.cloud.spark:spark-3.5-bigquery:0.36.1"
+    used_by: ["airflow", "beam"]
+
+  - name: "elasticsearch-spark"
+    description: "Elasticsearch Spark connector"
+    pre_installed: false
+    maven_coordinate: "org.elasticsearch:elasticsearch-spark-30_2.12:8.12.0"
+    used_by: ["nifi"]
+
+  - name: "spark-cassandra-connector"
+    description: "Cassandra Spark connector"
+    pre_installed: false
+    maven_coordinate: "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1"
+    used_by: ["nifi"]
+
+  - name: "mongodb-spark-connector"
+    description: "MongoDB Spark connector"
+    pre_installed: false
+    maven_coordinate: "org.mongodb.spark:mongo-spark-connector_2.12:10.2.1"
+    used_by: ["nifi"]
+
+  - name: "spark-excel"
+    description: "Spark Excel data source"
+    pre_installed: false
+    maven_coordinate: "com.crealytics:spark-excel_2.12:3.5.0_0.20.3"
+    used_by: ["ssis", "talend", "pentaho"]
+
+monitoring:
+  - name: "pysnmp"
+    description: "SNMP protocol client"
+    pre_installed: false
+    install: "pip install pysnmp"
+    used_by: ["nifi"]
+
+  - name: "influxdb-client"
+    description: "InfluxDB Python client"
+    pre_installed: false
+    install: "pip install influxdb-client"
+    used_by: ["nifi"]
+
+  - name: "prometheus-client"
+    description: "Prometheus metrics client"
+    pre_installed: false
+    install: "pip install prometheus-client"
+    used_by: ["nifi"]

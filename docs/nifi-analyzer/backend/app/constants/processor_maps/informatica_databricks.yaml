@@ -1,0 +1,285 @@
+# Informatica PowerCenter -> Databricks PySpark Mapping
+# Maps Informatica transformation types to PySpark equivalents
+
+mappings:
+  - type: "Source Qualifier"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "({sql_override}) subq")
+          .option("driver", "{driver}")
+          .load())
+    description: "Source Qualifier with optional SQL override via JDBC"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Expression"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .withColumn("{output_port}", expr("{expression}")))
+    description: "Informatica Expression transform via withColumn + expr"
+    imports: ["from pyspark.sql.functions import expr"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Filter"
+    category: "DataFrame Filter"
+    template: |
+      df_{name} = df_{input}.filter("{condition}")
+    description: "Row filter via DataFrame filter"
+    imports: []
+    confidence: 0.95
+    role: "route"
+
+  - type: "Joiner"
+    category: "DataFrame Join"
+    template: |
+      df_{name} = df_{input_master}.join(
+          df_{input_detail},
+          on=df_{input_master}["{master_key}"] == df_{input_detail}["{detail_key}"],
+          how="{join_type}")
+    description: "Joiner transform via DataFrame join (inner, left, right, full)"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Router"
+    category: "DataFrame Filter"
+    template: |
+      df_{name}_group1 = df_{input}.filter("{condition_1}")
+      df_{name}_group2 = df_{input}.filter("{condition_2}")
+      df_{name}_default = df_{input}.filter(
+          "NOT ({condition_1}) AND NOT ({condition_2})")
+    description: "Router transform via multiple DataFrame filters"
+    imports: []
+    confidence: 0.92
+    role: "route"
+
+  - type: "Sorter"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.orderBy(
+          col("{sort_key_1}").asc(),
+          col("{sort_key_2}").desc())
+      # For distinct: df_{name} = df_{name}.dropDuplicates(["{sort_key_1}"])
+    description: "Sorter transform with optional distinct via orderBy"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Aggregator"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .groupBy("{group_by_port}")
+          .agg(
+              count("*").alias("cnt"),
+              sum("{measure_port}").alias("total"),
+              avg("{measure_port}").alias("average"),
+              max("{measure_port}").alias("maximum"),
+              min("{measure_port}").alias("minimum")))
+    description: "Aggregator transform via groupBy + multiple agg functions"
+    imports: ["from pyspark.sql.functions import count, sum, avg, max, min"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Normalizer"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .withColumn("_item", explode(array({columns})))
+          .select("*", "_item.*")
+          .drop("_item"))
+    description: "Normalizer via explode to convert repeating groups to rows"
+    imports: ["from pyspark.sql.functions import explode, array"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Rank"
+    category: "Window Function"
+    template: |
+      from pyspark.sql.window import Window
+      _window = Window.partitionBy("{group_by}").orderBy(col("{rank_column}").desc())
+      df_{name} = (df_{input}
+          .withColumn("rank", row_number().over(_window))
+          .filter(col("rank") <= {top_n}))
+    description: "Rank transform via window function row_number"
+    imports: ["from pyspark.sql.functions import row_number, col", "from pyspark.sql.window import Window"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Sequence Generator"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import monotonically_increasing_id
+      df_{name} = df_{input}.withColumn("{seq_column}",
+          monotonically_increasing_id() + {start_value})
+    description: "Sequence generator via monotonically_increasing_id"
+    imports: ["from pyspark.sql.functions import monotonically_increasing_id"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Update Strategy"
+    category: "Delta MERGE"
+    template: |
+      from delta.tables import DeltaTable
+      _target = DeltaTable.forName(spark, "{catalog}.{schema}.{target_table}")
+      _target.alias("t").merge(
+          df_{input}.alias("s"),
+          "t.{primary_key} = s.{primary_key}"
+      ).whenMatchedUpdateAll(
+      ).whenNotMatchedInsertAll(
+      ).execute()
+    description: "Update Strategy via Delta MERGE (insert/update/delete)"
+    imports: ["from delta.tables import DeltaTable"]
+    confidence: 0.92
+    role: "sink"
+
+  - type: "Target"
+    category: "Delta Lake Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Target table write to Delta Lake"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "Lookup"
+    category: "DataFrame Join"
+    template: |
+      df_lkp = spark.table("{catalog}.{schema}.{lookup_table}").cache()
+      df_{name} = df_{input}.join(
+          broadcast(df_lkp),
+          on="{lookup_key}",
+          how="left")
+    description: "Lookup transform via broadcast join for small tables"
+    imports: ["from pyspark.sql.functions import broadcast"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Stored Procedure"
+    category: "Spark SQL"
+    template: |
+      # Informatica Stored Procedure -> Spark SQL or JDBC call
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "(EXEC {procedure_name} {params}) subq")
+          .load())
+    description: "Stored Procedure call via JDBC or Spark SQL"
+    imports: []
+    confidence: 0.85
+    role: "process"
+
+  - type: "Union"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input1}.unionByName(df_{input2}, allowMissingColumns=True)
+    description: "Union transform via unionByName with schema merge"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Transaction Control"
+    category: "Delta Transaction"
+    template: |
+      # Informatica Transaction Control -> Delta Lake ACID transactions
+      # Delta automatically provides ACID guarantees
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .option("txnAppId", "{name}")
+          .option("txnVersion", "{version}")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Transaction control via Delta Lake idempotent writes"
+    imports: []
+    confidence: 0.88
+    role: "sink"
+
+  - type: "HTTP Transformation"
+    category: "Spark UDF"
+    template: |
+      from pyspark.sql.functions import pandas_udf, col
+      import pandas as pd
+
+      @pandas_udf("string")
+      def _http_call_{name}(urls: pd.Series) -> pd.Series:
+          import urllib.request
+          def _fetch(url):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as r:
+                      return r.read().decode()
+              except Exception as e:
+                  return f"ERROR: {{str(e)}}"
+          return urls.apply(_fetch)
+
+      df_{name} = df_{input}.withColumn("response", _http_call_{name}(col("{url_column}")))
+    description: "HTTP Transformation via distributed pandas UDF"
+    imports: ["from pyspark.sql.functions import pandas_udf, col", "import pandas as pd"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Java Transformation"
+    category: "PySpark UDF"
+    template: |
+      from pyspark.sql.functions import pandas_udf, col
+      import pandas as pd
+
+      @pandas_udf("string")
+      def _java_transform_{name}(values: pd.Series) -> pd.Series:
+          # Port Java transformation logic to Python
+          def _process(val):
+              result = val  # Replace with ported logic
+              return str(result) if result is not None else None
+          return values.apply(_process)
+
+      df_{name} = df_{input}.withColumn("_transformed", _java_transform_{name}(col("{input_port}")))
+    description: "Java Transformation ported to pandas UDF"
+    imports: ["from pyspark.sql.functions import pandas_udf, col", "import pandas as pd"]
+    confidence: 0.80
+    role: "transform"
+
+  - type: "SQL Transformation"
+    category: "Spark SQL"
+    template: |
+      df_{input}.createOrReplaceTempView("tmp_{name}")
+      df_{name} = spark.sql("""
+      {sql_query}
+      """)
+    description: "SQL Transformation via Spark SQL temp view"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "XML Parser"
+    category: "XML Processing"
+    template: |
+      from pyspark.sql.functions import from_json, col
+      _xml_schema = "{xml_schema}"
+      df_{name} = (df_{input}
+          .withColumn("parsed", from_json(col("{xml_column}"), _xml_schema))
+          .select("parsed.*"))
+    description: "XML parsing via schema-based extraction"
+    imports: ["from pyspark.sql.functions import from_json, col"]
+    confidence: 0.85
+    role: "transform"
+
+  - type: "XML Generator"
+    category: "DataFrame API"
+    template: |
+      # Convert DataFrame rows to XML strings
+      df_{name} = df_{input}.select(
+          to_json(struct("*")).alias("xml_content"))
+      # Write as XML
+      df_{name}.write.format("com.databricks.spark.xml").option("rowTag", "{row_tag}").save("{output_path}")
+    description: "XML generation via spark-xml writer"
+    imports: ["from pyspark.sql.functions import to_json, struct"]
+    confidence: 0.85
+    role: "transform"

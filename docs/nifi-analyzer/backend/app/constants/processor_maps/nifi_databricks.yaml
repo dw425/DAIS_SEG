@@ -1,0 +1,660 @@
+# NiFi Processor -> Databricks PySpark Mapping
+# Top 50 most important NiFi processors with real Databricks code templates
+# Ported from src/constants/nifi-databricks-map.js
+
+mappings:
+  # ── SOURCES ──
+  - type: "GetFile"
+    category: "Auto Loader"
+    template: |
+      df_{name} = (spark.readStream
+          .format("cloudFiles")
+          .option("cloudFiles.format", "csv")
+          .option("cloudFiles.schemaLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+          .load("/Volumes/{catalog}/{schema}/{path}"))
+    description: "Read files using Auto Loader from Unity Catalog Volumes"
+    imports: ["from pyspark.sql.functions import *"]
+    confidence: 0.90
+    role: "source"
+
+  - type: "ConsumeKafka"
+    category: "Structured Streaming"
+    template: |
+      df_{name} = (spark.readStream
+          .format("kafka")
+          .option("kafka.bootstrap.servers", "{brokers}")
+          .option("subscribe", "{topic}")
+          .option("startingOffsets", "latest")
+          .load())
+    description: "Kafka streaming source via Structured Streaming"
+    imports: ["from pyspark.sql.functions import from_json, col"]
+    confidence: 0.90
+    role: "source"
+
+  - type: "ConsumeKafka_2_6"
+    category: "Structured Streaming"
+    template: |
+      df_{name} = (spark.readStream
+          .format("kafka")
+          .option("kafka.bootstrap.servers", "{brokers}")
+          .option("subscribe", "{topic}")
+          .option("startingOffsets", "latest")
+          .load())
+    description: "Kafka 2.6 streaming source"
+    imports: ["from pyspark.sql.functions import from_json, col"]
+    confidence: 0.90
+    role: "source"
+
+  - type: "ConsumeKafkaRecord_2_6"
+    category: "Structured Streaming"
+    template: |
+      df_{name} = (spark.readStream
+          .format("kafka")
+          .option("kafka.bootstrap.servers", "{brokers}")
+          .option("subscribe", "{topic}")
+          .load()
+          .select(from_json(col("value").cast("string"), schema).alias("data"))
+          .select("data.*"))
+    description: "Kafka record streaming with schema-based deserialization"
+    imports: ["from pyspark.sql.functions import from_json, col"]
+    confidence: 0.90
+    role: "source"
+
+  - type: "QueryDatabaseTable"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "{driver}")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="jdbc-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="jdbc-pass"))
+          .load())
+    description: "JDBC database read with secret-scoped credentials"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "ListenHTTP"
+    category: "Model Serving"
+    template: |
+      # Deploy an MLflow serving endpoint that writes to Delta
+      df_{name} = spark.readStream.format("delta").table("{name}_incoming")
+      print(f"[HTTP] Streaming from {name}_incoming")
+    description: "HTTP listener replaced by Model Serving + Delta table"
+    imports: ["import mlflow"]
+    confidence: 0.92
+    role: "source"
+
+  - type: "GetSFTP"
+    category: "External Storage"
+    template: |
+      import paramiko
+      _transport = paramiko.Transport(("{host}", 22))
+      _transport.connect(username=dbutils.secrets.get(scope="{scope}", key="sftp-user"))
+      _sftp = paramiko.SFTPClient.from_transport(_transport)
+      _sftp.get("{remote_path}", "/Volumes/{catalog}/{schema}/landing/{filename}")
+      _sftp.close()
+      _transport.close()
+      df_{name} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/landing/")
+    description: "SFTP file retrieval via paramiko to Volumes"
+    imports: ["import paramiko"]
+    confidence: 0.90
+    role: "source"
+
+  - type: "GenerateFlowFile"
+    category: "Test Data"
+    template: |
+      df_{name} = spark.range({count}).toDF("id")
+      # Add test columns as needed
+    description: "Test data generator using spark.range"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "FetchS3Object"
+    category: "Cloud Storage"
+    template: |
+      df_{name} = spark.read.format("{format}").load("s3://{bucket}/{key}")
+    description: "Read S3 object via Unity Catalog external location"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "ListS3"
+    category: "Cloud Storage"
+    template: |
+      _files = dbutils.fs.ls("s3://{bucket}/{prefix}")
+      df_{name} = spark.createDataFrame(_files)
+    description: "List S3 objects via dbutils"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "GetMongo"
+    category: "MongoDB Connector"
+    template: |
+      df_{name} = (spark.read
+          .format("mongodb")
+          .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))
+          .option("database", "{database}")
+          .option("collection", "{collection}")
+          .load())
+    description: "MongoDB read via Spark MongoDB connector"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "GetElasticsearch"
+    category: "ES Connector"
+    template: |
+      df_{name} = (spark.read
+          .format("org.elasticsearch.spark.sql")
+          .option("es.nodes", "{host}")
+          .option("es.resource", "{index}")
+          .load())
+    description: "Elasticsearch read via elasticsearch-spark"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "TailFile"
+    category: "Auto Loader"
+    template: |
+      df_{name} = (spark.readStream
+          .format("cloudFiles")
+          .option("cloudFiles.format", "text")
+          .load("/Volumes/{catalog}/{schema}/{path}"))
+    description: "Tail file via Auto Loader streaming"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "ConsumeAzureEventHub"
+    category: "Event Hubs Connector"
+    template: |
+      df_{name} = (spark.readStream
+          .format("eventhubs")
+          .option("eventhubs.connectionString",
+                  dbutils.secrets.get(scope="{scope}", key="eh-conn-string"))
+          .load())
+    description: "Azure Event Hubs streaming source"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "GetHDFS"
+    category: "Volumes Read"
+    template: |
+      df_{name} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/{path}")
+    description: "HDFS read remapped to Unity Catalog Volumes"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  # ── TRANSFORMS ──
+  - type: "ConvertRecord"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.selectExpr("*")
+      # Adjust column types/names as needed for format conversion
+    description: "Record format conversion via DataFrame select"
+    imports: []
+    confidence: 0.90
+    role: "transform"
+
+  - type: "ReplaceText"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("{col}",
+          regexp_replace(col("{col}"), "{pattern}", "{replacement}"))
+    description: "Regex text replacement on DataFrame columns"
+    imports: ["from pyspark.sql.functions import regexp_replace, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "UpdateAttribute"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("{attr}", lit("{value}"))
+    description: "Set or update attributes as DataFrame columns"
+    imports: ["from pyspark.sql.functions import lit"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "JoltTransformJSON"
+    category: "JSON Processing"
+    template: |
+      _schema = "{target_schema}"
+      df_{name} = (df_{input}
+          .withColumn("parsed", from_json(col("value"), _schema))
+          .select("parsed.*"))
+    description: "Jolt JSON transform via from_json + schema"
+    imports: ["from pyspark.sql.functions import from_json, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "EvaluateJsonPath"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("{field}",
+          get_json_object(col("value"), "$.{path}"))
+    description: "Extract JSON paths via get_json_object"
+    imports: ["from pyspark.sql.functions import get_json_object, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "ExtractText"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("{field}",
+          regexp_extract(col("{col}"), "{pattern}", {group}))
+    description: "Regex text extraction into new columns"
+    imports: ["from pyspark.sql.functions import regexp_extract, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "SplitJson"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("items",
+          explode(from_json(col("value"), ArrayType(StringType()))))
+    description: "Split JSON arrays via explode + from_json"
+    imports: ["from pyspark.sql.functions import explode, from_json, col", "from pyspark.sql.types import ArrayType, StringType"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "SplitRecord"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .withColumn("item", explode(col("{array_field}")))
+          .select("item.*"))
+    description: "Split records by exploding array field"
+    imports: ["from pyspark.sql.functions import explode, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "MergeContent"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input1}.unionByName(df_{input2}, allowMissingColumns=True)
+    description: "Merge content streams via unionByName"
+    imports: []
+    confidence: 0.90
+    role: "transform"
+
+  - type: "AttributesToJSON"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.select(to_json(struct("*")).alias("json_value"))
+    description: "Convert all columns to single JSON string"
+    imports: ["from pyspark.sql.functions import to_json, struct"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "ExecuteScript"
+    category: "PySpark UDF"
+    template: |
+      from pyspark.sql.functions import pandas_udf, col
+      import pandas as pd
+
+      @pandas_udf("string")
+      def _exec_script_{name}(values: pd.Series) -> pd.Series:
+          def _process(val):
+              # Paste original script logic here
+              result = val
+              return str(result) if result is not None else None
+          return values.apply(_process)
+
+      df_{name} = df_{input}.withColumn("_scripted", _exec_script_{name}(col("value")))
+    description: "NiFi script execution ported to pandas_udf"
+    imports: ["from pyspark.sql.functions import pandas_udf, col", "import pandas as pd"]
+    confidence: 0.85
+    role: "transform"
+
+  - type: "LookupRecord"
+    category: "DataFrame Join"
+    template: |
+      df_lookup = spark.table("{catalog}.{schema}.{lookup_table}").cache()
+      df_{name} = df_{input}.join(df_lookup, on="{key}", how="left")
+    description: "Record lookup via cached DataFrame join"
+    imports: []
+    confidence: 0.90
+    role: "transform"
+
+  - type: "EncryptContent"
+    category: "Security"
+    template: |
+      from pyspark.sql.functions import col, lit, base64, aes_encrypt
+      _enc_key = dbutils.secrets.get(scope="{scope}", key="encryption-key")
+      df_{name} = df_{input}.withColumn(
+          "{col}_encrypted",
+          base64(aes_encrypt(col("{col}").cast("string"), lit(_enc_key), lit("GCM"), lit("DEFAULT"))))
+    description: "AES column-level encryption via aes_encrypt"
+    imports: ["from pyspark.sql.functions import col, lit, base64, aes_encrypt"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "CompressContent"
+    category: "Native"
+    template: |
+      # Delta Lake handles compression natively (snappy/zstd)
+      df_{name} = df_{input}
+    description: "Compression handled natively by Delta Lake"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  # ── ROUTES ──
+  - type: "RouteOnAttribute"
+    category: "DataFrame Filter"
+    template: |
+      df_{name}_matched = df_{input}.filter("{condition}")
+      df_{name}_unmatched = df_{input}.filter("NOT ({condition})")
+    description: "Conditional routing via DataFrame filter"
+    imports: []
+    confidence: 0.90
+    role: "route"
+
+  - type: "RouteOnContent"
+    category: "DataFrame Filter"
+    template: |
+      df_{name} = df_{input}.filter(col("value").rlike("{pattern}"))
+    description: "Content-based routing via regex filter"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.90
+    role: "route"
+
+  - type: "DetectDuplicate"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.dropDuplicates(["{key}"])
+    description: "Duplicate detection and removal"
+    imports: []
+    confidence: 0.90
+    role: "route"
+
+  - type: "DistributeLoad"
+    category: "Spark Partitioning"
+    template: |
+      df_{name} = df_{input}.repartition({partitions})
+    description: "Load distribution via Spark repartition"
+    imports: []
+    confidence: 0.90
+    role: "route"
+
+  # ── PROCESSING ──
+  - type: "ExecuteSQL"
+    category: "Spark SQL"
+    template: |
+      df_{input}.createOrReplaceTempView("tmp_{name}")
+      df_{name} = spark.sql("""
+      {sql}
+      """)
+    description: "SQL execution via Spark SQL temp views"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "InvokeHTTP"
+    category: "Spark UDF"
+    template: |
+      from pyspark.sql.functions import pandas_udf, col
+      import pandas as pd
+
+      @pandas_udf("string")
+      def _call_api(urls: pd.Series) -> pd.Series:
+          import urllib.request
+          def _get(u):
+              with urllib.request.urlopen(u) as r:
+                  return r.read().decode()
+          return urls.apply(_get)
+
+      df_{name} = df_{input}.withColumn("api_response", _call_api(col("url")))
+    description: "HTTP API call via distributed pandas UDF"
+    imports: ["from pyspark.sql.functions import pandas_udf, col", "import pandas as pd"]
+    confidence: 0.90
+    role: "process"
+
+  - type: "ValidateRecord"
+    category: "DLT Expectations"
+    template: |
+      # Data quality validation via DLT expectations
+      # @dlt.expect_or_drop("{rule}", "{expression}")
+      df_{name} = df_{input}.filter("{expression}")
+    description: "Record validation best implemented as DLT expectations"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "GenerateTableFetch"
+    category: "JDBC Incremental"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "(SELECT * FROM {table} WHERE {column} > '{watermark}') subq")
+          .load())
+    description: "Incremental JDBC fetch with watermark pushdown"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  # ── SINKS ──
+  - type: "PutFile"
+    category: "Delta Lake Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Write to Delta Lake managed table in Unity Catalog"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PutKafka"
+    category: "Kafka Write"
+    template: |
+      (df_{input}
+          .selectExpr("to_json(struct(*)) AS value")
+          .write
+          .format("kafka")
+          .option("kafka.bootstrap.servers", "{brokers}")
+          .option("topic", "{topic}")
+          .save())
+    description: "Write to Kafka topic as JSON"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PublishKafka_2_6"
+    category: "Kafka Write"
+    template: |
+      (df_{input}
+          .selectExpr("to_json(struct(*)) AS value")
+          .write
+          .format("kafka")
+          .option("kafka.bootstrap.servers", "{brokers}")
+          .option("topic", "{topic}")
+          .save())
+    description: "Publish to Kafka 2.6 topic"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PutS3Object"
+    category: "Cloud Storage Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .save("s3a://{bucket}/{path}"))
+    description: "Write to S3 as Delta via external location"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PutDatabaseRecord"
+    category: "JDBC Write"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "{driver}")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="jdbc-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="jdbc-pass"))
+          .option("batchsize", 1000)
+          .mode("append")
+          .save())
+    description: "Database record write via JDBC"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PutMongo"
+    category: "MongoDB Connector"
+    template: |
+      (df_{input}.write
+          .format("mongodb")
+          .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))
+          .option("database", "{database}")
+          .option("collection", "{collection}")
+          .mode("append")
+          .save())
+    description: "MongoDB write via Spark connector"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PutElasticsearch"
+    category: "ES Connector"
+    template: |
+      (df_{input}.write
+          .format("org.elasticsearch.spark.sql")
+          .option("es.nodes", "{host}")
+          .save("{index}"))
+    description: "Elasticsearch write via elasticsearch-spark"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PutHDFS"
+    category: "Cloud Storage Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .save("/Volumes/{catalog}/{schema}/{path}"))
+    description: "HDFS write remapped to Volumes/cloud storage"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PutAzureBlobStorage"
+    category: "Azure Storage"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .save("wasbs://{container}@{account}.blob.core.windows.net/{path}"))
+    description: "Azure Blob Storage write as Delta"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PutAzureDataLakeStorage"
+    category: "Azure ADLS"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .save("abfss://{container}@{account}.dfs.core.windows.net/{path}"))
+    description: "Azure Data Lake Storage Gen2 write as Delta"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PutEmail"
+    category: "Workflow Notification"
+    template: |
+      # Configure email notifications in Databricks Job settings
+      # email_notifications.on_success / on_failure
+      dbutils.notebook.exit("NOTIFY: {subject}")
+    description: "Email via Databricks workflow notifications"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "PutSFTP"
+    category: "External Storage Write"
+    template: |
+      import paramiko
+      _sftp_host = dbutils.secrets.get(scope="{scope}", key="sftp-host")
+      _sftp_user = dbutils.secrets.get(scope="{scope}", key="sftp-user")
+      _local_path = "/Volumes/{catalog}/{schema}/tmp/{name}_export"
+      df_{input}.toPandas().to_csv(_local_path, index=False)
+      _transport = paramiko.Transport((_sftp_host, 22))
+      _transport.connect(username=_sftp_user)
+      _sftp = paramiko.SFTPClient.from_transport(_transport)
+      _sftp.put(_local_path, "{remote_path}/{name}.csv")
+      _sftp.close()
+      _transport.close()
+    description: "SFTP upload via paramiko with staging to Volumes"
+    imports: ["import paramiko"]
+    confidence: 0.90
+    role: "sink"
+
+  # ── UTILITY ──
+  - type: "LogAttribute"
+    category: "Spark Display"
+    template: |
+      display(df_{input})
+      df_{input}.printSchema()
+    description: "Inspect schema and sample data with display()"
+    imports: []
+    confidence: 0.90
+    role: "utility"
+
+  - type: "LogMessage"
+    category: "Spark Logging"
+    template: |
+      print(f"[INFO] {name}: Processing complete")
+      spark.sparkContext.setLocalProperty("callSite.short", "{name}")
+    description: "Spark-native logging via print and driver logs"
+    imports: []
+    confidence: 0.90
+    role: "utility"
+
+  - type: "Wait"
+    category: "Workflow Dependency"
+    template: |
+      df_{name} = (spark.readStream
+          .format("delta")
+          .option("readChangeFeed", "true")
+          .table("workflow_signals")
+          .filter("signal_id = '{name}_signal' AND status = 'ready'"))
+    description: "Workflow dependency via Delta CDF signal table"
+    imports: []
+    confidence: 0.92
+    role: "utility"
+
+  - type: "Notify"
+    category: "Workflow Signal"
+    template: |
+      _notify_key = "{name}_signal"
+      spark.sql(f"""
+          MERGE INTO __workflow_signals AS t
+          USING (SELECT '{_notify_key}' AS signal_key, 'READY' AS status,
+                 current_timestamp() AS updated_at) AS s
+          ON t.signal_key = s.signal_key
+          WHEN MATCHED THEN UPDATE SET status = s.status, updated_at = s.updated_at
+          WHEN NOT MATCHED THEN INSERT *
+      """)
+    description: "Write signal to Delta table for downstream consumers"
+    imports: []
+    confidence: 0.90
+    role: "utility"

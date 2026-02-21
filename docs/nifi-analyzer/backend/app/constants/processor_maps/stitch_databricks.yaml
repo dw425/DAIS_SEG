@@ -1,0 +1,84 @@
+# Stitch -> Databricks PySpark Mapping
+# Maps Stitch data pipeline patterns to Databricks equivalents
+
+mappings:
+  - type: "Database Integration"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "{driver}")
+          .load())
+    description: "Stitch DB integration replaced by JDBC read"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "SaaS Integration"
+    category: "REST API"
+    template: |
+      import requests
+      _token = dbutils.secrets.get(scope="{scope}", key="api-token")
+      _data = []
+      _url = "{api_base_url}"
+      while _url:
+          _resp = requests.get(_url, headers={"Authorization": f"Bearer {{_token}}"}, timeout=60)
+          _resp.raise_for_status()
+          _json = _resp.json()
+          _data.extend(_json.get("{data_key}", []))
+          _url = _json.get("next", None)
+      df_{name} = spark.createDataFrame(_data)
+    description: "Stitch SaaS integration replaced by paginated REST API"
+    imports: ["import requests"]
+    confidence: 0.85
+    role: "source"
+
+  - type: "Replication (Full Table)"
+    category: "Delta Overwrite"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("overwrite")
+          .option("overwriteSchema", "true")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Full table replication via Delta overwrite"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "Replication (Incremental)"
+    category: "Delta MERGE"
+    template: |
+      from delta.tables import DeltaTable
+      _target = DeltaTable.forName(spark, "{catalog}.{schema}.{table}")
+      _target.alias("t").merge(
+          df_{input}.alias("s"),
+          "t.{replication_key} = s.{replication_key}"
+      ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+    description: "Incremental replication via Delta MERGE"
+    imports: ["from delta.tables import DeltaTable"]
+    confidence: 0.90
+    role: "sink"
+
+  - type: "Webhook Source"
+    category: "Model Serving"
+    template: |
+      df_{name} = spark.readStream.format("delta").table("{name}_incoming")
+    description: "Stitch webhook replaced by Model Serving + Delta"
+    imports: []
+    confidence: 0.85
+    role: "source"
+
+  - type: "Transformation (SQL)"
+    category: "Spark SQL"
+    template: |
+      spark.sql("""
+          CREATE OR REPLACE TABLE {catalog}.{schema}.{output_table} AS
+          {sql}
+      """)
+    description: "Stitch SQL transformation as Spark SQL CTAS"
+    imports: []
+    confidence: 0.92
+    role: "transform"

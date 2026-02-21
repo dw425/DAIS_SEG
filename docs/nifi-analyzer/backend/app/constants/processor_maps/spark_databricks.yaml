@@ -1,0 +1,124 @@
+# Apache Spark (standalone/EMR/Dataproc) -> Databricks Mapping
+# Maps Spark patterns from other environments to Databricks-optimized equivalents
+
+mappings:
+  - type: "SparkSession.builder"
+    category: "Pre-configured"
+    template: |
+      # SparkSession is pre-configured in Databricks notebooks
+      # spark = SparkSession.builder.appName(...).getOrCreate() -- NOT NEEDED
+      # Just use `spark` directly
+      print(f"Spark version: {spark.version}")
+    description: "SparkSession already available as `spark` in Databricks"
+    imports: []
+    confidence: 0.98
+    role: "utility"
+
+  - type: "spark.read.parquet"
+    category: "Delta Read"
+    template: |
+      # Prefer Delta Lake over raw Parquet for ACID + time travel
+      df_{name} = spark.table("{catalog}.{schema}.{table}")
+      # Or if raw parquet is needed:
+      # df_{name} = spark.read.parquet("{path}")
+    description: "Parquet read upgraded to Delta table read"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "df.write.parquet"
+    category: "Delta Write"
+    template: |
+      # Prefer Delta Lake over raw Parquet
+      (df_{input}.write
+          .format("delta")
+          .mode("{mode}")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Parquet write upgraded to Delta saveAsTable"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "spark.read.format('hive')"
+    category: "Unity Catalog"
+    template: |
+      # Hive metastore -> Unity Catalog
+      df_{name} = spark.table("{catalog}.{schema}.{table}")
+    description: "Hive table read via Unity Catalog"
+    imports: []
+    confidence: 0.95
+    role: "source"
+
+  - type: "df.write.saveAsTable (Hive)"
+    category: "Delta Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("{mode}")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Hive saveAsTable upgraded to Delta in Unity Catalog"
+    imports: []
+    confidence: 0.95
+    role: "sink"
+
+  - type: "spark-submit"
+    category: "Databricks Job"
+    template: |
+      # spark-submit -> Databricks Job API
+      from databricks.sdk import WorkspaceClient
+      w = WorkspaceClient()
+      _run = w.jobs.submit(
+          run_name="{name}",
+          tasks=[{{
+              "task_key": "{name}",
+              "spark_python_task": {{
+                  "python_file": "{python_file}",
+                  "parameters": ["{arg1}", "{arg2}"]
+              }}
+          }}])
+    description: "spark-submit replaced by Databricks Jobs API"
+    imports: ["from databricks.sdk import WorkspaceClient"]
+    confidence: 0.90
+    role: "process"
+
+  - type: "sc.textFile"
+    category: "DataFrame Read"
+    template: |
+      # RDD textFile -> DataFrame read
+      df_{name} = spark.read.text("{path}")
+    description: "RDD textFile upgraded to DataFrame read"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "sc.parallelize"
+    category: "createDataFrame"
+    template: |
+      # RDD parallelize -> createDataFrame
+      df_{name} = spark.createDataFrame({data}, {schema})
+    description: "RDD parallelize upgraded to createDataFrame"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "rdd.map / rdd.flatMap"
+    category: "DataFrame API"
+    template: |
+      # RDD map/flatMap -> DataFrame withColumn/select
+      df_{name} = df_{input}.withColumn("{col}", expr("{expression}"))
+    description: "RDD map operations upgraded to DataFrame API"
+    imports: ["from pyspark.sql.functions import expr"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "rdd.saveAsTextFile"
+    category: "Delta Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("overwrite")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "RDD saveAsTextFile upgraded to Delta write"
+    imports: []
+    confidence: 0.90
+    role: "sink"

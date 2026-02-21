@@ -1,0 +1,170 @@
+# Oracle Data Integrator (ODI) -> Databricks PySpark Mapping
+# Maps ODI components and Oracle-specific constructs to PySpark equivalents
+
+mappings:
+  - type: "ODI Interface"
+    category: "Spark Pipeline"
+    template: |
+      # ODI Interface -> Source-Transform-Target pipeline
+      df_source = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="oracle-jdbc-url"))
+          .option("dbtable", "{source_table}")
+          .option("driver", "oracle.jdbc.OracleDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="oracle-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="oracle-pass"))
+          .load())
+      df_transformed = df_source.selectExpr({select_expressions})
+      (df_transformed.write
+          .format("delta")
+          .mode("{loading_type}")
+          .saveAsTable("{catalog}.{schema}.{target_table}"))
+    description: "ODI Interface as JDBC source -> transform -> Delta target"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "ODI Package"
+    category: "Databricks Workflow"
+    template: |
+      # ODI Package -> Databricks multi-task workflow
+      _results = []
+      _results.append(dbutils.notebook.run("{step_1_notebook}", 3600))
+      _results.append(dbutils.notebook.run("{step_2_notebook}", 3600))
+      _results.append(dbutils.notebook.run("{step_3_notebook}", 3600))
+      print(f"[PACKAGE] All steps completed: {_results}")
+    description: "ODI Package as sequential notebook orchestration"
+    imports: []
+    confidence: 0.88
+    role: "process"
+
+  - type: "ODI Procedure"
+    category: "Spark SQL"
+    template: |
+      # ODI Procedure with source/target SQL commands
+      spark.sql("""
+      {source_command}
+      """)
+      spark.sql("""
+      {target_command}
+      """)
+    description: "ODI Procedure as Spark SQL execution"
+    imports: []
+    confidence: 0.85
+    role: "process"
+
+  - type: "ODI Variable"
+    category: "Databricks Widget"
+    template: |
+      dbutils.widgets.text("{variable_name}", "{default_value}")
+      _{variable_name} = dbutils.widgets.get("{variable_name}")
+      print(f"[VAR] {variable_name} = {_{variable_name}}")
+    description: "ODI Variable as Databricks widget parameter"
+    imports: []
+    confidence: 0.90
+    role: "utility"
+
+  - type: "Source Table (Oracle)"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="oracle-jdbc-url"))
+          .option("dbtable", "{schema}.{table}")
+          .option("driver", "oracle.jdbc.OracleDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="oracle-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="oracle-pass"))
+          .option("fetchsize", 10000)
+          .option("partitionColumn", "{partition_col}")
+          .option("lowerBound", "{lower}")
+          .option("upperBound", "{upper}")
+          .option("numPartitions", "{num_partitions}")
+          .load())
+    description: "Oracle source table via JDBC with parallel partitioned read"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Target Table (Oracle to Delta)"
+    category: "Delta Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .option("overwriteSchema", "true")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Oracle target replaced by Delta Lake table"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "SQL Transformation"
+    category: "Spark SQL"
+    template: |
+      df_{input}.createOrReplaceTempView("tmp_{name}")
+      df_{name} = spark.sql("""
+      {sql_statement}
+      """)
+    description: "SQL transformation via temp view + spark.sql"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "PL/SQL Block"
+    category: "Python Function"
+    template: |
+      # Oracle PL/SQL block ported to Python
+      def _plsql_{name}():
+          # Port PL/SQL logic: cursors -> DataFrames, exceptions -> try/except
+          df = spark.sql("{select_sql}")
+          # Process rows
+          for row in df.collect():
+              # Row-level logic
+              pass
+          return True
+
+      _plsql_{name}()
+    description: "PL/SQL block ported to Python function"
+    imports: []
+    confidence: 0.75
+    role: "process"
+
+  - type: "Oracle Sequence"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import monotonically_increasing_id
+      df_{name} = df_{input}.withColumn("{seq_name}",
+          monotonically_increasing_id() + {start_with})
+    description: "Oracle SEQUENCE replaced by monotonically_increasing_id"
+    imports: ["from pyspark.sql.functions import monotonically_increasing_id"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Oracle Materialized View"
+    category: "Delta Table"
+    template: |
+      # Oracle MV -> Delta table with scheduled refresh
+      spark.sql("""
+          CREATE OR REPLACE TABLE {catalog}.{schema}.{mv_name} AS
+          {query}
+      """)
+      # Schedule periodic refresh via Databricks Job
+    description: "Oracle Materialized View as Delta table with refresh"
+    imports: []
+    confidence: 0.88
+    role: "transform"
+
+  - type: "DBLink Query"
+    category: "JDBC Source"
+    template: |
+      # Oracle DBLink -> direct JDBC read from remote database
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="remote-oracle-url"))
+          .option("dbtable", "{remote_table}")
+          .option("driver", "oracle.jdbc.OracleDriver")
+          .load())
+    description: "Oracle DBLink replaced by direct JDBC to remote database"
+    imports: []
+    confidence: 0.88
+    role: "source"

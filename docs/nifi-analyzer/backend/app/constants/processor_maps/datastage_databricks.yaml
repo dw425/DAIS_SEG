@@ -1,0 +1,197 @@
+# IBM DataStage -> Databricks PySpark Mapping
+# Maps DataStage stages to PySpark equivalents
+
+mappings:
+  - type: "Sequential File"
+    category: "File Read"
+    template: |
+      df_{name} = (spark.read
+          .format("csv")
+          .option("header", "{has_header}")
+          .option("delimiter", "{delimiter}")
+          .option("inferSchema", "true")
+          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
+    description: "Sequential File stage via Spark CSV reader"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "DB2 Connector"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:db2://{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.ibm.db2.jcc.DB2Driver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="db2-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="db2-pass"))
+          .load())
+    description: "DB2 Connector via JDBC"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Oracle Connector"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:oracle:thin:@{host}:{port}:{sid}")
+          .option("dbtable", "{table}")
+          .option("driver", "oracle.jdbc.OracleDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="oracle-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="oracle-pass"))
+          .load())
+    description: "Oracle Connector via JDBC"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Transformer"
+    category: "DataFrame API"
+    template: |
+      # DataStage Transformer -> PySpark expressions
+      df_{name} = (df_{input}
+          .withColumn("{output_col}", expr("{derivation}"))
+          .filter("{constraint}"))
+    description: "Transformer stage via withColumn + expr"
+    imports: ["from pyspark.sql.functions import expr"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Filter"
+    category: "DataFrame Filter"
+    template: |
+      df_{name} = df_{input}.filter("{where_clause}")
+      df_{name}_reject = df_{input}.filter("NOT ({where_clause})")
+    description: "Filter stage with accept and reject outputs"
+    imports: []
+    confidence: 0.92
+    role: "route"
+
+  - type: "Sort"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.orderBy(
+          col("{key_1}").asc(),
+          col("{key_2}").desc())
+      # Unique option:
+      # df_{name} = df_{name}.dropDuplicates(["{key_1}"])
+    description: "Sort stage with optional unique flag"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Join"
+    category: "DataFrame Join"
+    template: |
+      df_{name} = df_{input_left}.join(
+          df_{input_right},
+          on=df_{input_left}["{left_key}"] == df_{input_right}["{right_key}"],
+          how="{join_type}")
+    description: "Join stage via DataFrame join"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Aggregator"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .groupBy("{group_key}")
+          .agg(
+              count("*").alias("count"),
+              sum("{column}").alias("sum_{column}"),
+              min("{column}").alias("min_{column}"),
+              max("{column}").alias("max_{column}")))
+    description: "Aggregator stage via groupBy + agg"
+    imports: ["from pyspark.sql.functions import count, sum, min, max"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Lookup"
+    category: "DataFrame Join"
+    template: |
+      df_ref = spark.table("{catalog}.{schema}.{reference_table}").cache()
+      df_{name} = df_{input}.join(
+          broadcast(df_ref),
+          on="{lookup_key}",
+          how="left")
+    description: "Lookup stage via broadcast join on cached reference"
+    imports: ["from pyspark.sql.functions import broadcast"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Change Capture"
+    category: "Delta CDF"
+    template: |
+      # DataStage CDC -> Delta Change Data Feed
+      spark.sql("ALTER TABLE {catalog}.{schema}.{table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+      df_{name} = (spark.readStream
+          .format("delta")
+          .option("readChangeFeed", "true")
+          .option("startingVersion", {start_version})
+          .table("{catalog}.{schema}.{table}"))
+    description: "Change Capture via Delta Change Data Feed"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "XML Input"
+    category: "XML Read"
+    template: |
+      df_{name} = (spark.read
+          .format("com.databricks.spark.xml")
+          .option("rowTag", "{row_tag}")
+          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
+    description: "XML Input via spark-xml"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "Merge"
+    category: "Delta MERGE"
+    template: |
+      from delta.tables import DeltaTable
+      _target = DeltaTable.forName(spark, "{catalog}.{schema}.{target_table}")
+      _target.alias("t").merge(
+          df_{input}.alias("s"),
+          "t.{key} = s.{key}"
+      ).whenMatchedUpdateAll(
+      ).whenNotMatchedInsertAll(
+      ).whenNotMatchedBySourceDelete(
+      ).execute()
+    description: "Merge stage via Delta MERGE with full CDC support"
+    imports: ["from delta.tables import DeltaTable"]
+    confidence: 0.90
+    role: "sink"
+
+  - type: "Funnel"
+    category: "DataFrame Union"
+    template: |
+      df_{name} = df_{input_1}.unionByName(df_{input_2}, allowMissingColumns=True)
+    description: "Funnel stage via unionByName"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Peek"
+    category: "Spark Display"
+    template: |
+      display(df_{input})
+      print(f"[PEEK] {name}: {df_{input}.count()} rows")
+      df_{input}.printSchema()
+    description: "Peek stage via display() and printSchema()"
+    imports: []
+    confidence: 0.92
+    role: "utility"
+
+  - type: "Remove Duplicates"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.dropDuplicates(["{key_column}"])
+    description: "Remove Duplicates via dropDuplicates"
+    imports: []
+    confidence: 0.95
+    role: "transform"

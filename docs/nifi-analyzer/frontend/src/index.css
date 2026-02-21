@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #FF4B4B;
+  --green: #21C354;
+  --amber: #EAB308;
+  --red: #EF4444;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #4a4a6a; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #6a6a8a; }
+
+/* Code blocks */
+pre, code { font-family: 'JetBrains Mono', 'Fira Code', monospace; }

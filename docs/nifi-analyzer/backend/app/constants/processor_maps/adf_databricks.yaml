@@ -1,0 +1,223 @@
+# Azure Data Factory -> Databricks PySpark Mapping
+# Maps ADF activities and data flows to PySpark equivalents
+
+mappings:
+  - type: "Copy Activity"
+    category: "Spark Read/Write"
+    template: |
+      # ADF Copy Activity -> Spark read + write pipeline
+      df_{name} = (spark.read
+          .format("{source_format}")
+          .option("header", "true")
+          .load("{source_path}"))
+      (df_{name}.write
+          .format("delta")
+          .mode("{write_mode}")
+          .saveAsTable("{catalog}.{schema}.{sink_table}"))
+    description: "Copy Activity as Spark read-to-Delta-write pipeline"
+    imports: []
+    confidence: 0.92
+    role: "process"
+
+  - type: "Data Flow"
+    category: "DataFrame Pipeline"
+    template: |
+      # ADF Mapping Data Flow -> PySpark DataFrame pipeline
+      df_source = spark.read.format("{source_format}").load("{source_path}")
+      df_transformed = (df_source
+          .filter("{filter_condition}")
+          .withColumn("{derived_col}", expr("{expression}"))
+          .groupBy("{group_by}").agg(count("*").alias("cnt")))
+      (df_transformed.write
+          .format("delta")
+          .mode("append")
+          .saveAsTable("{catalog}.{schema}.{sink_table}"))
+    description: "Mapping Data Flow as PySpark DataFrame chain"
+    imports: ["from pyspark.sql.functions import expr, count"]
+    confidence: 0.90
+    role: "process"
+
+  - type: "Notebook Activity"
+    category: "Notebook Run"
+    template: |
+      _result = dbutils.notebook.run(
+          "{notebook_path}",
+          timeout_seconds={timeout},
+          arguments={base_parameters})
+      print(f"[NOTEBOOK] {notebook_path} returned: {_result}")
+    description: "Notebook Activity via dbutils.notebook.run"
+    imports: []
+    confidence: 0.95
+    role: "process"
+
+  - type: "Execute Pipeline Activity"
+    category: "Databricks Workflow"
+    template: |
+      from databricks.sdk import WorkspaceClient
+      w = WorkspaceClient()
+      _run = w.jobs.run_now(
+          job_id={child_job_id},
+          notebook_params={parameters})
+      print(f"[PIPELINE] Triggered child job: {_run.run_id}")
+    description: "Execute Pipeline via Databricks Job trigger"
+    imports: ["from databricks.sdk import WorkspaceClient"]
+    confidence: 0.92
+    role: "process"
+
+  - type: "Lookup Activity"
+    category: "Spark Read"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "({query}) subq")
+          .load())
+      _lookup_result = df_{name}.first()
+    description: "Lookup Activity via JDBC query with first() result"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "ForEach Activity"
+    category: "Python Loop"
+    template: |
+      _items = {items_expression}
+      _results = []
+      for _item in _items:
+          _result = dbutils.notebook.run(
+              "{inner_notebook}",
+              timeout_seconds=3600,
+              arguments={{"item": str(_item)}})
+          _results.append(_result)
+      print(f"[FOREACH] Processed {len(_results)} items")
+    description: "ForEach Activity via Python loop with notebook runs"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "If Condition Activity"
+    category: "Python Conditional"
+    template: |
+      if {condition_expression}:
+          # True branch
+          _result = dbutils.notebook.run("{true_notebook}", 3600)
+      else:
+          # False branch
+          _result = dbutils.notebook.run("{false_notebook}", 3600)
+    description: "If Condition as Python if/else with notebook runs"
+    imports: []
+    confidence: 0.92
+    role: "route"
+
+  - type: "Switch Activity"
+    category: "Python Match"
+    template: |
+      _switch_val = {expression}
+      if _switch_val == "{case1}":
+          dbutils.notebook.run("{case1_notebook}", 3600)
+      elif _switch_val == "{case2}":
+          dbutils.notebook.run("{case2_notebook}", 3600)
+      else:
+          dbutils.notebook.run("{default_notebook}", 3600)
+    description: "Switch Activity as Python if/elif chain"
+    imports: []
+    confidence: 0.90
+    role: "route"
+
+  - type: "Wait Activity"
+    category: "Python Sleep"
+    template: |
+      import time
+      print(f"[WAIT] Pausing for {wait_time_seconds} seconds")
+      time.sleep({wait_time_seconds})
+    description: "Wait Activity via time.sleep"
+    imports: ["import time"]
+    confidence: 0.95
+    role: "utility"
+
+  - type: "Web Activity"
+    category: "HTTP Request"
+    template: |
+      import requests
+      _response = requests.request(
+          method="{method}",
+          url="{url}",
+          headers={headers},
+          json={body},
+          timeout=120)
+      _response.raise_for_status()
+      _web_result = _response.json()
+      print(f"[WEB] {method} {url}: {_response.status_code}")
+    description: "Web Activity via requests library"
+    imports: ["import requests"]
+    confidence: 0.90
+    role: "process"
+
+  - type: "Delete Activity"
+    category: "dbutils.fs"
+    template: |
+      dbutils.fs.rm("{path}", recurse=True)
+      print(f"[DELETE] Removed: {path}")
+    description: "Delete Activity via dbutils.fs.rm"
+    imports: []
+    confidence: 0.92
+    role: "utility"
+
+  - type: "Stored Procedure Activity"
+    category: "JDBC Execute"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "(EXEC {stored_procedure} {params}) subq")
+          .option("driver", "{driver}")
+          .load())
+    description: "Stored Procedure via JDBC query"
+    imports: []
+    confidence: 0.85
+    role: "process"
+
+  - type: "Get Metadata Activity"
+    category: "dbutils.fs / Catalog"
+    template: |
+      _metadata = dbutils.fs.ls("{path}")
+      df_{name} = spark.createDataFrame(
+          [(f.name, f.size, f.modificationTime) for f in _metadata],
+          ["name", "size", "modification_time"])
+    description: "Get Metadata via dbutils.fs.ls or catalog API"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "Validation Activity"
+    category: "DLT Expectations"
+    template: |
+      # ADF Validation -> file existence check
+      _exists = len(dbutils.fs.ls("{path}")) > 0
+      assert _exists, f"Validation failed: {path} does not exist"
+      print(f"[VALIDATE] Path exists: {path}")
+    description: "Validation Activity via dbutils.fs existence check"
+    imports: []
+    confidence: 0.88
+    role: "process"
+
+  - type: "Set Variable Activity"
+    category: "Python Variable"
+    template: |
+      # ADF Set Variable -> Python variable or widget
+      _{name}_var = {value}
+      # Or use widgets: dbutils.widgets.text("{name}", str({value}))
+    description: "Set Variable as Python variable or dbutils widget"
+    imports: []
+    confidence: 0.92
+    role: "utility"
+
+  - type: "Append Variable Activity"
+    category: "Python List"
+    template: |
+      _{name}_list = _{name}_list if '_{name}_list' in dir() else []
+      _{name}_list.append({value})
+    description: "Append Variable as Python list append"
+    imports: []
+    confidence: 0.90
+    role: "utility"

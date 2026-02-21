@@ -1,0 +1,267 @@
+# JDBC/SQL Type -> Spark Type Mapping
+# Maps database-specific types to PySpark SQL types
+
+type_mappings:
+  # ── String Types ──
+  - jdbc_type: "VARCHAR"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Variable-length character string"
+
+  - jdbc_type: "CHAR"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Fixed-length character string"
+
+  - jdbc_type: "NVARCHAR"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Unicode variable-length string"
+
+  - jdbc_type: "NCHAR"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Unicode fixed-length string"
+
+  - jdbc_type: "TEXT"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Large text field"
+
+  - jdbc_type: "CLOB"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Character large object"
+
+  - jdbc_type: "NCLOB"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "National character large object"
+
+  # ── Integer Types ──
+  - jdbc_type: "INTEGER"
+    spark_type: "IntegerType()"
+    sql_type: "INT"
+    description: "32-bit signed integer"
+
+  - jdbc_type: "INT"
+    spark_type: "IntegerType()"
+    sql_type: "INT"
+    description: "32-bit signed integer"
+
+  - jdbc_type: "SMALLINT"
+    spark_type: "ShortType()"
+    sql_type: "SMALLINT"
+    description: "16-bit signed integer"
+
+  - jdbc_type: "TINYINT"
+    spark_type: "ByteType()"
+    sql_type: "TINYINT"
+    description: "8-bit signed integer"
+
+  - jdbc_type: "BIGINT"
+    spark_type: "LongType()"
+    sql_type: "BIGINT"
+    description: "64-bit signed integer"
+
+  - jdbc_type: "LONG"
+    spark_type: "LongType()"
+    sql_type: "BIGINT"
+    description: "64-bit signed integer (alias)"
+
+  - jdbc_type: "MEDIUMINT"
+    spark_type: "IntegerType()"
+    sql_type: "INT"
+    description: "MySQL medium integer -> INT"
+
+  # ── Floating Point Types ──
+  - jdbc_type: "FLOAT"
+    spark_type: "FloatType()"
+    sql_type: "FLOAT"
+    description: "Single-precision floating point"
+
+  - jdbc_type: "REAL"
+    spark_type: "FloatType()"
+    sql_type: "FLOAT"
+    description: "Single-precision floating point"
+
+  - jdbc_type: "DOUBLE"
+    spark_type: "DoubleType()"
+    sql_type: "DOUBLE"
+    description: "Double-precision floating point"
+
+  - jdbc_type: "DOUBLE PRECISION"
+    spark_type: "DoubleType()"
+    sql_type: "DOUBLE"
+    description: "Double-precision floating point"
+
+  - jdbc_type: "NUMBER"
+    spark_type: "DecimalType(38, 10)"
+    sql_type: "DECIMAL(38, 10)"
+    description: "Oracle NUMBER -> DECIMAL"
+
+  # ── Decimal/Numeric Types ──
+  - jdbc_type: "DECIMAL"
+    spark_type: "DecimalType({precision}, {scale})"
+    sql_type: "DECIMAL({precision}, {scale})"
+    description: "Exact numeric with precision and scale"
+
+  - jdbc_type: "NUMERIC"
+    spark_type: "DecimalType({precision}, {scale})"
+    sql_type: "DECIMAL({precision}, {scale})"
+    description: "Exact numeric (alias for DECIMAL)"
+
+  - jdbc_type: "MONEY"
+    spark_type: "DecimalType(19, 4)"
+    sql_type: "DECIMAL(19, 4)"
+    description: "SQL Server MONEY type"
+
+  - jdbc_type: "SMALLMONEY"
+    spark_type: "DecimalType(10, 4)"
+    sql_type: "DECIMAL(10, 4)"
+    description: "SQL Server SMALLMONEY type"
+
+  # ── Boolean Types ──
+  - jdbc_type: "BOOLEAN"
+    spark_type: "BooleanType()"
+    sql_type: "BOOLEAN"
+    description: "Boolean true/false"
+
+  - jdbc_type: "BIT"
+    spark_type: "BooleanType()"
+    sql_type: "BOOLEAN"
+    description: "SQL Server BIT -> BOOLEAN"
+
+  # ── Date/Time Types ──
+  - jdbc_type: "DATE"
+    spark_type: "DateType()"
+    sql_type: "DATE"
+    description: "Calendar date (year, month, day)"
+
+  - jdbc_type: "TIME"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Time of day (no native Spark TIME; use STRING)"
+
+  - jdbc_type: "TIMESTAMP"
+    spark_type: "TimestampType()"
+    sql_type: "TIMESTAMP"
+    description: "Date and time with fractional seconds"
+
+  - jdbc_type: "TIMESTAMP WITH TIME ZONE"
+    spark_type: "TimestampType()"
+    sql_type: "TIMESTAMP"
+    description: "Timestamp with timezone (Spark stores as UTC)"
+
+  - jdbc_type: "DATETIME"
+    spark_type: "TimestampType()"
+    sql_type: "TIMESTAMP"
+    description: "SQL Server DATETIME -> TIMESTAMP"
+
+  - jdbc_type: "DATETIME2"
+    spark_type: "TimestampType()"
+    sql_type: "TIMESTAMP"
+    description: "SQL Server DATETIME2 -> TIMESTAMP"
+
+  - jdbc_type: "SMALLDATETIME"
+    spark_type: "TimestampType()"
+    sql_type: "TIMESTAMP"
+    description: "SQL Server SMALLDATETIME -> TIMESTAMP"
+
+  - jdbc_type: "INTERVAL"
+    spark_type: "DayTimeIntervalType()"
+    sql_type: "INTERVAL DAY TO SECOND"
+    description: "Time interval"
+
+  # ── Binary Types ──
+  - jdbc_type: "BINARY"
+    spark_type: "BinaryType()"
+    sql_type: "BINARY"
+    description: "Fixed-length binary data"
+
+  - jdbc_type: "VARBINARY"
+    spark_type: "BinaryType()"
+    sql_type: "BINARY"
+    description: "Variable-length binary data"
+
+  - jdbc_type: "BLOB"
+    spark_type: "BinaryType()"
+    sql_type: "BINARY"
+    description: "Binary large object"
+
+  - jdbc_type: "BYTEA"
+    spark_type: "BinaryType()"
+    sql_type: "BINARY"
+    description: "PostgreSQL binary type"
+
+  - jdbc_type: "IMAGE"
+    spark_type: "BinaryType()"
+    sql_type: "BINARY"
+    description: "SQL Server IMAGE (deprecated) -> BINARY"
+
+  # ── Complex Types ──
+  - jdbc_type: "ARRAY"
+    spark_type: "ArrayType({element_type})"
+    sql_type: "ARRAY<{element_type}>"
+    description: "Ordered collection of elements"
+
+  - jdbc_type: "MAP"
+    spark_type: "MapType({key_type}, {value_type})"
+    sql_type: "MAP<{key_type}, {value_type}>"
+    description: "Key-value pair collection"
+
+  - jdbc_type: "STRUCT"
+    spark_type: "StructType([StructField(...)])"
+    sql_type: "STRUCT<{field_definitions}>"
+    description: "Structured record type"
+
+  - jdbc_type: "JSON"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "JSON stored as STRING (use from_json to parse)"
+
+  - jdbc_type: "JSONB"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "PostgreSQL JSONB stored as STRING"
+
+  - jdbc_type: "XML"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "XML stored as STRING (use spark-xml to parse)"
+
+  # ── Special Types ──
+  - jdbc_type: "UUID"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "UUID stored as STRING"
+
+  - jdbc_type: "UNIQUEIDENTIFIER"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "SQL Server UNIQUEIDENTIFIER -> STRING"
+
+  - jdbc_type: "ROWID"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Oracle ROWID -> STRING"
+
+  - jdbc_type: "VARIANT"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Snowflake VARIANT -> STRING (parse with from_json)"
+
+  - jdbc_type: "OBJECT"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Snowflake OBJECT -> STRING (parse with from_json)"
+
+  - jdbc_type: "GEOGRAPHY"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Geospatial type stored as WKT/GeoJSON STRING"
+
+  - jdbc_type: "GEOMETRY"
+    spark_type: "StringType()"
+    sql_type: "STRING"
+    description: "Geospatial geometry stored as WKT STRING"

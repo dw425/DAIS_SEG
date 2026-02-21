@@ -1,0 +1,440 @@
+# SSIS (SQL Server Integration Services) -> Databricks PySpark Mapping
+# Maps SSIS Data Flow and Control Flow components to PySpark equivalents
+
+mappings:
+  # ── DATA FLOW SOURCES ──
+  - type: "OLE DB Source"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="sqlserver-jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="sqlserver-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="sqlserver-pass"))
+          .load())
+    description: "OLE DB Source read via JDBC with SQL Server driver"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "ADO NET Source"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="ado-jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "{driver}")
+          .load())
+    description: "ADO.NET Source read via JDBC"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "Flat File Source"
+    category: "Auto Loader"
+    template: |
+      df_{name} = (spark.read
+          .format("csv")
+          .option("header", "true")
+          .option("inferSchema", "true")
+          .option("delimiter", "{delimiter}")
+          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
+    description: "Flat file CSV read from Unity Catalog Volumes"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Excel Source"
+    category: "Spark Read"
+    template: |
+      df_{name} = (spark.read
+          .format("com.crealytics.spark.excel")
+          .option("header", "true")
+          .option("inferSchema", "true")
+          .option("dataAddress", "'{sheet}'!A1")
+          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
+    description: "Excel file read via spark-excel library"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "XML Source"
+    category: "XML Read"
+    template: |
+      df_{name} = (spark.read
+          .format("com.databricks.spark.xml")
+          .option("rowTag", "{row_tag}")
+          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
+    description: "XML file read via spark-xml library"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "Raw File Source"
+    category: "Binary Read"
+    template: |
+      df_{name} = spark.read.format("binaryFile").load("/Volumes/{catalog}/{schema}/landing/{path}")
+    description: "Raw binary file read"
+    imports: []
+    confidence: 0.85
+    role: "source"
+
+  # ── DATA FLOW TRANSFORMS ──
+  - type: "Derived Column"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("{new_column}",
+          expr("{expression}"))
+    description: "Derived column via withColumn + expr"
+    imports: ["from pyspark.sql.functions import expr"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Conditional Split"
+    category: "DataFrame Filter"
+    template: |
+      df_{name}_case1 = df_{input}.filter("{condition_1}")
+      df_{name}_case2 = df_{input}.filter("{condition_2}")
+      df_{name}_default = df_{input}.filter("NOT ({condition_1}) AND NOT ({condition_2})")
+    description: "Conditional split via multiple DataFrame filters"
+    imports: []
+    confidence: 0.92
+    role: "route"
+
+  - type: "Data Conversion"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .withColumn("{column}", col("{column}").cast("{target_type}")))
+    description: "Data type conversion via cast()"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Lookup"
+    category: "DataFrame Join"
+    template: |
+      df_lookup = spark.table("{catalog}.{schema}.{lookup_table}").cache()
+      df_{name} = df_{input}.join(
+          df_lookup,
+          on=df_{input}["{source_key}"] == df_lookup["{lookup_key}"],
+          how="left")
+    description: "Lookup transform via cached broadcast join"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Sort"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.orderBy(
+          col("{sort_column}").asc())
+    description: "Sort rows by column"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Merge Join"
+    category: "DataFrame Join"
+    template: |
+      df_{name} = df_{input_left}.join(
+          df_{input_right},
+          on="{join_key}",
+          how="{join_type}")
+    description: "Merge join via DataFrame join with configurable join type"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Union All"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input1}.unionByName(df_{input2}, allowMissingColumns=True)
+    description: "Union All via unionByName"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Multicast"
+    category: "DataFrame Cache"
+    template: |
+      df_{name} = df_{input}.cache()
+      # Use df_{name} in multiple downstream operations
+      # Branch 1: df_branch1 = df_{name}.filter(...)
+      # Branch 2: df_branch2 = df_{name}.select(...)
+    description: "Multicast via DataFrame cache for multiple consumers"
+    imports: []
+    confidence: 0.92
+    role: "route"
+
+  - type: "Row Count"
+    category: "DataFrame API"
+    template: |
+      _row_count_{name} = df_{input}.count()
+      print(f"[ROW COUNT] {name}: {_row_count_{name}} rows")
+      spark.sql(f"INSERT INTO {catalog}.{schema}.audit_log VALUES ('{name}', {_row_count_{name}}, current_timestamp())")
+    description: "Row count with audit logging to Delta table"
+    imports: []
+    confidence: 0.92
+    role: "utility"
+
+  - type: "Aggregate"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .groupBy("{group_by_column}")
+          .agg(
+              count("*").alias("row_count"),
+              sum("{measure_column}").alias("total")))
+    description: "Aggregation via groupBy + agg"
+    imports: ["from pyspark.sql.functions import count, sum"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Pivot"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .groupBy("{group_column}")
+          .pivot("{pivot_column}")
+          .agg(sum("{value_column}")))
+    description: "Pivot transform via groupBy + pivot"
+    imports: ["from pyspark.sql.functions import sum"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Unpivot"
+    category: "Spark SQL"
+    template: |
+      df_{input}.createOrReplaceTempView("tmp_{name}")
+      df_{name} = spark.sql("""
+          SELECT {id_columns}, stack({n}, {column_value_pairs}) AS (attribute, value)
+          FROM tmp_{name}
+      """)
+    description: "Unpivot via Spark SQL stack function"
+    imports: []
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Character Map"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .withColumn("{column}", translate(col("{column}"), "{from_chars}", "{to_chars}")))
+    description: "Character mapping via translate function"
+    imports: ["from pyspark.sql.functions import translate, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Copy Column"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("{new_column}", col("{source_column}"))
+    description: "Copy column values to new column"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Fuzzy Lookup"
+    category: "DataFrame UDF"
+    template: |
+      from pyspark.sql.functions import pandas_udf, col, levenshtein
+      df_ref = spark.table("{catalog}.{schema}.{reference_table}").cache()
+      df_{name} = df_{input}.join(
+          df_ref,
+          levenshtein(df_{input}["{source_col}"], df_ref["{ref_col}"]) < {threshold},
+          how="left")
+    description: "Fuzzy lookup via Levenshtein distance join"
+    imports: ["from pyspark.sql.functions import levenshtein, col"]
+    confidence: 0.85
+    role: "transform"
+
+  - type: "Slowly Changing Dimension"
+    category: "Delta MERGE"
+    template: |
+      from delta.tables import DeltaTable
+      _target = DeltaTable.forName(spark, "{catalog}.{schema}.{dim_table}")
+      _target.alias("t").merge(
+          df_{input}.alias("s"),
+          "t.{business_key} = s.{business_key}"
+      ).whenMatchedUpdate(
+          condition="t.hash_value <> s.hash_value",
+          set={{"effective_end": "current_date()", "is_current": "false"}}
+      ).whenNotMatchedInsertAll().execute()
+    description: "SCD Type 2 via Delta Lake MERGE"
+    imports: ["from delta.tables import DeltaTable"]
+    confidence: 0.88
+    role: "sink"
+
+  # ── DATA FLOW DESTINATIONS ──
+  - type: "OLE DB Destination"
+    category: "JDBC Write"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="sqlserver-jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="sqlserver-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="sqlserver-pass"))
+          .option("batchsize", 10000)
+          .mode("append")
+          .save())
+    description: "OLE DB Destination write via JDBC"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "Flat File Destination"
+    category: "File Write"
+    template: |
+      (df_{input}.write
+          .format("csv")
+          .option("header", "true")
+          .option("delimiter", "{delimiter}")
+          .mode("overwrite")
+          .save("/Volumes/{catalog}/{schema}/output/{filename}"))
+    description: "Flat file CSV write to Volumes"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "OLE DB Command"
+    category: "JDBC Execute"
+    template: |
+      # Execute SQL command per row via foreachBatch
+      def _ole_db_cmd(batch_df, batch_id):
+          _url = dbutils.secrets.get(scope="{scope}", key="sqlserver-jdbc-url")
+          batch_df.write.format("jdbc").option("url", _url).option("dbtable", "{table}").mode("append").save()
+
+      df_{input}.writeStream.foreachBatch(_ole_db_cmd).start()
+    description: "OLE DB Command via JDBC foreachBatch"
+    imports: []
+    confidence: 0.85
+    role: "sink"
+
+  # ── CONTROL FLOW ──
+  - type: "Execute SQL Task"
+    category: "Spark SQL"
+    template: |
+      _result = spark.sql("""
+      {sql_statement}
+      """)
+      _result.show()
+    description: "Execute SQL Task via spark.sql"
+    imports: []
+    confidence: 0.92
+    role: "process"
+
+  - type: "Script Task"
+    category: "Python Script"
+    template: |
+      # SSIS Script Task -> Python function
+      def _script_task_{name}():
+          # Port C#/VB.NET script logic to Python
+          {script_body}
+          return True
+
+      _script_task_{name}()
+    description: "Script Task ported to Python function"
+    imports: []
+    confidence: 0.80
+    role: "process"
+
+  - type: "For Each Loop Container"
+    category: "Python Loop"
+    template: |
+      _items = dbutils.fs.ls("/Volumes/{catalog}/{schema}/{path}")
+      for _item in _items:
+          df_iter = spark.read.format("{format}").load(_item.path)
+          # Process each item
+          df_iter.write.format("delta").mode("append").saveAsTable("{catalog}.{schema}.{table}")
+          print(f"[LOOP] Processed: {{_item.name}}")
+    description: "For Each Loop via Python iteration over file list"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "Sequence Container"
+    category: "Notebook Run"
+    template: |
+      # SSIS Sequence Container -> Databricks notebook orchestration
+      _results = []
+      _results.append(dbutils.notebook.run("{notebook_1}", timeout_seconds=3600))
+      _results.append(dbutils.notebook.run("{notebook_2}", timeout_seconds=3600))
+      print(f"[SEQ] All tasks completed: {_results}")
+    description: "Sequence Container via sequential notebook runs"
+    imports: []
+    confidence: 0.88
+    role: "process"
+
+  - type: "Data Flow Task"
+    category: "Notebook Cell"
+    template: |
+      # SSIS Data Flow Task -> PySpark notebook cell
+      # Source
+      df_source = spark.read.format("jdbc").option("url", "{jdbc_url}").option("dbtable", "{table}").load()
+      # Transform
+      df_transformed = df_source.select("*")
+      # Sink
+      df_transformed.write.format("delta").mode("append").saveAsTable("{catalog}.{schema}.{target_table}")
+    description: "Data Flow Task as PySpark source-transform-sink pipeline"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "Execute Process Task"
+    category: "Shell Command"
+    template: |
+      import subprocess
+      _result = subprocess.run(["{command}"], capture_output=True, text=True, timeout=300)
+      if _result.returncode != 0:
+          raise Exception(f"Process failed: {_result.stderr}")
+      print(f"[EXEC] {_result.stdout[:500]}")
+    description: "Execute external process via subprocess"
+    imports: ["import subprocess"]
+    confidence: 0.85
+    role: "process"
+
+  - type: "Send Mail Task"
+    category: "Notification"
+    template: |
+      # Use Databricks workflow email notifications
+      # Or use webhook to trigger email service
+      import requests
+      requests.post("{webhook_url}", json={
+          "to": "{to_address}",
+          "subject": "{subject}",
+          "body": "{body}"
+      })
+    description: "Email notification via webhook or workflow settings"
+    imports: ["import requests"]
+    confidence: 0.85
+    role: "utility"
+
+  - type: "File System Task"
+    category: "dbutils.fs"
+    template: |
+      # File operations via dbutils.fs
+      dbutils.fs.cp(
+          "/Volumes/{catalog}/{schema}/{source_path}",
+          "/Volumes/{catalog}/{schema}/{dest_path}")
+      print(f"[FS] Copied {source_path} -> {dest_path}")
+    description: "File system operations via dbutils.fs"
+    imports: []
+    confidence: 0.92
+    role: "utility"
+
+  - type: "Expression Task"
+    category: "Python Expression"
+    template: |
+      # SSIS Expression Task -> Python variable assignment
+      _{name}_value = {expression}
+      print(f"[EXPR] {name} = {_{name}_value}")
+    description: "Expression evaluation via Python"
+    imports: []
+    confidence: 0.90
+    role: "utility"

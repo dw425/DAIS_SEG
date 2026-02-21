@@ -1,0 +1,95 @@
+# Fivetran -> Databricks PySpark Mapping
+# Maps Fivetran connector patterns to Databricks equivalents
+
+mappings:
+  - type: "Database Connector"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "{driver}")
+          .load())
+    description: "Fivetran DB connector replaced by JDBC read"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "SaaS Connector"
+    category: "REST API"
+    template: |
+      import requests
+      _headers = {"Authorization": f"Bearer {{dbutils.secrets.get(scope='{scope}', key='api-token')}}"}
+      _response = requests.get("{api_endpoint}", headers=_headers, timeout=60)
+      _response.raise_for_status()
+      df_{name} = spark.createDataFrame(_response.json()["{data_key}"])
+    description: "Fivetran SaaS connector replaced by REST API call"
+    imports: ["import requests"]
+    confidence: 0.85
+    role: "source"
+
+  - type: "File Connector (S3)"
+    category: "Auto Loader"
+    template: |
+      df_{name} = (spark.readStream
+          .format("cloudFiles")
+          .option("cloudFiles.format", "{format}")
+          .option("cloudFiles.schemaLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+          .load("s3://{bucket}/{prefix}"))
+    description: "Fivetran S3 connector replaced by Auto Loader"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Destination Sync"
+    category: "Delta MERGE"
+    template: |
+      from delta.tables import DeltaTable
+      if spark.catalog.tableExists("{catalog}.{schema}.{table}"):
+          _target = DeltaTable.forName(spark, "{catalog}.{schema}.{table}")
+          _target.alias("t").merge(
+              df_{input}.alias("s"),
+              "t.{primary_key} = s.{primary_key}"
+          ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+      else:
+          df_{input}.write.format("delta").saveAsTable("{catalog}.{schema}.{table}")
+    description: "Fivetran destination sync via Delta MERGE upsert"
+    imports: ["from delta.tables import DeltaTable"]
+    confidence: 0.90
+    role: "sink"
+
+  - type: "CDC Replication"
+    category: "Delta CDF"
+    template: |
+      spark.sql("ALTER TABLE {catalog}.{schema}.{table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+      df_{name} = (spark.readStream
+          .format("delta")
+          .option("readChangeFeed", "true")
+          .table("{catalog}.{schema}.{table}"))
+    description: "Fivetran CDC replaced by Delta Change Data Feed"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "Webhook Connector"
+    category: "Model Serving"
+    template: |
+      # Fivetran Webhook -> Databricks Model Serving endpoint
+      df_{name} = spark.readStream.format("delta").table("{name}_incoming")
+    description: "Fivetran webhook replaced by Model Serving + Delta"
+    imports: []
+    confidence: 0.85
+    role: "source"
+
+  - type: "Transformation (dbt)"
+    category: "Spark SQL"
+    template: |
+      spark.sql("""
+          CREATE OR REPLACE TABLE {catalog}.{schema}.{model_name} AS
+          {select_sql}
+      """)
+    description: "Fivetran dbt transformation as Spark SQL CTAS"
+    imports: []
+    confidence: 0.92
+    role: "transform"

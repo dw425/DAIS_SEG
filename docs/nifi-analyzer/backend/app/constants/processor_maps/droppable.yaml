@@ -1,0 +1,173 @@
+# Droppable Processors / Components
+# These ETL components have no equivalent in Databricks because their
+# functionality is handled natively by the platform or is unnecessary.
+
+droppable:
+  # ── NiFi Flow Management (not needed in Databricks) ──
+  - type: "LogAttribute"
+    platform: "nifi"
+    reason: "Databricks notebooks display data natively via display(). Schema inspection via printSchema()."
+    alternative: "display(df) or df.printSchema()"
+
+  - type: "DebugFlow"
+    platform: "nifi"
+    reason: "Debug inspection handled by Databricks notebook cells and display()."
+    alternative: "display(df)"
+
+  - type: "UpdateAttribute"
+    platform: "nifi"
+    reason: "Only needed when setting flow-file-only attributes (e.g., filename, mime.type) that have no DataFrame equivalent. Drop if attribute is flow-management-only."
+    alternative: "df.withColumn() if attribute maps to a real column"
+    conditional: true
+
+  - type: "GenerateFlowFile"
+    platform: "nifi"
+    reason: "Test data generation only. Drop in production migrations."
+    alternative: "spark.range() or createDataFrame() for test data"
+    conditional: true
+
+  - type: "ControlRate"
+    platform: "nifi"
+    reason: "Spark handles backpressure and rate limiting natively via streaming triggers."
+    alternative: ".trigger(processingTime='10 seconds')"
+
+  - type: "RetryFlowFile"
+    platform: "nifi"
+    reason: "Retry logic handled by Spark task retry and Databricks job retry policies."
+    alternative: "spark.conf.set('spark.task.maxFailures', '4')"
+
+  - type: "Funnel"
+    platform: "nifi"
+    reason: "NiFi flow routing construct. No equivalent needed in DataFrame pipelines."
+    alternative: "Direct DataFrame variable passing"
+
+  - type: "InputPort"
+    platform: "nifi"
+    reason: "NiFi process group input port. Not needed in Databricks."
+    alternative: "Function parameters or notebook widgets"
+
+  - type: "OutputPort"
+    platform: "nifi"
+    reason: "NiFi process group output port. Not needed in Databricks."
+    alternative: "Function return values or notebook exit"
+
+  - type: "SendNiFiSiteToSite"
+    platform: "nifi"
+    reason: "NiFi-to-NiFi data transfer. Use Unity Catalog cross-workspace sharing."
+    alternative: "Unity Catalog sharing or Delta Sharing"
+
+  - type: "ListenNiFiSiteToSite"
+    platform: "nifi"
+    reason: "NiFi-to-NiFi receiver. Not needed in Databricks."
+    alternative: "Unity Catalog sharing"
+
+  - type: "RemoteProcessGroup"
+    platform: "nifi"
+    reason: "NiFi cluster communication. Not applicable in Databricks."
+    alternative: "Databricks multi-task workflows"
+
+  # ── NiFi Content Management (handled by Spark) ──
+  - type: "CompressContent"
+    platform: "nifi"
+    reason: "Delta Lake compresses data natively (snappy/zstd). No explicit compression step needed."
+    alternative: "Delta Lake auto-compression"
+
+  - type: "UnpackContent"
+    platform: "nifi"
+    reason: "Spark auto-decompresses gzip, snappy, lz4, zstd when reading files."
+    alternative: "spark.read handles decompression automatically"
+
+  - type: "IdentifyMimeType"
+    platform: "nifi"
+    reason: "Not needed. Spark infers file format from extension or explicit format specification."
+    alternative: "spark.read.format('csv'|'json'|'parquet')"
+
+  - type: "CountText"
+    platform: "nifi"
+    reason: "Use df.count() directly. No separate counting processor needed."
+    alternative: "df.count()"
+
+  # ── SSIS Flow Management ──
+  - type: "Data Flow Task Container"
+    platform: "ssis"
+    reason: "SSIS package container. In Databricks, code runs sequentially in notebook cells."
+    alternative: "Notebook cells"
+
+  - type: "Precedence Constraint"
+    platform: "ssis"
+    reason: "SSIS task ordering. Databricks executes cells sequentially or uses workflow task dependencies."
+    alternative: "Notebook cell ordering or workflow depends_on"
+
+  - type: "Connection Manager"
+    platform: "ssis"
+    reason: "SSIS connection configuration. In Databricks, use Secret Scopes."
+    alternative: "dbutils.secrets.get()"
+
+  # ── Informatica Session/Workflow Management ──
+  - type: "Session"
+    platform: "informatica"
+    reason: "Informatica runtime session. Databricks handles execution automatically."
+    alternative: "Databricks Job or notebook run"
+
+  - type: "Workflow"
+    platform: "informatica"
+    reason: "Informatica workflow orchestration. Use Databricks multi-task jobs."
+    alternative: "Databricks Workflows"
+
+  - type: "Worklet"
+    platform: "informatica"
+    reason: "Informatica reusable workflow. Use Databricks shared notebooks."
+    alternative: "dbutils.notebook.run()"
+
+  # ── Glue Boilerplate ──
+  - type: "Job.init"
+    platform: "glue"
+    reason: "Glue job initialization. Spark session is pre-configured in Databricks."
+    alternative: "Not needed - spark is pre-configured"
+
+  - type: "Job.commit"
+    platform: "glue"
+    reason: "Glue job finalization. Use dbutils.notebook.exit() if needed."
+    alternative: "dbutils.notebook.exit('SUCCESS')"
+
+  - type: "DynamicFrame.toDF / fromDF"
+    platform: "glue"
+    reason: "DynamicFrame is Glue-specific. Databricks uses DataFrames natively."
+    alternative: "Already using DataFrames"
+
+  # ── Airflow Infrastructure ──
+  - type: "DummyOperator"
+    platform: "airflow"
+    reason: "Airflow DAG join/branch point. Not needed in Databricks workflows."
+    alternative: "Workflow task dependencies"
+
+  - type: "BranchDateTimeOperator"
+    platform: "airflow"
+    reason: "Airflow time-based branching. Use workflow schedules or Python datetime checks."
+    alternative: "Python datetime conditional"
+
+  - type: "ShortCircuitOperator"
+    platform: "airflow"
+    reason: "Airflow conditional skip. Use if/else in Python."
+    alternative: "Python if/else"
+
+  # ── DataStage / Pentaho Flow ──
+  - type: "Annotation"
+    platform: "datastage"
+    reason: "DataStage design-time annotation. Use code comments."
+    alternative: "# Python comments"
+
+  - type: "Copy"
+    platform: "datastage"
+    reason: "DataStage link fan-out. DataFrames can be used by multiple downstream operations."
+    alternative: "df.cache() for multiple consumers"
+
+  - type: "Dummy"
+    platform: "pentaho"
+    reason: "Pentaho placeholder step. Not needed in Databricks."
+    alternative: "Remove entirely"
+
+  - type: "Abort"
+    platform: "pentaho"
+    reason: "Pentaho error abort. Use Python raise or assert."
+    alternative: "raise Exception('message')"

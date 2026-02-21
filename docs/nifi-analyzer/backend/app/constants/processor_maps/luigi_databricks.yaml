@@ -1,0 +1,103 @@
+# Luigi -> Databricks PySpark Mapping
+# Maps Luigi task patterns to Databricks equivalents
+
+mappings:
+  - type: "Task"
+    category: "Notebook Cell"
+    template: |
+      # Luigi Task -> Databricks notebook cell or function
+      def {task_name}():
+          """Ported from Luigi Task: {task_name}"""
+          {run_body}
+          return "complete"
+
+      _{task_name}_result = {task_name}()
+    description: "Luigi Task as Python function in notebook"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "ExternalTask"
+    category: "Databricks Job Dependency"
+    template: |
+      # Luigi ExternalTask -> check upstream job/table existence
+      assert spark.catalog.tableExists("{catalog}.{schema}.{table}"), \
+          f"Upstream table {table} not found"
+    description: "Luigi ExternalTask as table existence check"
+    imports: []
+    confidence: 0.88
+    role: "utility"
+
+  - type: "LocalTarget"
+    category: "Volumes Path"
+    template: |
+      _output_path = "/Volumes/{catalog}/{schema}/output/{filename}"
+      (df_{input}.write
+          .format("{format}")
+          .mode("overwrite")
+          .save(_output_path))
+    description: "Luigi LocalTarget as Volumes file output"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "S3Target"
+    category: "Cloud Storage Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("overwrite")
+          .save("s3://{bucket}/{key}"))
+    description: "Luigi S3Target as Delta write to S3"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "HdfsTarget"
+    category: "Delta Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("overwrite")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Luigi HdfsTarget as Delta Lake table"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "WrapperTask"
+    category: "Databricks Workflow"
+    template: |
+      # Luigi WrapperTask -> multi-notebook orchestration
+      _results = []
+      for _nb in ["{notebook_1}", "{notebook_2}", "{notebook_3}"]:
+          _results.append(dbutils.notebook.run(_nb, 3600))
+      print(f"[WRAPPER] All tasks completed: {_results}")
+    description: "Luigi WrapperTask as sequential notebook runs"
+    imports: []
+    confidence: 0.88
+    role: "process"
+
+  - type: "SparkSubmitTask"
+    category: "Notebook Run"
+    template: |
+      _result = dbutils.notebook.run("{app_notebook}", 3600,
+          arguments={{"arg1": "{arg1}"}})
+    description: "Luigi SparkSubmitTask as notebook run"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "CopyToTable"
+    category: "JDBC Write"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "{table}")
+          .mode("append")
+          .save())
+    description: "Luigi CopyToTable as JDBC write"
+    imports: []
+    confidence: 0.90
+    role: "sink"

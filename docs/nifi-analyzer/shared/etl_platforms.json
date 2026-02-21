@@ -1,0 +1,26 @@
+{
+  "platforms": [
+    {"id": "nifi", "name": "Apache NiFi", "formats": [".xml", ".json", ".gz", ".zip", ".nar"], "category": "dataflow", "versions": ["1.x", "2.x"]},
+    {"id": "ssis", "name": "SQL Server SSIS", "formats": [".dtsx", ".ispac"], "category": "etl", "versions": ["2012", "2014", "2016", "2017", "2019", "2022"]},
+    {"id": "informatica", "name": "Informatica PowerCenter", "formats": [".xml", ".zip"], "category": "etl", "versions": ["9.x", "10.x"]},
+    {"id": "talend", "name": "Talend", "formats": [".item", ".properties", ".zip"], "category": "etl", "versions": ["7.x", "8.x"]},
+    {"id": "airflow", "name": "Apache Airflow", "formats": [".py"], "category": "orchestrator", "versions": ["1.x", "2.x"]},
+    {"id": "dbt", "name": "dbt", "formats": [".json", ".sql", ".yml"], "category": "transform", "versions": ["1.x"]},
+    {"id": "oracle_odi", "name": "Oracle Data Integrator", "formats": [".xml", ".zip"], "category": "etl", "versions": ["11g", "12c"]},
+    {"id": "snowflake", "name": "Snowflake", "formats": [".sql"], "category": "warehouse", "versions": ["current"]},
+    {"id": "adf", "name": "Azure Data Factory", "formats": [".json"], "category": "orchestrator", "versions": ["v2"]},
+    {"id": "glue", "name": "AWS Glue", "formats": [".json", ".py"], "category": "etl", "versions": ["3.0", "4.0"]},
+    {"id": "matillion", "name": "Matillion", "formats": [".json"], "category": "etl", "versions": ["current"]},
+    {"id": "pentaho", "name": "Pentaho PDI", "formats": [".ktr", ".kjb"], "category": "etl", "versions": ["8.x", "9.x"]},
+    {"id": "datastage", "name": "IBM DataStage", "formats": [".dsx", ".xml"], "category": "etl", "versions": ["11.x"]},
+    {"id": "fivetran", "name": "Fivetran", "formats": [".json"], "category": "ingestion", "versions": ["current"]},
+    {"id": "airbyte", "name": "Airbyte", "formats": [".json", ".yaml"], "category": "ingestion", "versions": ["current"]},
+    {"id": "prefect", "name": "Prefect", "formats": [".py"], "category": "orchestrator", "versions": ["2.x"]},
+    {"id": "dagster", "name": "Dagster", "formats": [".py"], "category": "orchestrator", "versions": ["1.x"]},
+    {"id": "stitch", "name": "Stitch Data", "formats": [".json"], "category": "ingestion", "versions": ["current"]},
+    {"id": "sql", "name": "Generic SQL", "formats": [".sql"], "category": "database", "versions": ["ANSI", "Oracle", "MySQL", "PostgreSQL", "T-SQL"]},
+    {"id": "spark", "name": "Existing Spark Jobs", "formats": [".py", ".scala", ".jar"], "category": "compute", "versions": ["2.x", "3.x"]},
+    {"id": "luigi", "name": "Luigi", "formats": [".py"], "category": "orchestrator", "versions": ["3.x"]},
+    {"id": "beam", "name": "Apache Beam", "formats": [".py", ".java"], "category": "compute", "versions": ["2.x"]}
+  ]
+}

@@ -1,0 +1,107 @@
+# Airbyte -> Databricks PySpark Mapping
+# Maps Airbyte connector patterns to Databricks equivalents
+
+mappings:
+  - type: "Source (Database)"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "{driver}")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="db-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="db-pass"))
+          .load())
+    description: "Airbyte DB source replaced by JDBC read"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Source (API)"
+    category: "REST API"
+    template: |
+      import requests
+      _token = dbutils.secrets.get(scope="{scope}", key="api-token")
+      _response = requests.get("{api_url}", headers={"Authorization": f"Bearer {{_token}}"}, timeout=60)
+      _response.raise_for_status()
+      df_{name} = spark.createDataFrame(_response.json()["{data_key}"])
+    description: "Airbyte API source replaced by requests + createDataFrame"
+    imports: ["import requests"]
+    confidence: 0.85
+    role: "source"
+
+  - type: "Source (File)"
+    category: "Auto Loader"
+    template: |
+      df_{name} = (spark.readStream
+          .format("cloudFiles")
+          .option("cloudFiles.format", "{format}")
+          .load("{source_path}"))
+    description: "Airbyte file source replaced by Auto Loader"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Destination (Database)"
+    category: "Delta Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Airbyte destination replaced by Delta write"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "Sync (Full Refresh)"
+    category: "Delta Overwrite"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("overwrite")
+          .option("overwriteSchema", "true")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Full refresh sync via Delta overwrite"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "Sync (Incremental Append)"
+    category: "Delta Append"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Incremental append sync via Delta append"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "Sync (Incremental Deduped)"
+    category: "Delta MERGE"
+    template: |
+      from delta.tables import DeltaTable
+      _target = DeltaTable.forName(spark, "{catalog}.{schema}.{table}")
+      _target.alias("t").merge(
+          df_{input}.alias("s"),
+          "t.{cursor_field} = s.{cursor_field} AND t.{primary_key} = s.{primary_key}"
+      ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+    description: "Incremental deduped sync via Delta MERGE"
+    imports: ["from delta.tables import DeltaTable"]
+    confidence: 0.90
+    role: "sink"
+
+  - type: "Normalization"
+    category: "DataFrame Flatten"
+    template: |
+      # Airbyte normalization -> flatten nested JSON into typed columns
+      df_{name} = (df_{input}
+          .select("*", col("_airbyte_data.*"))
+          .drop("_airbyte_data", "_airbyte_ab_id", "_airbyte_emitted_at"))
+    description: "Airbyte normalization replaced by struct flattening"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.85
+    role: "transform"

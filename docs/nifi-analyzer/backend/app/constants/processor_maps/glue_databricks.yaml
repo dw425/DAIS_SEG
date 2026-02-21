@@ -1,0 +1,210 @@
+# AWS Glue -> Databricks PySpark Mapping
+# Maps Glue API calls and DynamicFrame operations to PySpark equivalents
+
+mappings:
+  - type: "GlueContext.create_dynamic_frame.from_catalog"
+    category: "Spark Table Read"
+    template: |
+      df_{name} = spark.table("{catalog}.{schema}.{table}")
+    description: "Glue from_catalog replaced by spark.table() with Unity Catalog"
+    imports: []
+    confidence: 0.95
+    role: "source"
+
+  - type: "GlueContext.create_dynamic_frame.from_options"
+    category: "Spark Read"
+    template: |
+      df_{name} = (spark.read
+          .format("{format}")
+          .option("header", "true")
+          .load("{connection_options_path}"))
+    description: "Glue from_options replaced by spark.read with format"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "DynamicFrame.toDF"
+    category: "Native DataFrame"
+    template: |
+      # Glue DynamicFrame.toDF() is unnecessary in Databricks
+      # DataFrames are the native format
+      df_{name} = df_{input}
+    description: "DynamicFrame.toDF() not needed - already native DataFrame"
+    imports: []
+    confidence: 0.98
+    role: "transform"
+
+  - type: "DynamicFrame.fromDF"
+    category: "Native DataFrame"
+    template: |
+      # Glue DynamicFrame.fromDF() not needed in Databricks
+      df_{name} = df_{input}
+    description: "DynamicFrame.fromDF() not needed - already native DataFrame"
+    imports: []
+    confidence: 0.98
+    role: "transform"
+
+  - type: "GlueContext.write_dynamic_frame.from_options"
+    category: "Spark Write"
+    template: |
+      (df_{input}.write
+          .format("{format}")
+          .mode("{mode}")
+          .save("{connection_options_path}"))
+    description: "Glue write_dynamic_frame replaced by DataFrame write"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "GlueContext.write_dynamic_frame.from_catalog"
+    category: "Delta Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Glue write to catalog replaced by Delta saveAsTable"
+    imports: []
+    confidence: 0.95
+    role: "sink"
+
+  - type: "ApplyMapping"
+    category: "DataFrame Select"
+    template: |
+      df_{name} = df_{input}.select(
+          col("{source_col_1}").cast("{target_type_1}").alias("{target_col_1}"),
+          col("{source_col_2}").cast("{target_type_2}").alias("{target_col_2}"))
+    description: "Glue ApplyMapping replaced by select with cast and alias"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "ResolveChoice"
+    category: "DataFrame Cast"
+    template: |
+      # Glue ResolveChoice -> explicit cast to resolve ambiguous types
+      df_{name} = (df_{input}
+          .withColumn("{column}", col("{column}").cast("{target_type}")))
+    description: "ResolveChoice replaced by explicit DataFrame cast"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "DropFields"
+    category: "DataFrame Drop"
+    template: |
+      df_{name} = df_{input}.drop("{field_1}", "{field_2}", "{field_3}")
+    description: "Glue DropFields replaced by DataFrame drop()"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "SelectFields"
+    category: "DataFrame Select"
+    template: |
+      df_{name} = df_{input}.select("{field_1}", "{field_2}", "{field_3}")
+    description: "Glue SelectFields replaced by DataFrame select()"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Filter"
+    category: "DataFrame Filter"
+    template: |
+      df_{name} = df_{input}.filter("{condition}")
+    description: "Glue Filter replaced by DataFrame filter()"
+    imports: []
+    confidence: 0.95
+    role: "route"
+
+  - type: "Join"
+    category: "DataFrame Join"
+    template: |
+      df_{name} = df_{input_left}.join(
+          df_{input_right},
+          on="{join_key}",
+          how="{join_type}")
+    description: "Glue Join replaced by DataFrame join()"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "SplitFields"
+    category: "DataFrame Select"
+    template: |
+      df_{name}_group1 = df_{input}.select("{field_1}", "{field_2}")
+      df_{name}_group2 = df_{input}.select("{field_3}", "{field_4}")
+    description: "Glue SplitFields via multiple DataFrame selects"
+    imports: []
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Relationalize"
+    category: "DataFrame Explode"
+    template: |
+      # Glue Relationalize -> flatten nested structs/arrays
+      df_{name} = (df_{input}
+          .select("*", explode(col("{nested_array}")).alias("_flat"))
+          .select("*", "_flat.*")
+          .drop("_flat", "{nested_array}"))
+    description: "Glue Relationalize replaced by explode + struct flatten"
+    imports: ["from pyspark.sql.functions import explode, col"]
+    confidence: 0.85
+    role: "transform"
+
+  - type: "GlueContext.purge_table"
+    category: "Delta Vacuum"
+    template: |
+      spark.sql("VACUUM {catalog}.{schema}.{table} RETAIN {retention_hours} HOURS")
+      print(f"[VACUUM] Purged old files from {table}")
+    description: "Glue purge_table replaced by Delta VACUUM"
+    imports: []
+    confidence: 0.90
+    role: "utility"
+
+  - type: "GlueContext.purge_s3_path"
+    category: "dbutils.fs"
+    template: |
+      dbutils.fs.rm("{s3_path}", recurse=True)
+      print(f"[PURGE] Removed: {s3_path}")
+    description: "Glue purge_s3_path replaced by dbutils.fs.rm"
+    imports: []
+    confidence: 0.92
+    role: "utility"
+
+  - type: "Job.init"
+    category: "Spark Session"
+    template: |
+      # Glue Job.init() not needed - Spark session is pre-configured in Databricks
+      # Access parameters via dbutils.widgets
+      dbutils.widgets.text("param1", "default_value")
+      _param1 = dbutils.widgets.get("param1")
+    description: "Glue Job.init replaced by Databricks widgets for parameters"
+    imports: []
+    confidence: 0.95
+    role: "utility"
+
+  - type: "Job.commit"
+    category: "Notebook Exit"
+    template: |
+      # Glue Job.commit() -> notebook exit with status
+      dbutils.notebook.exit("SUCCESS")
+    description: "Glue Job.commit replaced by dbutils.notebook.exit"
+    imports: []
+    confidence: 0.95
+    role: "utility"
+
+  - type: "Crawler"
+    category: "Unity Catalog"
+    template: |
+      # Glue Crawler -> Unity Catalog auto-discovery
+      # Tables are registered automatically via Auto Loader or CREATE TABLE
+      spark.sql("""
+          CREATE TABLE IF NOT EXISTS {catalog}.{schema}.{table}
+          USING delta
+          LOCATION '{s3_path}'
+      """)
+    description: "Glue Crawler replaced by Unity Catalog table registration"
+    imports: []
+    confidence: 0.88
+    role: "utility"

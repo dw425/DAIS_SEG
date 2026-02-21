@@ -1,0 +1,165 @@
+# Matillion -> Databricks PySpark Mapping
+# Maps Matillion ETL/ELT components to PySpark equivalents
+
+mappings:
+  - type: "Table Input"
+    category: "Spark Table Read"
+    template: |
+      df_{name} = spark.table("{catalog}.{schema}.{table}")
+    description: "Matillion Table Input via spark.table"
+    imports: []
+    confidence: 0.95
+    role: "source"
+
+  - type: "Database Query"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "({sql}) subq")
+          .option("driver", "{driver}")
+          .load())
+    description: "Database Query via JDBC"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "S3 Load"
+    category: "Cloud Storage Read"
+    template: |
+      df_{name} = (spark.read
+          .format("{format}")
+          .option("header", "true")
+          .load("s3://{bucket}/{key}"))
+    description: "S3 Load via Spark read"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Table Output"
+    category: "Delta Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("{write_mode}")
+          .saveAsTable("{catalog}.{schema}.{target_table}"))
+    description: "Table Output to Delta Lake"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "S3 Unload"
+    category: "Cloud Storage Write"
+    template: |
+      (df_{input}.write
+          .format("{format}")
+          .option("header", "true")
+          .mode("overwrite")
+          .save("s3://{bucket}/{prefix}"))
+    description: "S3 Unload via Spark write"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "Calculator"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("{output_column}",
+          expr("{calculation_expression}"))
+    description: "Calculator via withColumn + expr"
+    imports: ["from pyspark.sql.functions import expr"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Filter"
+    category: "DataFrame Filter"
+    template: |
+      df_{name} = df_{input}.filter("{filter_expression}")
+    description: "Row filter"
+    imports: []
+    confidence: 0.95
+    role: "route"
+
+  - type: "Join"
+    category: "DataFrame Join"
+    template: |
+      df_{name} = df_{input_left}.join(
+          df_{input_right},
+          on="{join_condition}",
+          how="{join_type}")
+    description: "Join via DataFrame join"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Python Script"
+    category: "Python Execution"
+    template: |
+      # Matillion Python Script -> Databricks Python
+      {script_body}
+    description: "Python Script runs natively in Databricks"
+    imports: []
+    confidence: 0.92
+    role: "process"
+
+  - type: "SQL Script"
+    category: "Spark SQL"
+    template: |
+      spark.sql("""
+      {sql_script}
+      """)
+    description: "SQL Script via spark.sql"
+    imports: []
+    confidence: 0.95
+    role: "process"
+
+  - type: "Create Table"
+    category: "Delta DDL"
+    template: |
+      spark.sql("""
+          CREATE TABLE IF NOT EXISTS {catalog}.{schema}.{table} (
+              {column_definitions}
+          ) USING delta
+      """)
+    description: "Create Table as Delta Lake DDL"
+    imports: []
+    confidence: 0.95
+    role: "utility"
+
+  - type: "Detect Changes"
+    category: "Delta CDF"
+    template: |
+      spark.sql("ALTER TABLE {catalog}.{schema}.{table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+      df_{name} = (spark.readStream
+          .format("delta")
+          .option("readChangeFeed", "true")
+          .table("{catalog}.{schema}.{table}"))
+    description: "Change detection via Delta Change Data Feed"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "Aggregate"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .groupBy("{group_by}")
+          .agg(
+              count("*").alias("row_count"),
+              sum("{measure}").alias("total")))
+    description: "Aggregation via groupBy + agg"
+    imports: ["from pyspark.sql.functions import count, sum"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Rank"
+    category: "Window Function"
+    template: |
+      from pyspark.sql.window import Window
+      _w = Window.partitionBy("{partition_by}").orderBy(col("{order_by}").desc())
+      df_{name} = df_{input}.withColumn("rank", row_number().over(_w))
+    description: "Rank via window function"
+    imports: ["from pyspark.sql.functions import row_number, col", "from pyspark.sql.window import Window"]
+    confidence: 0.92
+    role: "transform"

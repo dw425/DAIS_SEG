@@ -1,0 +1,223 @@
+# dbt -> Databricks PySpark/SQL Mapping
+# Maps dbt constructs to Databricks equivalents
+
+mappings:
+  - type: "model"
+    category: "Spark SQL / Delta Table"
+    template: |
+      # dbt model -> Spark SQL CREATE TABLE AS SELECT
+      spark.sql("""
+          CREATE OR REPLACE TABLE {catalog}.{schema}.{model_name} AS
+          {select_sql}
+      """)
+    description: "dbt model materialized as Delta table via CTAS"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "model_view"
+    category: "Spark SQL View"
+    template: |
+      spark.sql("""
+          CREATE OR REPLACE VIEW {catalog}.{schema}.{model_name} AS
+          {select_sql}
+      """)
+    description: "dbt view model materialized as Spark SQL view"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "model_incremental"
+    category: "Delta MERGE"
+    template: |
+      from delta.tables import DeltaTable
+
+      df_new = spark.sql("""
+          {select_sql}
+          WHERE {incremental_column} > '{last_run_timestamp}'
+      """)
+
+      if spark.catalog.tableExists("{catalog}.{schema}.{model_name}"):
+          _target = DeltaTable.forName(spark, "{catalog}.{schema}.{model_name}")
+          _target.alias("t").merge(
+              df_new.alias("s"),
+              "t.{unique_key} = s.{unique_key}"
+          ).whenMatchedUpdateAll(
+          ).whenNotMatchedInsertAll(
+          ).execute()
+      else:
+          df_new.write.format("delta").saveAsTable("{catalog}.{schema}.{model_name}")
+    description: "dbt incremental model via Delta MERGE upsert"
+    imports: ["from delta.tables import DeltaTable"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "source"
+    category: "Spark Table Read"
+    template: |
+      df_{name} = spark.table("{catalog}.{schema}.{source_table}")
+    description: "dbt source() replaced by spark.table() read"
+    imports: []
+    confidence: 0.95
+    role: "source"
+
+  - type: "seed"
+    category: "CSV to Delta"
+    template: |
+      df_{name} = (spark.read
+          .format("csv")
+          .option("header", "true")
+          .option("inferSchema", "true")
+          .load("/Volumes/{catalog}/{schema}/seeds/{seed_file}.csv"))
+      (df_{name}.write
+          .format("delta")
+          .mode("overwrite")
+          .saveAsTable("{catalog}.{schema}.{seed_file}"))
+    description: "dbt seed CSV loaded to Delta table"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "snapshot"
+    category: "Delta Time Travel"
+    template: |
+      from delta.tables import DeltaTable
+
+      df_source = spark.sql("{select_sql}")
+
+      if spark.catalog.tableExists("{catalog}.{schema}.{snapshot_name}"):
+          _target = DeltaTable.forName(spark, "{catalog}.{schema}.{snapshot_name}")
+          _target.alias("t").merge(
+              df_source.alias("s"),
+              "t.{unique_key} = s.{unique_key}"
+          ).whenMatchedUpdate(
+              condition="t.dbt_valid_to IS NULL AND ({check_cols_changed})",
+              set={{
+                  "dbt_valid_to": "current_timestamp()"
+              }}
+          ).whenNotMatchedInsert(
+              values={{
+                  "**": "s.**",
+                  "dbt_valid_from": "current_timestamp()",
+                  "dbt_valid_to": "NULL"
+              }}
+          ).execute()
+      else:
+          (df_source
+              .withColumn("dbt_valid_from", current_timestamp())
+              .withColumn("dbt_valid_to", lit(None).cast("timestamp"))
+              .write.format("delta")
+              .saveAsTable("{catalog}.{schema}.{snapshot_name}"))
+    description: "dbt snapshot via Delta MERGE with SCD2 tracking"
+    imports: ["from delta.tables import DeltaTable", "from pyspark.sql.functions import current_timestamp, lit"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "test_not_null"
+    category: "DLT Expectations"
+    template: |
+      # dbt not_null test -> DLT expectation or assertion
+      _null_count = df_{input}.filter(col("{column}").isNull()).count()
+      assert _null_count == 0, f"NOT NULL test failed: {_null_count} null values in {column}"
+      print(f"[TEST] not_null({column}): PASSED")
+    description: "dbt not_null test via assertion or DLT expectation"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.92
+    role: "process"
+
+  - type: "test_unique"
+    category: "DLT Expectations"
+    template: |
+      _total = df_{input}.count()
+      _distinct = df_{input}.select("{column}").distinct().count()
+      assert _total == _distinct, f"UNIQUE test failed: {_total} rows but {_distinct} distinct values"
+      print(f"[TEST] unique({column}): PASSED")
+    description: "dbt unique test via count comparison"
+    imports: []
+    confidence: 0.92
+    role: "process"
+
+  - type: "test_relationships"
+    category: "DataFrame Join"
+    template: |
+      df_parent = spark.table("{catalog}.{schema}.{parent_table}")
+      _orphans = (df_{input}
+          .join(df_parent, df_{input}["{column}"] == df_parent["{parent_column}"], "left_anti")
+          .count())
+      assert _orphans == 0, f"RELATIONSHIPS test failed: {_orphans} orphan records"
+      print(f"[TEST] relationships({column} -> {parent_table}.{parent_column}): PASSED")
+    description: "dbt relationships test via left_anti join"
+    imports: []
+    confidence: 0.92
+    role: "process"
+
+  - type: "test_accepted_values"
+    category: "DataFrame Filter"
+    template: |
+      _accepted = {accepted_values}
+      _invalid = df_{input}.filter(~col("{column}").isin(_accepted)).count()
+      assert _invalid == 0, f"ACCEPTED VALUES test failed: {_invalid} invalid values"
+      print(f"[TEST] accepted_values({column}): PASSED")
+    description: "dbt accepted_values test via isin filter"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.92
+    role: "process"
+
+  - type: "macro"
+    category: "Python Function"
+    template: |
+      def {macro_name}({params}):
+          """Ported from dbt macro: {macro_name}"""
+          _sql = f"""
+          {macro_sql}
+          """
+          return spark.sql(_sql)
+    description: "dbt macro ported to Python function wrapping spark.sql"
+    imports: []
+    confidence: 0.85
+    role: "transform"
+
+  - type: "ref"
+    category: "Spark Table Read"
+    template: |
+      df_{name} = spark.table("{catalog}.{schema}.{referenced_model}")
+    description: "dbt ref() replaced by spark.table()"
+    imports: []
+    confidence: 0.95
+    role: "source"
+
+  - type: "ephemeral"
+    category: "Temp View"
+    template: |
+      spark.sql("""
+          CREATE OR REPLACE TEMP VIEW {model_name} AS
+          {select_sql}
+      """)
+    description: "dbt ephemeral model as Spark temp view"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "pre_hook"
+    category: "Spark SQL"
+    template: |
+      # dbt pre-hook SQL executed before model
+      spark.sql("""
+      {pre_hook_sql}
+      """)
+    description: "dbt pre-hook as Spark SQL statement"
+    imports: []
+    confidence: 0.92
+    role: "process"
+
+  - type: "post_hook"
+    category: "Spark SQL"
+    template: |
+      # dbt post-hook SQL executed after model
+      spark.sql("""
+      {post_hook_sql}
+      """)
+    description: "dbt post-hook as Spark SQL statement"
+    imports: []
+    confidence: 0.92
+    role: "process"

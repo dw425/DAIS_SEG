@@ -1,0 +1,105 @@
+# Dagster -> Databricks PySpark Mapping
+# Maps Dagster assets/ops/resources to Databricks equivalents
+
+mappings:
+  - type: "asset"
+    category: "Delta Table"
+    template: |
+      # Dagster @asset -> Delta table materialization
+      df_{name} = spark.sql("""
+          {computation_sql}
+      """)
+      (df_{name}.write
+          .format("delta")
+          .mode("overwrite")
+          .saveAsTable("{catalog}.{schema}.{asset_name}"))
+    description: "Dagster @asset as Delta table materialization"
+    imports: []
+    confidence: 0.90
+    role: "transform"
+
+  - type: "op"
+    category: "Python Function"
+    template: |
+      def {op_name}({params}):
+          """Ported from Dagster @op"""
+          {op_body}
+          return result
+
+      _{op_name}_result = {op_name}({args})
+    description: "Dagster @op as Python function"
+    imports: []
+    confidence: 0.92
+    role: "process"
+
+  - type: "job"
+    category: "Databricks Workflow"
+    template: |
+      # Dagster @job -> Databricks multi-task workflow
+      _results = []
+      _results.append(dbutils.notebook.run("{op_1_notebook}", 3600))
+      _results.append(dbutils.notebook.run("{op_2_notebook}", 3600))
+      print(f"[JOB] {job_name}: {_results}")
+    description: "Dagster @job as Databricks workflow"
+    imports: []
+    confidence: 0.88
+    role: "process"
+
+  - type: "schedule"
+    category: "Databricks Job Schedule"
+    template: |
+      # Dagster @schedule -> Databricks Job cron schedule
+      # Configure via SDK:
+      from databricks.sdk import WorkspaceClient
+      w = WorkspaceClient()
+      # Update existing job with schedule
+      w.jobs.update(job_id={job_id}, new_settings={{
+          "schedule": {{
+              "quartz_cron_expression": "{cron_schedule}",
+              "timezone_id": "UTC"
+          }}
+      }})
+    description: "Dagster schedule as Databricks Job cron trigger"
+    imports: ["from databricks.sdk import WorkspaceClient"]
+    confidence: 0.88
+    role: "utility"
+
+  - type: "sensor"
+    category: "Delta CDF / File Arrival"
+    template: |
+      # Dagster @sensor -> Auto Loader (file arrival) or Delta CDF
+      df_{name} = (spark.readStream
+          .format("cloudFiles")
+          .option("cloudFiles.format", "{format}")
+          .load("{watched_path}"))
+    description: "Dagster sensor replaced by Auto Loader or Delta CDF trigger"
+    imports: []
+    confidence: 0.85
+    role: "source"
+
+  - type: "resource (database)"
+    category: "JDBC Connection"
+    template: |
+      # Dagster resource -> Databricks Secret Scope + JDBC
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "{table}")
+          .load())
+    description: "Dagster DB resource replaced by Secret Scope + JDBC"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "io_manager"
+    category: "Delta Lake"
+    template: |
+      # Dagster IOManager -> Delta Lake read/write
+      # Read:
+      df_{name} = spark.table("{catalog}.{schema}.{table}")
+      # Write:
+      # df.write.format("delta").mode("overwrite").saveAsTable("{catalog}.{schema}.{table}")
+    description: "Dagster IOManager replaced by Delta Lake storage"
+    imports: []
+    confidence: 0.90
+    role: "utility"

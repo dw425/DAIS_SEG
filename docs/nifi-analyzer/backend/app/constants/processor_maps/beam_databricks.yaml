@@ -1,0 +1,144 @@
+# Apache Beam -> Databricks PySpark Mapping
+# Maps Beam transforms and IO connectors to PySpark equivalents
+
+mappings:
+  - type: "beam.io.ReadFromText"
+    category: "File Read"
+    template: |
+      df_{name} = spark.read.text("{file_pattern}")
+    description: "Beam ReadFromText as Spark text read"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "beam.io.ReadFromParquet"
+    category: "Delta Read"
+    template: |
+      df_{name} = spark.read.parquet("{file_pattern}")
+      # Or upgrade to Delta: spark.table("{catalog}.{schema}.{table}")
+    description: "Beam ReadFromParquet as Spark parquet/Delta read"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "beam.io.ReadFromBigQuery"
+    category: "BigQuery Connector"
+    template: |
+      df_{name} = (spark.read
+          .format("bigquery")
+          .option("table", "{project}:{dataset}.{table}")
+          .load())
+    description: "Beam ReadFromBigQuery via spark-bigquery connector"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "beam.io.ReadFromKafka"
+    category: "Structured Streaming"
+    template: |
+      df_{name} = (spark.readStream
+          .format("kafka")
+          .option("kafka.bootstrap.servers", "{bootstrap_servers}")
+          .option("subscribe", "{topic}")
+          .load())
+    description: "Beam ReadFromKafka as Structured Streaming"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "beam.Map"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("{output_col}",
+          expr("{map_expression}"))
+    description: "Beam Map as withColumn expression"
+    imports: ["from pyspark.sql.functions import expr"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "beam.Filter"
+    category: "DataFrame Filter"
+    template: |
+      df_{name} = df_{input}.filter("{predicate}")
+    description: "Beam Filter as DataFrame filter"
+    imports: []
+    confidence: 0.95
+    role: "route"
+
+  - type: "beam.FlatMap"
+    category: "DataFrame Explode"
+    template: |
+      df_{name} = (df_{input}
+          .withColumn("_items", explode(col("{array_col}")))
+          .select("_items.*"))
+    description: "Beam FlatMap as explode"
+    imports: ["from pyspark.sql.functions import explode, col"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "beam.GroupByKey"
+    category: "DataFrame GroupBy"
+    template: |
+      df_{name} = (df_{input}
+          .groupBy("{key}")
+          .agg(collect_list("{value}").alias("values")))
+    description: "Beam GroupByKey as groupBy + collect_list"
+    imports: ["from pyspark.sql.functions import collect_list"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "beam.CoGroupByKey"
+    category: "DataFrame Join"
+    template: |
+      df_{name} = df_{input_1}.join(df_{input_2}, on="{key}", how="full")
+    description: "Beam CoGroupByKey as full outer join"
+    imports: []
+    confidence: 0.88
+    role: "transform"
+
+  - type: "beam.CombineGlobally"
+    category: "DataFrame Aggregate"
+    template: |
+      _result = df_{input}.agg(
+          {combine_fn}("{column}").alias("result")).first()["result"]
+    description: "Beam CombineGlobally as DataFrame agg"
+    imports: []
+    confidence: 0.88
+    role: "transform"
+
+  - type: "beam.io.WriteToText"
+    category: "File Write"
+    template: |
+      (df_{input}.write
+          .format("text")
+          .mode("overwrite")
+          .save("{output_path}"))
+    description: "Beam WriteToText as Spark text write"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "beam.io.WriteToParquet"
+    category: "Delta Write"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("{mode}")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Beam WriteToParquet upgraded to Delta write"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "beam.io.WriteToBigQuery"
+    category: "BigQuery Write"
+    template: |
+      (df_{input}.write
+          .format("bigquery")
+          .option("table", "{project}:{dataset}.{table}")
+          .option("writeMethod", "direct")
+          .save())
+    description: "Beam WriteToBigQuery via spark-bigquery connector"
+    imports: []
+    confidence: 0.88
+    role: "sink"

@@ -1,0 +1,185 @@
+# Snowflake SQL -> Databricks PySpark/SQL Mapping
+# Maps Snowflake-specific SQL constructs to Databricks equivalents
+
+mappings:
+  - type: "CREATE TABLE"
+    category: "Delta Lake Table"
+    template: |
+      spark.sql("""
+          CREATE TABLE IF NOT EXISTS {catalog}.{schema}.{table} (
+              {column_definitions}
+          )
+          USING delta
+          TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')
+      """)
+    description: "Snowflake CREATE TABLE as Delta Lake table with auto-optimize"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "CREATE PIPE"
+    category: "Auto Loader"
+    template: |
+      df_{name} = (spark.readStream
+          .format("cloudFiles")
+          .option("cloudFiles.format", "{file_format}")
+          .option("cloudFiles.schemaLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+          .load("{stage_path}"))
+      (df_{name}.writeStream
+          .format("delta")
+          .option("checkpointLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+          .trigger(availableNow=True)
+          .toTable("{catalog}.{schema}.{target_table}"))
+    description: "Snowpipe replaced by Auto Loader streaming ingestion"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "CREATE TASK"
+    category: "Databricks Workflow"
+    template: |
+      # Snowflake TASK -> Databricks scheduled job
+      # Configure via Databricks Jobs UI or SDK:
+      from databricks.sdk import WorkspaceClient
+      w = WorkspaceClient()
+      _job = w.jobs.create(
+          name="{task_name}",
+          tasks=[{{
+              "task_key": "{task_name}",
+              "notebook_task": {{
+                  "notebook_path": "{notebook_path}"
+              }},
+              "existing_cluster_id": "{cluster_id}"
+          }}],
+          schedule={{
+              "quartz_cron_expression": "{cron_expression}",
+              "timezone_id": "UTC"
+          }})
+    description: "Snowflake TASK replaced by Databricks scheduled job"
+    imports: ["from databricks.sdk import WorkspaceClient"]
+    confidence: 0.88
+    role: "process"
+
+  - type: "CREATE STREAM"
+    category: "Delta Change Data Feed"
+    template: |
+      # Snowflake STREAM -> Delta Change Data Feed
+      spark.sql("ALTER TABLE {catalog}.{schema}.{source_table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+      df_{name} = (spark.readStream
+          .format("delta")
+          .option("readChangeFeed", "true")
+          .table("{catalog}.{schema}.{source_table}"))
+    description: "Snowflake STREAM replaced by Delta Change Data Feed"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "COPY INTO"
+    category: "Auto Loader"
+    template: |
+      # Snowflake COPY INTO -> Auto Loader or COPY INTO (Databricks)
+      spark.sql("""
+          COPY INTO {catalog}.{schema}.{table}
+          FROM '{stage_path}'
+          FILEFORMAT = {file_format}
+          FORMAT_OPTIONS ('header' = 'true', 'inferSchema' = 'true')
+          COPY_OPTIONS ('mergeSchema' = 'true')
+      """)
+    description: "Snowflake COPY INTO as Databricks COPY INTO command"
+    imports: []
+    confidence: 0.95
+    role: "source"
+
+  - type: "MERGE INTO"
+    category: "Delta MERGE"
+    template: |
+      spark.sql("""
+          MERGE INTO {catalog}.{schema}.{target_table} AS t
+          USING {catalog}.{schema}.{source_table} AS s
+          ON t.{merge_key} = s.{merge_key}
+          WHEN MATCHED THEN UPDATE SET *
+          WHEN NOT MATCHED THEN INSERT *
+      """)
+    description: "Snowflake MERGE INTO directly supported in Delta Lake SQL"
+    imports: []
+    confidence: 0.95
+    role: "process"
+
+  - type: "CREATE VIEW"
+    category: "Spark SQL View"
+    template: |
+      spark.sql("""
+          CREATE OR REPLACE VIEW {catalog}.{schema}.{view_name} AS
+          {select_sql}
+      """)
+    description: "Snowflake VIEW as Databricks SQL view in Unity Catalog"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "CREATE FUNCTION"
+    category: "Spark UDF"
+    template: |
+      spark.sql("""
+          CREATE OR REPLACE FUNCTION {catalog}.{schema}.{function_name}({params})
+          RETURNS {return_type}
+          RETURN {function_body}
+      """)
+    description: "Snowflake UDF as Databricks SQL function"
+    imports: []
+    confidence: 0.90
+    role: "transform"
+
+  - type: "CREATE STAGE"
+    category: "External Location"
+    template: |
+      # Snowflake STAGE -> Unity Catalog external location
+      # Configure via Databricks UI or SQL:
+      spark.sql("""
+          CREATE EXTERNAL LOCATION IF NOT EXISTS {stage_name}
+          URL '{cloud_path}'
+          WITH (STORAGE CREDENTIAL {credential_name})
+      """)
+    description: "Snowflake STAGE replaced by UC external location"
+    imports: []
+    confidence: 0.88
+    role: "utility"
+
+  - type: "CREATE MATERIALIZED VIEW"
+    category: "DLT Materialized View"
+    template: |
+      # Snowflake Materialized View -> DLT table or cached view
+      spark.sql("""
+          CREATE OR REPLACE TABLE {catalog}.{schema}.{mv_name} AS
+          {select_sql}
+      """)
+      # For auto-refresh, use DLT:
+      # @dlt.table
+      # def {mv_name}():
+      #     return spark.sql("{select_sql}")
+    description: "Snowflake MV as Delta table or DLT materialized view"
+    imports: []
+    confidence: 0.88
+    role: "transform"
+
+  - type: "FLATTEN"
+    category: "DataFrame Explode"
+    template: |
+      df_{name} = (df_{input}
+          .withColumn("_flat", explode(col("{array_column}")))
+          .select("*", "_flat.*")
+          .drop("_flat"))
+    description: "Snowflake FLATTEN replaced by PySpark explode"
+    imports: ["from pyspark.sql.functions import explode, col"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "GET_PATH / PARSE_JSON"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("{output_col}",
+          get_json_object(col("{json_col}"), "$.{json_path}"))
+    description: "Snowflake JSON functions via get_json_object"
+    imports: ["from pyspark.sql.functions import get_json_object, col"]
+    confidence: 0.92
+    role: "transform"

@@ -1,0 +1,294 @@
+# Talend -> Databricks PySpark Mapping
+# Maps Talend components to PySpark equivalents
+
+mappings:
+  - type: "tMysqlInput"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:mysql://{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.mysql.cj.jdbc.Driver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="mysql-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="mysql-pass"))
+          .load())
+    description: "MySQL input via JDBC with secret-scoped credentials"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "tOracleInput"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:oracle:thin:@{host}:{port}:{sid}")
+          .option("dbtable", "{table}")
+          .option("driver", "oracle.jdbc.OracleDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="oracle-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="oracle-pass"))
+          .load())
+    description: "Oracle input via JDBC"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "tPostgresqlInput"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:postgresql://{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("driver", "org.postgresql.Driver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="pg-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="pg-pass"))
+          .load())
+    description: "PostgreSQL input via JDBC"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "tFileInputDelimited"
+    category: "Auto Loader"
+    template: |
+      df_{name} = (spark.read
+          .format("csv")
+          .option("header", "{header}")
+          .option("delimiter", "{field_separator}")
+          .option("inferSchema", "true")
+          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
+    description: "Delimited file input from Volumes"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "tFileInputJSON"
+    category: "Spark Read"
+    template: |
+      df_{name} = spark.read.json("/Volumes/{catalog}/{schema}/landing/{filename}")
+    description: "JSON file input"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "tFileInputExcel"
+    category: "Spark Read"
+    template: |
+      df_{name} = (spark.read
+          .format("com.crealytics.spark.excel")
+          .option("header", "true")
+          .option("inferSchema", "true")
+          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
+    description: "Excel file input via spark-excel"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "tFileInputXML"
+    category: "XML Read"
+    template: |
+      df_{name} = (spark.read
+          .format("com.databricks.spark.xml")
+          .option("rowTag", "{loop_xpath}")
+          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
+    description: "XML file input via spark-xml"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "tMap"
+    category: "DataFrame API"
+    template: |
+      # tMap: join + transform + filter in one step
+      df_{name} = (df_{input_main}
+          .join(df_{input_lookup}, on="{join_key}", how="left")
+          .withColumn("{output_col}", expr("{expression}"))
+          .filter("{filter_condition}"))
+    description: "tMap transform with join, expression, and filter"
+    imports: ["from pyspark.sql.functions import expr"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "tFilterRow"
+    category: "DataFrame Filter"
+    template: |
+      df_{name} = df_{input}.filter("{condition}")
+      df_{name}_reject = df_{input}.filter("NOT ({condition})")
+    description: "Row filter with accept and reject outputs"
+    imports: []
+    confidence: 0.92
+    role: "route"
+
+  - type: "tSortRow"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.orderBy(
+          col("{sort_column}").asc())
+    description: "Sort rows by column"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.95
+    role: "transform"
+
+  - type: "tUniqRow"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.dropDuplicates(["{key_columns}"])
+      df_{name}_duplicates = df_{input}.exceptAll(df_{name})
+    description: "Unique row detection with duplicate output"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "tJoin"
+    category: "DataFrame Join"
+    template: |
+      df_{name} = df_{input_main}.join(
+          df_{input_lookup},
+          on="{join_key}",
+          how="{join_type}")
+    description: "Join via DataFrame join"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "tAggregateRow"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .groupBy("{group_by}")
+          .agg(
+              count("*").alias("count"),
+              sum("{measure}").alias("sum_{measure}")))
+    description: "Row aggregation via groupBy + agg"
+    imports: ["from pyspark.sql.functions import count, sum"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "tNormalize"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .withColumn("{column}", explode(split(col("{column}"), "{item_separator}"))))
+    description: "Normalize by splitting delimited values into rows"
+    imports: ["from pyspark.sql.functions import explode, split, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "tDenormalize"
+    category: "DataFrame API"
+    template: |
+      df_{name} = (df_{input}
+          .groupBy("{group_by}")
+          .agg(concat_ws("{separator}", collect_list("{value_column}")).alias("{value_column}")))
+    description: "Denormalize by concatenating grouped values"
+    imports: ["from pyspark.sql.functions import concat_ws, collect_list"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "tMysqlOutput"
+    category: "JDBC Write"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", "jdbc:mysql://{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.mysql.cj.jdbc.Driver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="mysql-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="mysql-pass"))
+          .option("batchsize", 10000)
+          .mode("{action_on_table}")
+          .save())
+    description: "MySQL output via JDBC write"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "tFileOutputDelimited"
+    category: "File Write"
+    template: |
+      (df_{input}.write
+          .format("csv")
+          .option("header", "{include_header}")
+          .option("delimiter", "{field_separator}")
+          .mode("overwrite")
+          .save("/Volumes/{catalog}/{schema}/output/{filename}"))
+    description: "Delimited file output to Volumes"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "tLogRow"
+    category: "Spark Display"
+    template: |
+      display(df_{input})
+      print(f"[LOG] {name}: {df_{input}.count()} rows")
+    description: "Log rows via display() in Databricks notebook"
+    imports: []
+    confidence: 0.92
+    role: "utility"
+
+  - type: "tJava"
+    category: "PySpark UDF"
+    template: |
+      from pyspark.sql.functions import pandas_udf, col
+      import pandas as pd
+
+      @pandas_udf("string")
+      def _java_logic_{name}(values: pd.Series) -> pd.Series:
+          # Port Java code to Python
+          def _process(val):
+              result = val  # Replace with ported logic
+              return str(result) if result is not None else None
+          return values.apply(_process)
+
+      df_{name} = df_{input}.withColumn("_result", _java_logic_{name}(col("{column}")))
+    description: "tJava component ported to pandas UDF"
+    imports: ["from pyspark.sql.functions import pandas_udf, col", "import pandas as pd"]
+    confidence: 0.80
+    role: "transform"
+
+  - type: "tReplicate"
+    category: "DataFrame Cache"
+    template: |
+      df_{name} = df_{input}.cache()
+      # Each output branch reads from cached DataFrame
+      # Branch 1: df_branch1 = df_{name}.filter(...)
+      # Branch 2: df_branch2 = df_{name}.select(...)
+    description: "Replicate input to multiple branches via cache"
+    imports: []
+    confidence: 0.92
+    role: "route"
+
+  - type: "tRESTClient"
+    category: "Spark UDF"
+    template: |
+      from pyspark.sql.functions import pandas_udf, col
+      import pandas as pd
+
+      @pandas_udf("string")
+      def _rest_call_{name}(urls: pd.Series) -> pd.Series:
+          import urllib.request
+          def _call(url):
+              req = urllib.request.Request(url, method="{http_method}")
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return r.read().decode()
+          return urls.apply(_call)
+
+      df_{name} = df_{input}.withColumn("response", _rest_call_{name}(col("{url_column}")))
+    description: "REST client via distributed pandas UDF"
+    imports: ["from pyspark.sql.functions import pandas_udf, col", "import pandas as pd"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "tS3Connection"
+    category: "Cloud Storage"
+    template: |
+      # S3 access configured via Unity Catalog external locations
+      # No explicit connection needed in Databricks
+      # spark.read.format("...").load("s3://{bucket}/{path}")
+    description: "S3 connection handled by Unity Catalog external locations"
+    imports: []
+    confidence: 0.90
+    role: "utility"
