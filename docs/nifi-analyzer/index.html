@@ -3209,7 +3209,7 @@ _logger = logging.getLogger("nifi_migration")
     stop=stop_after_attempt(${i}),
     wait=wait_exponential(multiplier=1, min=2, max=30),
     retry=retry_if_exception_type((ConnectionError, TimeoutError, IOError)),
-    before_sleep=lambda rs: _logger.warning(f"Retry {rs.attempt_number}/${i} for ${e}")
+    before_sleep=lambda rs: _logger.warning(f"Retry {rs.attempt_number}/${i} for ${e.replace(/"/g,'\\"')}")
 )
 def _exec_${l}():
 ${d}

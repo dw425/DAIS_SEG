@@ -45,7 +45,7 @@ export function generateRetryWrapper(procName, procType, code, penaltyDuration, 
     `    stop=stop_after_attempt(${retries}),\n` +
     `    wait=wait_exponential(multiplier=1, min=2, max=30),\n` +
     `    retry=retry_if_exception_type((ConnectionError, TimeoutError, IOError)),\n` +
-    `    before_sleep=lambda rs: _logger.warning(f"Retry {rs.attempt_number}/${retries} for ${procName}")\n` +
+    `    before_sleep=lambda rs: _logger.warning(f"Retry {rs.attempt_number}/${retries} for ${procName.replace(/"/g, '\\"')}")\n` +
     `)\n` +
     `def _exec_${safeFuncName}():\n` +
     `${indented}\n` +
