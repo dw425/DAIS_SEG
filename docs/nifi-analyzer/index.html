@@ -1522,7 +1522,8 @@ _resp = requests.post("${l}/services/search/jobs/export",
           "output_mode": "json"},
     headers={"Authorization": f"Bearer {_token}"},
     verify=True)  # Override with CA cert path if using self-signed certs
-_events = [e for e in _resp.json().get("results", [])]
+import json as _json
+_events = [_json.loads(line) for line in _resp.text.splitlines() if line.strip()]
 df_${t} = spark.createDataFrame(_events) if _events else df_${r}
 print(f"[SPLUNK] Retrieved {len(_events)} events")`}return s=.9,{code:i,conf:s}}if(e.type==="ExecuteInfluxDBQuery"||e.type==="PutInfluxDB"){const c=n["InfluxDB Connection URL"]||"http://influxdb:8086";if(/^Put/.test(e.type)){const d=n.Bucket||n["Database Name"]||"default",u=n.Organization||"my-org";i=`# InfluxDB Write: ${e.name}
 from influxdb_client import InfluxDBClient, Point, WritePrecision
@@ -1655,10 +1656,11 @@ df_${t} = spark.createDataFrame(_data) if _data else spark.createDataFrame([], "
 print(f"[REDIS] Read {len(_data)} keys")`,s=.9,{code:i,conf:s}}if(/^(Get|Put)Couchbase/.test(e.type)){const c=n["Cluster Hostname"]||"couchbase_host",l=n["Bucket Name"]||"default";return/^Put/.test(e.type)?i=`# Couchbase Write: ${e.name}
 from couchbase.cluster import Cluster
 from couchbase.auth import PasswordAuthenticator
+from couchbase.options import ClusterOptions
 _auth = PasswordAuthenticator(
     dbutils.secrets.get(scope="couchbase", key="user"),
     dbutils.secrets.get(scope="couchbase", key="pass"))
-_cluster = Cluster(f"couchbase://${c}", authenticator=_auth)
+_cluster = Cluster(f"couchbase://${c}", ClusterOptions(_auth))
 _bucket = _cluster.bucket("${l}")
 _coll = _bucket.default_collection()
 for row in df_${r}.limit(10000).collect():
@@ -1668,10 +1670,11 @@ df_${t} = df_${r}
 print(f"[COUCHBASE] Wrote to ${l}")`:i=`# Couchbase Read: ${e.name}
 from couchbase.cluster import Cluster
 from couchbase.auth import PasswordAuthenticator
+from couchbase.options import ClusterOptions
 _auth = PasswordAuthenticator(
     dbutils.secrets.get(scope="couchbase", key="user"),
     dbutils.secrets.get(scope="couchbase", key="pass"))
-_cluster = Cluster(f"couchbase://${c}", authenticator=_auth)
+_cluster = Cluster(f"couchbase://${c}", ClusterOptions(_auth))
 _result = _cluster.query("SELECT * FROM \`${l}\` LIMIT 50000")
 _rows = [r for r in _result]
 df_${t} = spark.createDataFrame(_rows) if _rows else spark.createDataFrame([], "id STRING")
