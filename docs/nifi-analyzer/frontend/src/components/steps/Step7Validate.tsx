@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { usePipelineStore } from '../../store/pipeline';
 import { useUIStore } from '../../store/ui';
 import { usePipeline } from '../../hooks/usePipeline';
-import type { ValidationScore } from '../../types/pipeline';
+import type { ValidationScore, RunnableReport, CheckResult } from '../../types/pipeline';
 
 function toPct(score: number): number {
   return score <= 1 ? score * 100 : score;
@@ -22,13 +22,22 @@ function barColor(score: number): string {
   return 'bg-red-500';
 }
 
+const severityColors: Record<string, { badge: string; text: string }> = {
+  critical: { badge: 'bg-red-500/20 text-red-400', text: 'text-red-400' },
+  high: { badge: 'bg-orange-500/20 text-orange-400', text: 'text-orange-400' },
+  medium: { badge: 'bg-amber-500/20 text-amber-400', text: 'text-amber-400' },
+  low: { badge: 'bg-blue-500/20 text-blue-400', text: 'text-blue-400' },
+};
+
 export default function Step7Validate() {
   const notebook = usePipelineStore((s) => s.notebook);
   const validation = usePipelineStore((s) => s.validation);
   const status = useUIStore((s) => s.stepStatuses[6]);
   const { runValidate } = usePipeline();
+  const [showRunnableDetails, setShowRunnableDetails] = useState(false);
 
   const canRun = notebook && status !== 'running';
+  const runnableReport: RunnableReport | null = (validation as Record<string, unknown> | null)?.runnableReport as RunnableReport | null ?? null;
 
   return (
     <div className="space-y-6">
@@ -40,7 +49,7 @@ export default function Step7Validate() {
             Validate
           </h2>
           <p className="mt-1 text-sm text-gray-400">
-            Validation scores, gaps, and errors.
+            Multi-dimensional validation scores and 12-point runnable quality gate.
           </p>
         </div>
         <button
@@ -60,10 +69,121 @@ export default function Step7Validate() {
       ) : status === 'running' ? (
         <div className="flex items-center gap-3 p-4 rounded-lg bg-gray-800/50 border border-border">
           <div className="w-5 h-5 rounded-full border-2 border-teal-400 border-t-transparent animate-spin" />
-          <span className="text-sm text-gray-300">Running validation checks...</span>
+          <span className="text-sm text-gray-300">Running validation checks + 12-point runnable gate...</span>
         </div>
       ) : validation && status === 'done' ? (
         <div className="space-y-6">
+          {/* V6 Runnable Quality Gate */}
+          {runnableReport && (
+            <div className={`rounded-lg border p-4 ${
+              runnableReport.is_runnable
+                ? 'border-green-500/30 bg-green-500/5'
+                : 'border-red-500/30 bg-red-500/5'
+            }`}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                    runnableReport.is_runnable ? 'bg-green-500/20' : 'bg-red-500/20'
+                  }`}>
+                    {runnableReport.is_runnable ? (
+                      <svg className="w-6 h-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    )}
+                  </div>
+                  <div>
+                    <p className={`text-lg font-bold ${runnableReport.is_runnable ? 'text-green-400' : 'text-red-400'}`}>
+                      {runnableReport.is_runnable ? 'RUNNABLE' : 'NOT RUNNABLE'}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      12-Point Quality Gate: {runnableReport.passed_count}/{runnableReport.passed_count + runnableReport.failed_count} checks passed
+                    </p>
+                  </div>
+                </div>
+                <div className="text-center">
+                  <p className={`text-3xl font-bold tabular-nums ${scoreColor(runnableReport.overall_score)}`}>
+                    {toPct(runnableReport.overall_score).toFixed(0)}
+                  </p>
+                  <p className="text-[10px] text-gray-500">Gate Score</p>
+                </div>
+              </div>
+
+              {/* Check grid */}
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5 mb-2">
+                {runnableReport.checks.map((check: CheckResult) => (
+                  <div
+                    key={check.check_id}
+                    className={`rounded px-2 py-1.5 text-center cursor-pointer transition hover:opacity-80 ${
+                      check.passed ? 'bg-green-500/10 border border-green-500/20' : 'bg-red-500/10 border border-red-500/20'
+                    }`}
+                    title={`${check.name}: ${check.message}`}
+                    onClick={() => setShowRunnableDetails(!showRunnableDetails)}
+                  >
+                    <span className={`text-[10px] ${check.passed ? 'text-green-400' : 'text-red-400'}`}>
+                      {check.passed ? 'PASS' : 'FAIL'}
+                    </span>
+                    <p className="text-[9px] text-gray-500 truncate mt-0.5">{check.name.replace(/_/g, ' ')}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Expandable details */}
+              <button
+                onClick={() => setShowRunnableDetails(!showRunnableDetails)}
+                className="text-xs text-gray-400 hover:text-gray-200 transition"
+              >
+                {showRunnableDetails ? 'Hide details' : 'Show details'}
+              </button>
+
+              {showRunnableDetails && (
+                <div className="mt-3 space-y-2">
+                  {runnableReport.checks.map((check: CheckResult) => (
+                    <div
+                      key={check.check_id}
+                      className={`rounded-lg border p-3 ${
+                        check.passed ? 'border-green-500/20 bg-green-500/5' : 'border-red-500/20 bg-red-500/5'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-medium ${check.passed ? 'text-green-400' : 'text-red-400'}`}>
+                            #{check.check_id} {check.name.replace(/_/g, ' ')}
+                          </span>
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                            severityColors[check.severity]?.badge ?? 'bg-gray-500/20 text-gray-400'
+                          }`}>
+                            {check.severity}
+                          </span>
+                        </div>
+                        <span className={`text-xs font-bold ${check.passed ? 'text-green-400' : 'text-red-400'}`}>
+                          {check.passed ? 'PASS' : 'FAIL'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400">{check.message}</p>
+                      {check.details && check.details.length > 0 && (
+                        <ul className="mt-1 space-y-0.5">
+                          {check.details.slice(0, 5).map((d, j) => (
+                            <li key={j} className="text-[10px] text-gray-500 pl-2 border-l border-gray-700">{d}</li>
+                          ))}
+                          {check.details.length > 5 && (
+                            <li className="text-[10px] text-gray-600 pl-2">...and {check.details.length - 5} more</li>
+                          )}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                  {runnableReport.summary && (
+                    <p className="text-xs text-gray-500 italic mt-2">{runnableReport.summary}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Overall score */}
           <div className="flex items-center gap-6 rounded-lg bg-gray-800/50 border border-border p-6">
             <div className="text-center">

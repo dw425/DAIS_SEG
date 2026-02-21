@@ -104,6 +104,14 @@ export async function analyzeFlow(parsed: unknown) {
   });
 }
 
+/** V6 6-pass deep analysis — returns standard analysis + deepAnalysis overlay. */
+export async function deepAnalyzeFlow(parsed: unknown) {
+  return pipelineRequest('/analyze/deep', {
+    method: 'POST',
+    body: JSON.stringify({ parsed }),
+  });
+}
+
 export async function assessFlow(parsed: unknown, analysis: unknown) {
   return pipelineRequest('/assess', {
     method: 'POST',

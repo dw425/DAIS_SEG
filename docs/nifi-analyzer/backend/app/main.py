@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan: runs startup logic before yield, shutdown after."""
     setup_logging(settings.LOG_LEVEL)
-    logger.info("ETL Migration Platform v5.0.0 started")
+    logger.info("ETL Migration Platform v6.0.0 started")
 
     # Initialize database tables
     init_db()
@@ -74,7 +74,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Universal ETL Migration Platform",
-    version="5.0.0",
+    version="6.0.0",
     description="Converts any ETL tool definition to Databricks notebooks and workflows.",
     lifespan=lifespan,
 )

@@ -95,6 +95,8 @@ export interface AnalysisResult {
   flowMetrics: Record<string, unknown>;
   securityFindings: Record<string, unknown>[];
   stages: Record<string, unknown>[];
+  // V6 deep analysis (returned from /analyze/deep)
+  deepAnalysis?: DeepAnalysisResult | null;
 }
 
 export interface MappingEntry {
@@ -118,11 +120,17 @@ export interface NotebookCell {
   type: string;
   source: string;
   label: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface NotebookResult {
   cells: NotebookCell[];
   workflow: Record<string, unknown>;
+  // V6 additions
+  deepAnalysis?: DeepAnalysisResult | null;
+  validationSummary?: ValidationSummary | null;
+  version?: string; // "v6" if V6 generated
+  isRunnable?: boolean;
 }
 
 export interface ValidationScore {
@@ -136,6 +144,153 @@ export interface ValidationResult {
   scores: ValidationScore[];
   gaps: Record<string, unknown>[];
   errors: string[];
+  // V6: 12-point runnable checker
+  runnableReport?: RunnableReport | null;
+}
+
+// ── V6 Deep Analysis Types ──
+
+export interface FunctionalZone {
+  zone_name: string;
+  processor_names: string[];
+  purpose: string;
+}
+
+export interface FunctionalReport {
+  flow_purpose: string;
+  functional_zones: FunctionalZone[];
+  data_domains: string[];
+  pipeline_pattern: string;
+  estimated_complexity: string;
+  sla_profile: string;
+}
+
+export interface ProcessorDetail {
+  name: string;
+  short_type: string;
+  full_type: string;
+  category: string;
+  role: string;
+  conversion_complexity: string;
+  databricks_equivalent: string;
+  is_known: boolean;
+}
+
+export interface ProcessorReport {
+  total_processors: number;
+  by_category: Record<string, number>;
+  by_role: Record<string, number>;
+  by_conversion_complexity: Record<string, number>;
+  unknown_processors: string[];
+  processors: ProcessorDetail[];
+}
+
+export interface ExecutionPhase {
+  phase_number: number;
+  processor_names: string[];
+  description: string;
+}
+
+export interface WorkflowReport {
+  execution_phases: ExecutionPhase[];
+  process_groups: Record<string, unknown>[];
+  cycles_detected: string[][];
+  synchronization_points: string[];
+  total_execution_phases: number;
+  critical_path_length: number;
+  parallelism_factor: number;
+  topological_order: string[];
+}
+
+export interface DataSource {
+  processor_name: string;
+  source_type: string;
+  protocol: string;
+  details: Record<string, unknown>;
+}
+
+export interface UpstreamReport {
+  data_sources: DataSource[];
+  attribute_lineage: Record<string, unknown>;
+  content_transformations: Record<string, unknown>[];
+  external_dependencies: string[];
+  parameter_injections: Record<string, unknown>[];
+}
+
+export interface DataSink {
+  processor_name: string;
+  sink_type: string;
+  protocol: string;
+  details: Record<string, unknown>;
+}
+
+export interface DownstreamReport {
+  data_sinks: DataSink[];
+  data_flow_map: Record<string, unknown>;
+  error_routing: Record<string, unknown>[];
+  volume_estimates: Record<string, unknown>;
+  data_multiplication_points: string[];
+  data_reduction_points: string[];
+}
+
+export interface PropertyAnalysis {
+  processor_name: string;
+  property_key: string;
+  property_value: string;
+  value_type: string;
+  what_it_does: string;
+  why_its_there: string;
+  needs_conversion: boolean;
+  conversion_confidence: number;
+}
+
+export interface LineByLineReport {
+  total_properties_analyzed: number;
+  nel_expression_count: number;
+  sql_statement_count: number;
+  script_code_count: number;
+  regex_count: number;
+  overall_conversion_confidence: number;
+  properties: PropertyAnalysis[];
+}
+
+export interface DeepAnalysisResult {
+  functional: FunctionalReport;
+  processors: ProcessorReport;
+  workflow: WorkflowReport;
+  upstream: UpstreamReport;
+  downstream: DownstreamReport;
+  line_by_line: LineByLineReport;
+  duration_ms: number;
+  summary: string;
+}
+
+// ── V6 Runnable Checker Types ──
+
+export interface CheckResult {
+  check_id: number;
+  name: string;
+  passed: boolean;
+  severity: string; // "critical" | "high" | "medium" | "low"
+  message: string;
+  details: string[];
+}
+
+export interface RunnableReport {
+  checks: CheckResult[];
+  passed_count: number;
+  failed_count: number;
+  is_runnable: boolean;
+  overall_score: number;
+  summary: string;
+}
+
+export interface ValidationSummary {
+  is_runnable?: boolean;
+  overall_score?: number;
+  checks_passed?: number;
+  checks_total?: number;
+  warnings?: string[];
 }
 
 // ── Report types (returned as plain dicts from /report endpoint) ──

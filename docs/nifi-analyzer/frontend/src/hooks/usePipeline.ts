@@ -11,6 +11,7 @@ import type {
   FinalReport,
   ValidationResult,
   ValueAnalysis,
+  DeepAnalysisResult,
 } from '../types/pipeline';
 import type { FullROIReport } from '../types/roi';
 
@@ -32,6 +33,9 @@ const WATCHDOG_INTERVAL_MS = 300_000;
  * Hook that manages sequential pipeline execution,
  * updating both pipeline data store and UI step statuses.
  * Includes a watchdog that checks backend liveness every 300s.
+ *
+ * V6: Uses /analyze/deep for 6-pass analysis and extracts deepAnalysis
+ * from generation results.
  */
 export function usePipeline() {
   const pipeline = usePipelineStore();
@@ -179,14 +183,20 @@ export function usePipeline() {
     [pipeline, runStep],
   );
 
-  /** Step 2: Analyze */
+  /** Step 2: Analyze — uses V6 deep analysis endpoint */
   const runAnalyze = useCallback(async () => {
     const latest = getLatest();
     if (!latest.parsed) return null;
     return runStep<AnalysisResult>(
       1,
-      () => api.analyzeFlow(getLatest().parsed) as Promise<AnalysisResult>,
-      (r) => pipeline.setAnalysis(r),
+      () => api.deepAnalyzeFlow(getLatest().parsed) as Promise<AnalysisResult>,
+      (r) => {
+        pipeline.setAnalysis(r);
+        // Extract deep analysis from the combined response
+        if (r.deepAnalysis) {
+          pipeline.setDeepAnalysis(r.deepAnalysis as DeepAnalysisResult);
+        }
+      },
     );
   }, [pipeline, runStep, getLatest]);
 
@@ -200,14 +210,20 @@ export function usePipeline() {
     }, (r) => pipeline.setAssessment(r));
   }, [pipeline, runStep, getLatest]);
 
-  /** Step 4: Convert / Generate Notebook */
+  /** Step 4: Convert / Generate Notebook — uses V6 generator */
   const runConvert = useCallback(async () => {
     const latest = getLatest();
     if (!latest.parsed || !latest.assessment) return null;
     return runStep<NotebookResult>(3, () => {
       const s = getLatest();
       return api.generateNotebook({ parsed: s.parsed, assessment: s.assessment }) as Promise<NotebookResult>;
-    }, (r) => pipeline.setNotebook(r));
+    }, (r) => {
+      pipeline.setNotebook(r);
+      // V6 generation also returns deep analysis — update store if present
+      if (r.deepAnalysis && !getLatest().deepAnalysis) {
+        pipeline.setDeepAnalysis(r.deepAnalysis as DeepAnalysisResult);
+      }
+    });
   }, [pipeline, runStep, getLatest]);
 
   /** Step 5: Migration Report */

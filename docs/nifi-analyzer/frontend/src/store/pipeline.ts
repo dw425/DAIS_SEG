@@ -8,6 +8,7 @@ import type {
   FinalReport,
   ValidationResult,
   ValueAnalysis,
+  DeepAnalysisResult,
 } from '../types/pipeline';
 import type { FullROIReport } from '../types/roi';
 import { useUIStore } from './ui';
@@ -16,6 +17,7 @@ export interface PipelineState {
   platform: string | null;
   parsed: ParseResult | null;
   analysis: AnalysisResult | null;
+  deepAnalysis: DeepAnalysisResult | null;
   assessment: AssessmentResult | null;
   notebook: NotebookResult | null;
   report: MigrationReport | null;
@@ -30,6 +32,7 @@ export interface PipelineState {
   setPlatform: (platform: string | null) => void;
   setParsed: (parsed: ParseResult | null) => void;
   setAnalysis: (analysis: AnalysisResult | null) => void;
+  setDeepAnalysis: (deepAnalysis: DeepAnalysisResult | null) => void;
   setAssessment: (assessment: AssessmentResult | null) => void;
   setNotebook: (notebook: NotebookResult | null) => void;
   setReport: (report: MigrationReport | null) => void;
@@ -45,6 +48,7 @@ const initialState = {
   platform: null,
   parsed: null,
   analysis: null,
+  deepAnalysis: null,
   assessment: null,
   notebook: null,
   report: null,
@@ -62,6 +66,7 @@ export const usePipelineStore = create<PipelineState>((set) => ({
   setPlatform: (platform) => set({ platform }),
   setParsed: (parsed) => set({ parsed }),
   setAnalysis: (analysis) => set({ analysis }),
+  setDeepAnalysis: (deepAnalysis) => set({ deepAnalysis }),
   setAssessment: (assessment) => set({ assessment }),
   setNotebook: (notebook) => set({ notebook }),
   setReport: (report) => set({ report }),

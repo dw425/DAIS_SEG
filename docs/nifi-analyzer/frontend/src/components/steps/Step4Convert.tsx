@@ -4,6 +4,7 @@ import { useUIStore } from '../../store/ui';
 import { usePipeline } from '../../hooks/usePipeline';
 import { exportDAB } from '../../api/client';
 import CodePreview from '../shared/CodePreview';
+import type { ValidationSummary } from '../../types/pipeline';
 
 export default function Step4Convert() {
   const parsed = usePipelineStore((s) => s.parsed);
@@ -14,6 +15,8 @@ export default function Step4Convert() {
   const [activeCell, setActiveCell] = useState(0);
 
   const canRun = parsed && assessment && status !== 'running';
+  const isV6 = notebook?.version === 'v6';
+  const validationSummary: ValidationSummary | null = notebook?.validationSummary ?? null;
 
   const downloadNotebook = () => {
     if (!notebook) return;
@@ -24,7 +27,7 @@ export default function Step4Convert() {
       cells: notebook.cells.map((c) => ({
         cell_type: c.type,
         source: c.source.split('\n'),
-        metadata: {},
+        metadata: c.metadata ?? {},
         ...(c.type === 'code' ? { outputs: [], execution_count: null } : {}),
       })),
     }, null, 2);
@@ -39,11 +42,13 @@ export default function Step4Convert() {
 
   const downloadPython = () => {
     if (!notebook) return;
+    // V6 format: Databricks notebook with COMMAND separators
+    const header = '# Databricks notebook source\n';
     const pyContent = notebook.cells
       .filter((c) => c.type === 'code')
       .map((c) => c.source)
-      .join('\n\n# ──────────────────────────────────────\n\n');
-    const blob = new Blob([pyContent], { type: 'text/plain' });
+      .join('\n\n# COMMAND ----------\n\n');
+    const blob = new Blob([header + pyContent], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -75,6 +80,10 @@ export default function Step4Convert() {
     }
   };
 
+  // Count code vs markdown cells
+  const codeCells = notebook?.cells.filter((c) => c.type === 'code').length ?? 0;
+  const mdCells = notebook?.cells.filter((c) => c.type === 'markdown').length ?? 0;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -85,7 +94,7 @@ export default function Step4Convert() {
             Convert to Databricks
           </h2>
           <p className="mt-1 text-sm text-gray-400">
-            Generate a Databricks notebook with the converted ETL pipeline code.
+            Generate a runnable Databricks notebook with wired DataFrame pipelines and terminal writes.
           </p>
         </div>
         <button
@@ -94,7 +103,7 @@ export default function Step4Convert() {
           className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-medium
             hover:bg-primary/80 disabled:opacity-40 disabled:cursor-not-allowed transition"
         >
-          {status === 'running' ? 'Generating...' : 'Generate Notebook'}
+          {status === 'running' ? 'Generating...' : 'Generate V6 Notebook'}
         </button>
       </div>
 
@@ -105,10 +114,50 @@ export default function Step4Convert() {
       ) : status === 'running' ? (
         <div className="flex items-center gap-3 p-4 rounded-lg bg-gray-800/50 border border-border">
           <div className="w-5 h-5 rounded-full border-2 border-green-400 border-t-transparent animate-spin" />
-          <span className="text-sm text-gray-300">Generating Databricks notebook...</span>
+          <span className="text-sm text-gray-300">Running V6 generation pipeline (deep analysis + wiring + sink generation + validation)...</span>
         </div>
       ) : notebook && status === 'done' ? (
         <div className="space-y-4">
+          {/* V6 Quality Gate Banner */}
+          {isV6 && (
+            <div className={`rounded-lg border p-4 flex items-center justify-between ${
+              notebook.isRunnable
+                ? 'border-green-500/30 bg-green-500/5'
+                : 'border-amber-500/30 bg-amber-500/5'
+            }`}>
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                  notebook.isRunnable ? 'bg-green-500/20' : 'bg-amber-500/20'
+                }`}>
+                  {notebook.isRunnable ? (
+                    <svg className="w-6 h-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-6 h-6 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                  )}
+                </div>
+                <div>
+                  <p className={`text-sm font-medium ${notebook.isRunnable ? 'text-green-400' : 'text-amber-400'}`}>
+                    {notebook.isRunnable ? 'Notebook is Runnable' : 'Notebook Needs Review'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    V6 Quality Gate {validationSummary
+                      ? `-- ${validationSummary.checks_passed ?? '?'}/${validationSummary.checks_total ?? '?'} checks passed`
+                      : ''}
+                  </p>
+                </div>
+              </div>
+              <span className={`px-3 py-1 rounded-lg text-sm font-bold ${
+                notebook.isRunnable ? 'bg-green-500/20 text-green-400' : 'bg-amber-500/20 text-amber-400'
+              }`}>
+                V6
+              </span>
+            </div>
+          )}
+
           {/* Notebook info + download */}
           <div className="flex items-center justify-between bg-gray-800/50 border border-border rounded-lg p-4">
             <div className="flex items-center gap-4">
@@ -119,7 +168,10 @@ export default function Step4Convert() {
               </div>
               <div>
                 <p className="text-sm font-medium text-gray-200">migration_notebook</p>
-                <p className="text-xs text-gray-500">{notebook.cells.length} cells -- python</p>
+                <p className="text-xs text-gray-500">
+                  {notebook.cells.length} cells ({codeCells} code, {mdCells} markdown) -- python
+                  {isV6 && ' -- V6 wired pipeline'}
+                </p>
               </div>
             </div>
             <div className="flex gap-2">
@@ -148,6 +200,18 @@ export default function Step4Convert() {
             </div>
           )}
 
+          {/* V6 Validation warnings */}
+          {validationSummary?.warnings && validationSummary.warnings.length > 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+              <p className="text-xs font-medium text-amber-400 mb-2">Generation Warnings</p>
+              <ul className="space-y-1">
+                {validationSummary.warnings.map((w, i) => (
+                  <li key={i} className="text-xs text-amber-300/70">{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {/* Cell navigator */}
           <div className="flex gap-1 overflow-x-auto pb-2">
             {notebook.cells.map((cell, i) => (
@@ -156,19 +220,27 @@ export default function Step4Convert() {
                 onClick={() => setActiveCell(i)}
                 className={`px-3 py-1.5 rounded text-xs shrink-0 transition
                   ${i === activeCell ? 'bg-primary/20 text-primary' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}
+                title={cell.label || undefined}
               >
-                {cell.type === 'code' ? `Code ${i + 1}` : `MD ${i + 1}`}
+                {cell.label
+                  ? cell.label.slice(0, 16) + (cell.label.length > 16 ? '...' : '')
+                  : cell.type === 'code' ? `Code ${i + 1}` : `MD ${i + 1}`}
               </button>
             ))}
           </div>
 
           {/* Active cell preview */}
           {notebook.cells[activeCell] && (
-            <CodePreview
-              code={notebook.cells[activeCell].source}
-              language={notebook.cells[activeCell].type === 'code' ? 'python' : 'markdown'}
-              title={`Cell ${activeCell + 1} (${notebook.cells[activeCell].type})`}
-            />
+            <div>
+              {notebook.cells[activeCell].label && (
+                <p className="text-xs text-gray-500 mb-1 font-mono">{notebook.cells[activeCell].label}</p>
+              )}
+              <CodePreview
+                code={notebook.cells[activeCell].source}
+                language={notebook.cells[activeCell].type === 'code' ? 'python' : 'markdown'}
+                title={`Cell ${activeCell + 1} (${notebook.cells[activeCell].type})`}
+              />
+            </div>
           )}
         </div>
       ) : null}

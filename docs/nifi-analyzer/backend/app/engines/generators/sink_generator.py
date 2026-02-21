@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 
 from app.models.config import DatabricksConfig
-from app.models.pipeline import MappingEntry, ParseResult
+from app.models.pipeline import AssessmentResult, MappingEntry, ParseResult
 
 logger = logging.getLogger(__name__)
 
