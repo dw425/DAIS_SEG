@@ -239,7 +239,7 @@ mappings:
       def _java_logic_{name}(values: pd.Series) -> pd.Series:
           # Port Java code to Python
           def _process(val):
-              result = val  # Replace with ported logic
+              result = val  # USER ACTION: Replace with ported Java logic
               return str(result) if result is not None else None
           return values.apply(_process)
 
@@ -292,3 +292,647 @@ mappings:
     imports: []
     confidence: 0.90
     role: "utility"
+
+  # ── ADDITIONAL TALEND COMPONENTS ──
+  - type: "tDB2Input"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:db2://{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.ibm.db2.jcc.DB2Driver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="db2-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="db2-pass"))
+          .load())
+    description: "DB2 input via JDBC with secret-scoped credentials"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "tDB2Output"
+    category: "JDBC Sink"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", "jdbc:db2://{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.ibm.db2.jcc.DB2Driver")
+          .mode("{write_mode}")
+          .save())
+    description: "DB2 output via JDBC write"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "tTeradataInput"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:teradata://{host}/DATABASE={database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.teradata.jdbc.TeraDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="teradata-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="teradata-pass"))
+          .load())
+    description: "Teradata input via JDBC"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "tTeradataOutput"
+    category: "JDBC Sink"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", "jdbc:teradata://{host}/DATABASE={database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.teradata.jdbc.TeraDriver")
+          .mode("{write_mode}")
+          .save())
+    description: "Teradata output via JDBC write"
+    imports: []
+    confidence: 0.88
+    role: "sink"
+
+  - type: "tSAPInput"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:sap://{host}:{port}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.sap.db.jdbc.Driver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="sap-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="sap-pass"))
+          .load())
+    description: "SAP HANA input via JDBC"
+    imports: []
+    confidence: 0.82
+    role: "source"
+
+  - type: "tAccessInput"
+    category: "JDBC Source"
+    template: |
+      # MS Access — read via UCanAccess JDBC driver
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:ucanaccess://{mdb_path}")
+          .option("dbtable", "{table}")
+          .option("driver", "net.ucanaccess.jdbc.UcanaccessDriver")
+          .load())
+    description: "MS Access input via UCanAccess JDBC driver"
+    imports: []
+    confidence: 0.68
+    role: "source"
+
+  - type: "tSQLiteInput"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:sqlite:{db_path}")
+          .option("dbtable", "{table}")
+          .option("driver", "org.sqlite.JDBC")
+          .load())
+    description: "SQLite input via JDBC"
+    imports: []
+    confidence: 0.85
+    role: "source"
+
+  - type: "tSQLiteOutput"
+    category: "JDBC Sink"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", "jdbc:sqlite:{db_path}")
+          .option("dbtable", "{table}")
+          .option("driver", "org.sqlite.JDBC")
+          .mode("{write_mode}")
+          .save())
+    description: "SQLite output via JDBC write"
+    imports: []
+    confidence: 0.85
+    role: "sink"
+
+  - type: "tMSSqlInput"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:sqlserver://{host}:{port};databaseName={database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="mssql-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="mssql-pass"))
+          .load())
+    description: "SQL Server input via JDBC"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "tMSSqlOutput"
+    category: "JDBC Sink"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", "jdbc:sqlserver://{host}:{port};databaseName={database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
+          .mode("{write_mode}")
+          .save())
+    description: "SQL Server output via JDBC write"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "tInformixInput"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:informix-sqli://{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.informix.jdbc.IfxDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="informix-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="informix-pass"))
+          .load())
+    description: "Informix input via JDBC"
+    imports: []
+    confidence: 0.82
+    role: "source"
+
+  - type: "tSybaseInput"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:sybase:Tds:{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.sybase.jdbc4.jdbc.SybDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="sybase-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="sybase-pass"))
+          .load())
+    description: "Sybase input via JDBC"
+    imports: []
+    confidence: 0.78
+    role: "source"
+
+  - type: "tFileInputParquet"
+    category: "File Read"
+    template: |
+      df_{name} = spark.read.format("parquet").load("{file_path}")
+    description: "Parquet file input via Spark reader"
+    imports: []
+    confidence: 0.95
+    role: "source"
+
+  - type: "tFileOutputParquet"
+    category: "File Write"
+    template: |
+      df_{input}.write.format("parquet").mode("{write_mode}").save("{output_path}")
+    description: "Parquet file output via Spark writer"
+    imports: []
+    confidence: 0.95
+    role: "sink"
+
+  - type: "tFileInputAvro"
+    category: "File Read"
+    template: |
+      df_{name} = spark.read.format("avro").load("{file_path}")
+    description: "Avro file input via Spark reader"
+    imports: []
+    confidence: 0.95
+    role: "source"
+
+  - type: "tFileOutputAvro"
+    category: "File Write"
+    template: |
+      df_{input}.write.format("avro").mode("{write_mode}").save("{output_path}")
+    description: "Avro file output via Spark writer"
+    imports: []
+    confidence: 0.95
+    role: "sink"
+
+  - type: "tMultiFileOutput"
+    category: "File Write"
+    template: |
+      (df_{input}.write
+          .format("{output_format}")
+          .partitionBy("{partition_col}")
+          .mode("{write_mode}")
+          .save("{output_path}"))
+    description: "Multi-file output via partitioned write"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "tFileArchive"
+    category: "File Operation"
+    template: |
+      import shutil
+      shutil.make_archive("{archive_base}", "{format}", "{source_dir}")
+      dbutils.fs.mv("file:{archive_base}.{format}", "{target_path}")
+    description: "File archive creation via shutil.make_archive()"
+    imports: ["import shutil"]
+    confidence: 0.72
+    role: "process"
+
+  - type: "tFileUnarchive"
+    category: "File Operation"
+    template: |
+      import shutil
+      shutil.unpack_archive("{archive_path}", "{extract_dir}")
+    description: "File unarchive via shutil.unpack_archive()"
+    imports: ["import shutil"]
+    confidence: 0.72
+    role: "process"
+
+  - type: "tAzureBlobInput"
+    category: "Cloud Source"
+    template: |
+      df_{name} = (spark.read
+          .format("{file_format}")
+          .option("header", "true")
+          .load("wasbs://{container}@{account}.blob.core.windows.net/{path}"))
+    description: "Azure Blob Storage input via wasbs:// path"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "tAzureBlobOutput"
+    category: "Cloud Sink"
+    template: |
+      (df_{input}.write
+          .format("{file_format}")
+          .mode("{write_mode}")
+          .save("wasbs://{container}@{account}.blob.core.windows.net/{path}"))
+    description: "Azure Blob Storage output via wasbs:// path"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "tGSInput"
+    category: "Cloud Source"
+    template: |
+      df_{name} = (spark.read
+          .format("{file_format}")
+          .option("header", "true")
+          .load("gs://{bucket}/{path}"))
+    description: "Google Cloud Storage input via gs:// path"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "tGSOutput"
+    category: "Cloud Sink"
+    template: |
+      (df_{input}.write
+          .format("{file_format}")
+          .mode("{write_mode}")
+          .save("gs://{bucket}/{path}"))
+    description: "Google Cloud Storage output via gs:// path"
+    imports: []
+    confidence: 0.88
+    role: "sink"
+
+  - type: "tRedshiftInput"
+    category: "Cloud Source"
+    template: |
+      df_{name} = (spark.read
+          .format("redshift")
+          .option("url", "jdbc:redshift://{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("tempdir", "s3a://{temp_bucket}/redshift-temp/")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="redshift-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="redshift-pass"))
+          .load())
+    description: "Redshift input via spark-redshift connector"
+    imports: []
+    confidence: 0.85
+    role: "source"
+
+  - type: "tRedshiftOutput"
+    category: "Cloud Sink"
+    template: |
+      (df_{input}.write
+          .format("redshift")
+          .option("url", "jdbc:redshift://{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("tempdir", "s3a://{temp_bucket}/redshift-temp/")
+          .mode("{write_mode}")
+          .save())
+    description: "Redshift output via spark-redshift connector"
+    imports: []
+    confidence: 0.85
+    role: "sink"
+
+  - type: "tSnowflakeInput"
+    category: "Cloud Source"
+    template: |
+      df_{name} = (spark.read
+          .format("snowflake")
+          .option("sfUrl", "{account}.snowflakecomputing.com")
+          .option("sfDatabase", "{database}")
+          .option("sfSchema", "{schema}")
+          .option("sfWarehouse", "{warehouse}")
+          .option("dbtable", "{table}")
+          .option("sfUser", dbutils.secrets.get(scope="{scope}", key="sf-user"))
+          .option("sfPassword", dbutils.secrets.get(scope="{scope}", key="sf-pass"))
+          .load())
+    description: "Snowflake input via spark-snowflake connector"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "tSnowflakeOutput"
+    category: "Cloud Sink"
+    template: |
+      (df_{input}.write
+          .format("snowflake")
+          .option("sfUrl", "{account}.snowflakecomputing.com")
+          .option("sfDatabase", "{database}")
+          .option("sfSchema", "{schema}")
+          .option("sfWarehouse", "{warehouse}")
+          .option("dbtable", "{table}")
+          .mode("{write_mode}")
+          .save())
+    description: "Snowflake output via spark-snowflake connector"
+    imports: []
+    confidence: 0.88
+    role: "sink"
+
+  - type: "tBigQueryInput"
+    category: "Cloud Source"
+    template: |
+      df_{name} = (spark.read
+          .format("bigquery")
+          .option("table", "{project}.{dataset}.{table}")
+          .load())
+    description: "BigQuery input via spark-bigquery connector"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "tBigQueryOutput"
+    category: "Cloud Sink"
+    template: |
+      (df_{input}.write
+          .format("bigquery")
+          .option("table", "{project}.{dataset}.{table}")
+          .option("temporaryGcsBucket", "{temp_bucket}")
+          .mode("{write_mode}")
+          .save())
+    description: "BigQuery output via spark-bigquery connector"
+    imports: []
+    confidence: 0.88
+    role: "sink"
+
+  - type: "tSendMail"
+    category: "Notification"
+    template: |
+      import requests
+      payload = {"text": f"Job {{job_name}} completed: {{status}}"}
+      requests.post("{webhook_url}", json=payload)
+    description: "Send mail via webhook notification"
+    imports: ["import requests"]
+    confidence: 0.72
+    role: "process"
+
+  - type: "tJavaRow"
+    category: "Custom Transform"
+    template: |
+      from pyspark.sql.functions import udf, col
+      from pyspark.sql.types import StringType
+      @udf(StringType())
+      def java_row_logic(val):
+          {python_equivalent_logic}
+          return result
+      df_{name} = df_{input}.withColumn("{output_col}", java_row_logic(col("{input_col}")))
+    description: "tJavaRow mapped to PySpark UDF with row-level logic"
+    imports: ["from pyspark.sql.functions import udf, col", "from pyspark.sql.types import StringType"]
+    confidence: 0.75
+    role: "transform"
+
+  - type: "tJavaFlex"
+    category: "Custom Transform"
+    template: |
+      # tJavaFlex — start/main/end code blocks mapped to Python
+      # Start code
+      {start_code}
+      # Main code (per-row processing via UDF)
+      from pyspark.sql.functions import udf, col
+      from pyspark.sql.types import StringType
+      @udf(StringType())
+      def flex_logic(val):
+          {main_code}
+          return result
+      df_{name} = df_{input}.withColumn("{output_col}", flex_logic(col("{input_col}")))
+      # End code
+      {end_code}
+    description: "tJavaFlex start/main/end mapped to Python init, UDF, cleanup"
+    imports: ["from pyspark.sql.functions import udf, col", "from pyspark.sql.types import StringType"]
+    confidence: 0.68
+    role: "transform"
+
+  - type: "tSchemaComplianceCheck"
+    category: "Data Quality"
+    template: |
+      from pyspark.sql.types import StructType
+      expected_schema = StructType.fromJson({expected_schema_json})
+      actual_fields = set(df_{input}.schema.fieldNames())
+      expected_fields = set(expected_schema.fieldNames())
+      missing = expected_fields - actual_fields
+      extra = actual_fields - expected_fields
+      assert not missing, f"Missing columns: {missing}"
+    description: "Schema compliance check via StructType comparison"
+    imports: ["from pyspark.sql.types import StructType"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "tConvertType"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumn("{col_name}", col("{col_name}").cast("{target_type}"))
+    description: "Type conversion via DataFrame.cast()"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.95
+    role: "transform"
+
+  - type: "tDataMask"
+    category: "Data Privacy"
+    template: |
+      from pyspark.sql.functions import sha2, col
+      df_{name} = df_{input}.withColumn("{col_name}", sha2(col("{col_name}").cast("string"), 256))
+    description: "Data masking via SHA-256 hash"
+    imports: ["from pyspark.sql.functions import sha2, col"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "tReplace"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import regexp_replace, col
+      df_{name} = df_{input}.withColumn("{col_name}", regexp_replace(col("{col_name}"), "{pattern}", "{replacement}"))
+    description: "String replacement via regexp_replace()"
+    imports: ["from pyspark.sql.functions import regexp_replace, col"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "tHash"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import md5, concat_ws, col
+      df_{name} = df_{input}.withColumn("_hash", md5(concat_ws("||", *[col(c) for c in {hash_columns}])))
+    description: "Hash computation via MD5 of concatenated columns"
+    imports: ["from pyspark.sql.functions import md5, concat_ws, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "tSampleRow"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.sample(withReplacement=False, fraction={fraction}, seed={seed})
+    description: "Row sampling via DataFrame.sample()"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "tExtractXMLField"
+    category: "XML Processing"
+    template: |
+      # xpath_string is SQL-only; use spark.sql() for XPath extraction
+      df_{input}.createOrReplaceTempView("tmp_{name}_xml")
+      df_{name} = spark.sql("SELECT *, xpath_string({xml_col}, '{xpath_expr}') AS {output_col} FROM tmp_{name}_xml")
+    description: "XML field extraction via xpath (spark.sql)"
+    imports: []
+    confidence: 0.78
+    role: "transform"
+
+  - type: "tAdvancedHash"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import sha2, concat_ws, col
+      df_{name} = df_{input}.withColumn("_hash", sha2(concat_ws("||", *[col(c) for c in {hash_columns}]), {bits}))
+    description: "Advanced hash via SHA-2 with configurable bit length"
+    imports: ["from pyspark.sql.functions import sha2, concat_ws, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "tXMLMap"
+    category: "XML Processing"
+    template: |
+      # from_xml requires spark-xml library; use spark.read.format("xml") instead
+      # Write XML column to temp location, then read back with XML reader
+      df_{input}.select("{xml_col}").write.mode("overwrite").text("/tmp/_xml_parse_{name}")
+      df_{name} = spark.read.format("xml").option("rowTag", "{row_tag}").load("/tmp/_xml_parse_{name}")
+    description: "XML map via spark-xml reader (requires com.databricks:spark-xml)"
+    imports: []
+    confidence: 0.72
+    role: "transform"
+
+  - type: "tExtractDelimitedFields"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import split, col
+      parts = split(col("{delimited_col}"), "{delimiter}")
+      df_{name} = df_{input}
+      for i, field_name in enumerate({field_names}):
+          df_{name} = df_{name}.withColumn(field_name, parts.getItem(i))
+    description: "Extract delimited fields via split and getItem"
+    imports: ["from pyspark.sql.functions import split, col"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "tRecordMatching"
+    category: "Data Quality"
+    template: |
+      from pyspark.sql.functions import soundex, col, levenshtein
+      df_{name} = (df_{left}.alias("a")
+          .join(df_{right}.alias("b"),
+              levenshtein(col("a.{match_col}"), col("b.{match_col}")) <= {threshold},
+              "inner"))
+    description: "Record matching via Levenshtein distance join"
+    imports: ["from pyspark.sql.functions import levenshtein, col"]
+    confidence: 0.75
+    role: "transform"
+
+  - type: "tFlowToIterate"
+    category: "Flow Control"
+    template: |
+      # tFlowToIterate — convert rows to iteration context
+      rows_{name} = df_{input}.collect()
+      for row in rows_{name}:
+          # Set context variables from each row
+          {iterate_body}
+    description: "Flow-to-iterate conversion via collect and Python loop"
+    imports: []
+    confidence: 0.78
+    role: "process"
+
+  - type: "tIterateToFlow"
+    category: "Flow Control"
+    template: |
+      # tIterateToFlow — convert iteration results back to DataFrame
+      from pyspark.sql.types import StructType, StructField, StringType
+      schema = StructType([StructField("{col}", StringType(), True) for col in {columns}])
+      df_{name} = spark.createDataFrame({accumulated_rows}, schema)
+    description: "Iterate-to-flow via createDataFrame from accumulated results"
+    imports: ["from pyspark.sql.types import StructType, StructField, StringType"]
+    confidence: 0.72
+    role: "source"
+
+  - type: "tS3Input"
+    category: "Cloud Source"
+    template: |
+      df_{name} = (spark.read
+          .format("{file_format}")
+          .option("header", "true")
+          .load("s3a://{bucket}/{key}"))
+    description: "S3 input via s3a:// path"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "tS3Output"
+    category: "Cloud Sink"
+    template: |
+      (df_{input}.write
+          .format("{file_format}")
+          .mode("{write_mode}")
+          .save("s3a://{bucket}/{key}"))
+    description: "S3 output via s3a:// path"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "tOracleOutput"
+    category: "JDBC Sink"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", "jdbc:oracle:thin:@{host}:{port}:{sid}")
+          .option("dbtable", "{table}")
+          .option("driver", "oracle.jdbc.OracleDriver")
+          .mode("{write_mode}")
+          .save())
+    description: "Oracle output via JDBC write"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "tPostgresqlOutput"
+    category: "JDBC Sink"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", "jdbc:postgresql://{host}:{port}/{database}")
+          .option("dbtable", "{table}")
+          .option("driver", "org.postgresql.Driver")
+          .mode("{write_mode}")
+          .save())
+    description: "PostgreSQL output via JDBC write"
+    imports: []
+    confidence: 0.90
+    role: "sink"

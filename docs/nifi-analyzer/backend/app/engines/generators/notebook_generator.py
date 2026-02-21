@@ -6,6 +6,15 @@ Ported from generators/notebook-generator.js.
 import logging
 from datetime import datetime, timezone
 
+from app.engines.generators.autoloader_generator import (
+    generate_autoloader_code,
+    generate_jdbc_source_code,
+    generate_kafka_source_code,
+    generate_streaming_trigger,
+    is_autoloader_candidate,
+    is_jdbc_source,
+    is_kafka_source,
+)
 from app.engines.generators.cell_builders import (
     build_config_cell,
     build_imports_cell,
@@ -13,6 +22,11 @@ from app.engines.generators.cell_builders import (
     build_teardown_cell,
 )
 from app.engines.generators.code_scrubber import scrub_code
+from app.engines.generators.processor_translators import (
+    translate_execute_script,
+    translate_jolt_transform,
+    translate_route_on_attribute,
+)
 from app.engines.generators.workflow_generator import generate_workflow
 from app.models.config import DatabricksConfig
 from app.models.pipeline import AssessmentResult, NotebookCell, NotebookResult, ParseResult
@@ -69,8 +83,6 @@ def generate_notebook(
         if not mapping.code:
             continue
 
-        code = scrub_code(mapping.code)
-
         # Section header
         cells.append(
             NotebookCell(
@@ -82,6 +94,11 @@ def generate_notebook(
             )
         )
 
+        # Use specialized translators for known processor types
+        code = _generate_specialized_code(mapping, parse_result, config)
+        if code is None:
+            code = scrub_code(mapping.code)
+
         cells.append(
             NotebookCell(
                 type="code",
@@ -89,6 +106,17 @@ def generate_notebook(
                 label=f"step_{i + 1}_{mapping.role}",
             )
         )
+
+        # Add streaming trigger cell for Auto Loader / Kafka sources
+        if is_autoloader_candidate(mapping.type) or is_kafka_source(mapping.type):
+            trigger_code = generate_streaming_trigger(mapping, parse_result, config)
+            cells.append(
+                NotebookCell(
+                    type="code",
+                    source=trigger_code,
+                    label=f"step_{i + 1}_trigger",
+                )
+            )
 
     # Teardown cell
     teardown_code = build_teardown_cell()
@@ -98,6 +126,45 @@ def generate_notebook(
     workflow = generate_workflow(parse_result, assessment, config)
 
     return NotebookResult(cells=cells, workflow=workflow)
+
+
+def _generate_specialized_code(
+    mapping,
+    parse_result: ParseResult,
+    config,
+) -> str | None:
+    """Generate specialized code for known NiFi processor types.
+
+    Returns None if no specialized translator applies (fall back to generic code).
+    """
+    proc_type = mapping.type
+
+    # Auto Loader for file-based ingestion
+    if is_autoloader_candidate(proc_type):
+        return generate_autoloader_code(mapping, parse_result, config)
+
+    # Kafka consumer
+    if is_kafka_source(proc_type):
+        return generate_kafka_source_code(mapping, parse_result, config)
+
+    # JDBC source
+    if is_jdbc_source(proc_type):
+        return generate_jdbc_source_code(mapping, parse_result, config)
+
+    # RouteOnAttribute
+    if "RouteOnAttribute" in proc_type or "RouteOnContent" in proc_type:
+        result = translate_route_on_attribute(mapping, parse_result)
+        return result["code"]
+
+    # JoltTransformJSON
+    if "Jolt" in proc_type or "JoltTransform" in proc_type:
+        return translate_jolt_transform(mapping, parse_result)
+
+    # ExecuteScript / ExecuteGroovyScript
+    if any(kw in proc_type for kw in ("ExecuteScript", "ExecuteGroovyScript", "ExecuteStreamCommand")):
+        return translate_execute_script(mapping, parse_result)
+
+    return None
 
 
 def _avg_confidence(assessment: AssessmentResult) -> float:

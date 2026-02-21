@@ -6,6 +6,31 @@ from app.models.pipeline import AnalysisResult, AssessmentResult, MappingEntry, 
 
 logger = logging.getLogger(__name__)
 
+# All registered platform mappers
+_MAPPER_MAP = {
+    "ssis": "app.engines.mappers.ssis_mapper",
+    "informatica": "app.engines.mappers.informatica_mapper",
+    "talend": "app.engines.mappers.talend_mapper",
+    "airflow": "app.engines.mappers.airflow_mapper",
+    "dbt": "app.engines.mappers.dbt_mapper",
+    "azure_adf": "app.engines.mappers.azure_adf_mapper",
+    "aws_glue": "app.engines.mappers.aws_glue_mapper",
+    "pentaho": "app.engines.mappers.pentaho_mapper",
+    "snowflake": "app.engines.mappers.snowflake_mapper",
+    "datastage": "app.engines.mappers.datastage_mapper",
+    "apache_beam": "app.engines.mappers.beam_mapper",
+    "matillion": "app.engines.mappers.matillion_mapper",
+    "oracle": "app.engines.mappers.oracle_mapper",
+    "spark": "app.engines.mappers.spark_mapper",
+    "sql": "app.engines.mappers.sql_mapper",
+    "prefect": "app.engines.mappers.prefect_mapper",
+    "luigi": "app.engines.mappers.luigi_mapper",
+    "airbyte": "app.engines.mappers.airbyte_mapper",
+    "fivetran": "app.engines.mappers.fivetran_mapper",
+    "dagster": "app.engines.mappers.dagster_mapper",
+    "stitch": "app.engines.mappers.stitch_mapper",
+}
+
 
 def map_to_databricks(parse_result: ParseResult, analysis_result: AnalysisResult) -> AssessmentResult:
     """Map processors to Databricks equivalents based on platform."""
@@ -16,71 +41,57 @@ def map_to_databricks(parse_result: ParseResult, analysis_result: AnalysisResult
 
         return map_nifi(parse_result, analysis_result)
 
-    # For other platforms, use the generic mapper
-    return _generic_map(parse_result, analysis_result)
-
-
-def _generic_map(parse_result: ParseResult, analysis_result: AnalysisResult) -> AssessmentResult:
-    """Generic mapper for platforms without specialized mapping."""
-    platform = parse_result.platform
-    mappings: list[MappingEntry] = []
-    packages: set[str] = set()
-    unmapped = 0
-
-    # Load platform-specific mapper if available
-    mapper_map = {
-        "ssis": "app.engines.mappers.ssis_mapper",
-        "informatica": "app.engines.mappers.informatica_mapper",
-        "talend": "app.engines.mappers.talend_mapper",
-        "airflow": "app.engines.mappers.airflow_mapper",
-        "dbt": "app.engines.mappers.dbt_mapper",
-        "azure_adf": "app.engines.mappers.azure_adf_mapper",
-        "aws_glue": "app.engines.mappers.aws_glue_mapper",
-        "pentaho": "app.engines.mappers.pentaho_mapper",
-        "snowflake": "app.engines.mappers.snowflake_mapper",
-    }
-
-    mapper_module = mapper_map.get(platform)
+    # Try platform-specific mapper
+    fallback_reason = ""
+    mapper_module = _MAPPER_MAP.get(platform)
     if mapper_module:
         try:
             import importlib
 
             mod = importlib.import_module(mapper_module)
-            return mod.map_platform(parse_result, analysis_result)
-        except (ImportError, AttributeError):
-            logger.warning("Mapper for %s not fully implemented, using fallback", platform)
-
-    # Fallback: basic mapping
-    for p in parse_result.processors:
-        role = _infer_role(p.type)
-        mappings.append(
-            MappingEntry(
-                name=p.name,
-                type=p.type,
-                role=role,
-                mapped=True,
-                confidence=0.5,
-                code=f"# {platform} {p.type}: {p.name} -- manual migration required",
-                notes=f"Platform '{platform}' processor; review for Databricks equivalent",
+        except ImportError:
+            fallback_reason = (
+                f"Specialized mapper '{mapper_module}' not installed; "
+                f"falling back to generic YAML mapping for platform '{platform}'"
             )
+            logger.warning("Mapper module %s not found, using generic fallback", mapper_module)
+        else:
+            try:
+                map_fn = getattr(mod, "map_platform")
+            except AttributeError:
+                fallback_reason = (
+                    f"Mapper module '{mapper_module}' loaded but missing 'map_platform' "
+                    f"function — using generic fallback"
+                )
+                logger.error(
+                    "Mapper module %s loaded but missing 'map_platform' function — "
+                    "this is likely a bug in the mapper implementation",
+                    mapper_module,
+                )
+            else:
+                return map_fn(parse_result, analysis_result)
+
+    # Fallback: use base_mapper generic
+    from app.engines.mappers.base_mapper import map_platform_generic
+
+    result = map_platform_generic(platform, parse_result, analysis_result)
+
+    # Surface the fallback reason so callers know the specialized mapper was skipped
+    if fallback_reason:
+        from app.models.pipeline import MappingEntry
+
+        result.mappings.insert(
+            0,
+            MappingEntry(
+                name="__dispatcher_warning__",
+                type="dispatcher",
+                role="utility",
+                category="Warning",
+                mapped=False,
+                confidence=0.0,
+                code="",
+                notes=fallback_reason,
+            ),
         )
 
-    return AssessmentResult(
-        mappings=mappings,
-        packages=sorted(packages),
-        unmapped_count=unmapped,
-    )
-
-
-def _infer_role(proc_type: str) -> str:
-    """Infer a basic role from processor type name."""
-    t = proc_type.lower()
-    if any(w in t for w in ("source", "input", "read", "get", "fetch", "consume", "listen", "query")):
-        return "source"
-    if any(w in t for w in ("sink", "output", "write", "put", "publish", "send", "insert")):
-        return "sink"
-    if any(w in t for w in ("route", "filter", "distribute")):
-        return "route"
-    if any(w in t for w in ("transform", "convert", "replace", "map", "merge", "split")):
-        return "transform"
-    return "utility"
+    return result

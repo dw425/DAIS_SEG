@@ -1,87 +1,144 @@
-// ── Pipeline domain types ──
+// ── Pipeline domain types — matches backend Pydantic models (camelCase) ──
 
 export interface Processor {
-  id: string;
   name: string;
   type: string;
+  platform: string;
   properties: Record<string, string>;
-  relationships: string[];
-  position?: { x: number; y: number };
+  group: string;
+  state: string;
+  scheduling: Record<string, unknown> | null;
+  resolvedServices: Record<string, Record<string, string>> | null; // resolved controller service properties
 }
 
 export interface Connection {
-  id: string;
-  sourceId: string;
-  destinationId: string;
-  name: string;
-  selectedRelationships: string[];
+  sourceName: string;
+  destinationName: string;
+  relationship: string;
+  backPressureObjectThreshold: number;
+  backPressureDataSizeThreshold: string;
 }
 
 export interface ProcessGroup {
-  id: string;
   name: string;
-  processors: Processor[];
-  connections: Connection[];
-  processGroups: ProcessGroup[];
-}
-
-export interface ParseResult {
-  _nifi?: Record<string, unknown>;
-  processors: Processor[];
-  connections: Connection[];
-  processGroups: ProcessGroup[];
-  parse_warnings: string[];
-  format: string;
-  platform: string;
-}
-
-export interface ExternalSystem {
-  name: string;
-  type: string;
   processors: string[];
 }
 
+export interface ControllerService {
+  name: string;
+  type: string;
+  properties: Record<string, string>;
+}
+
+export interface Warning {
+  severity: string;
+  message: string;
+  source: string;
+}
+
+export interface ParameterEntry {
+  key: string;
+  value: string;
+  sensitive: boolean;
+  inferredType: string; // "string" | "numeric" | "secret"
+  databricksVariable: string;
+}
+
+export interface ParameterContext {
+  name: string;
+  parameters: ParameterEntry[];
+}
+
+export interface ParseResult {
+  platform: string;
+  version: string;
+  processors: Processor[];
+  connections: Connection[];
+  processGroups: ProcessGroup[];
+  controllerServices: ControllerService[];
+  parameterContexts: ParameterContext[];
+  metadata: Record<string, unknown>;
+  warnings: Warning[];
+}
+
+export interface CycleClassification {
+  cycleNodes: string[];
+  category: string; // "error_retry" | "data_reevaluation" | "pagination"
+  description: string;
+  databricksTranslation: string;
+}
+
+export interface TaskCluster {
+  id: string;
+  processors: string[];
+  entryProcessor: string;
+  exitProcessors: string[];
+  connections: string[];
+}
+
+export interface BackpressureConfig {
+  connectionSource: string;
+  connectionDestination: string;
+  nifiObjectThreshold: number;
+  nifiDataSizeThreshold: string;
+  databricksMaxFilesPerTrigger: number | null;
+  databricksMaxBytesPerTrigger: string | null;
+}
+
 export interface AnalysisResult {
-  processorCount: number;
-  connectionCount: number;
-  processGroupCount: number;
-  externalSystems: ExternalSystem[];
-  hasCycles: boolean;
-  tiers: Record<string, string[]>;
-  complexityScore: number;
-  warnings: string[];
+  dependencyGraph: Record<string, unknown>;
+  externalSystems: Record<string, unknown>[];
+  cycles: string[][];
+  cycleClassifications: CycleClassification[];
+  taskClusters: TaskCluster[];
+  backpressureConfigs: BackpressureConfig[];
+  flowMetrics: Record<string, unknown>;
+  securityFindings: Record<string, unknown>[];
+  stages: Record<string, unknown>[];
 }
 
 export interface MappingEntry {
-  processorName: string;
-  processorType: string;
-  confidence: number;        // 0-100
-  risk: 'low' | 'medium' | 'high';
-  phase: number;
-  mappedTo: string;
+  name: string;
+  type: string;
+  role: string;
+  category: string;
+  mapped: boolean;
+  confidence: number;
+  code: string;
   notes: string;
 }
 
 export interface AssessmentResult {
   mappings: MappingEntry[];
-  overallConfidence: number;
-  overallRisk: 'low' | 'medium' | 'high';
-  supportedCount: number;
-  unsupportedCount: number;
-  partialCount: number;
+  packages: string[];
+  unmappedCount: number;
 }
 
 export interface NotebookCell {
-  cell_type: 'code' | 'markdown';
+  type: string;
   source: string;
+  label: string;
 }
 
 export interface NotebookResult {
   cells: NotebookCell[];
-  language: string;
-  notebookName: string;
-  downloadUrl?: string;
+  workflow: Record<string, unknown>;
 }
+
+export interface ValidationScore {
+  dimension: string;
+  score: number;
+  details: string;
+}
+
+export interface ValidationResult {
+  overallScore: number;
+  scores: ValidationScore[];
+  gaps: Record<string, unknown>[];
+  errors: string[];
+}
+
+// ── Report types (returned as plain dicts from /report endpoint) ──
 
 export interface GapItem {
   processor: string;
@@ -103,27 +160,6 @@ export interface FinalReport {
   exportFormats: string[];
   generatedAt: string;
   rawJson: Record<string, unknown>;
-}
-
-export interface ValidationScore {
-  category: string;
-  score: number;
-  maxScore: number;
-  details: string;
-}
-
-export interface ValidationGap {
-  processor: string;
-  severity: 'critical' | 'high' | 'medium' | 'low';
-  message: string;
-  remediation: string;
-}
-
-export interface ValidationResult {
-  overallScore: number;
-  scores: ValidationScore[];
-  gaps: ValidationGap[];
-  passed: boolean;
 }
 
 export interface DroppableProcessor {

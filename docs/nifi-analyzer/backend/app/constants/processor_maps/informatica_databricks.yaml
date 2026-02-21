@@ -236,7 +236,7 @@ mappings:
       def _java_transform_{name}(values: pd.Series) -> pd.Series:
           # Port Java transformation logic to Python
           def _process(val):
-              result = val  # Replace with ported logic
+              result = val  # USER ACTION: Replace with ported Java logic
               return str(result) if result is not None else None
           return values.apply(_process)
 
@@ -283,3 +283,585 @@ mappings:
     imports: ["from pyspark.sql.functions import to_json, struct"]
     confidence: 0.85
     role: "transform"
+
+  # ── ADDITIONAL INFORMATICA TRANSFORMS ──
+  - type: "Data Masking"
+    category: "Data Privacy"
+    template: |
+      from pyspark.sql.functions import sha2, concat, lit
+      df_{name} = (df_{input}
+          .withColumn("{masked_col}", sha2(concat(col("{source_col}"), lit("{salt}")), 256)))
+    description: "Data Masking via SHA-256 hashing with salt"
+    imports: ["from pyspark.sql.functions import sha2, concat, col, lit"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Address Validator"
+    category: "Data Quality"
+    template: |
+      # Address Validator — use external geocoding/address API
+      import requests
+      from pyspark.sql.functions import udf
+      from pyspark.sql.types import StringType
+      @udf(StringType())
+      def validate_address(addr):
+          resp = requests.get(f"{api_url}?address={addr}")
+          return resp.json().get("status", "UNKNOWN")
+      df_{name} = df_{input}.withColumn("_addr_status", validate_address(col("{address_col}")))
+    description: "Address Validator via external geocoding API UDF"
+    imports: ["import requests", "from pyspark.sql.functions import udf, col", "from pyspark.sql.types import StringType"]
+    confidence: 0.55
+    role: "transform"
+
+  - type: "Duplicate Check"
+    category: "Data Quality"
+    template: |
+      from pyspark.sql import Window
+      from pyspark.sql.functions import row_number, col
+      w = Window.partitionBy({key_cols}).orderBy("{order_col}")
+      df_{name} = (df_{input}
+          .withColumn("_dup_rank", row_number().over(w))
+          .filter(col("_dup_rank") == 1)
+          .drop("_dup_rank"))
+    description: "Duplicate Check via window row_number deduplication"
+    imports: ["from pyspark.sql import Window", "from pyspark.sql.functions import row_number, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Key Generator"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import monotonically_increasing_id
+      df_{name} = df_{input}.withColumn("{key_col}", monotonically_increasing_id())
+    description: "Key Generator via monotonically_increasing_id()"
+    imports: ["from pyspark.sql.functions import monotonically_increasing_id"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Match"
+    category: "Data Quality"
+    template: |
+      from pyspark.sql.functions import soundex, col
+      df_{name} = (df_{left}.alias("a")
+          .join(df_{right}.alias("b"),
+              soundex(col("a.{match_col}")) == soundex(col("b.{match_col}")),
+              "inner"))
+    description: "Match transformation via Soundex-based fuzzy join"
+    imports: ["from pyspark.sql.functions import soundex, col"]
+    confidence: 0.72
+    role: "transform"
+
+  - type: "Merger"
+    category: "DataFrame API"
+    template: |
+      from delta.tables import DeltaTable
+      target = DeltaTable.forName(spark, "{catalog}.{schema}.{target_table}")
+      target.alias("t").merge(
+          df_{input}.alias("s"),
+          "t.{key_col} = s.{key_col}"
+      ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+    description: "Merger mapped to Delta MERGE upsert"
+    imports: ["from delta.tables import DeltaTable"]
+    confidence: 0.90
+    role: "sink"
+
+  - type: "Hierarchy Builder"
+    category: "DataFrame API"
+    template: |
+      # Hierarchy Builder — build parent-child hierarchies
+      from pyspark.sql.functions import col, lit, array, concat
+      df_root = df_{input}.filter(col("{parent_col}").isNull()).withColumn("_path", array(col("{id_col}")))
+      df_children = df_{input}.filter(col("{parent_col}").isNotNull())
+      # Iterative hierarchy expansion
+      df_{name} = df_root
+      for level in range({max_depth}):
+          df_{name} = df_{name}.join(df_children, df_{name}["{id_col}"] == df_children["{parent_col}"], "left")
+    description: "Hierarchy Builder via iterative parent-child joins"
+    imports: ["from pyspark.sql.functions import col, lit, array"]
+    confidence: 0.65
+    role: "transform"
+
+  - type: "Hierarchy Parser"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import split, posexplode, col
+      df_{name} = (df_{input}
+          .withColumn("_path_parts", split(col("{hierarchy_col}"), "{delimiter}"))
+          .select("*", posexplode("_path_parts").alias("_level", "_node"))
+          .drop("_path_parts"))
+    description: "Hierarchy Parser via split and posexplode"
+    imports: ["from pyspark.sql.functions import split, posexplode, col"]
+    confidence: 0.72
+    role: "transform"
+
+  - type: "Pre-Session Command"
+    category: "SQL Command"
+    template: |
+      # Pre-Session Command — run setup SQL before pipeline
+      spark.sql("{pre_sql}")
+    description: "Pre-Session Command mapped to spark.sql() execution"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "Post-Session Command"
+    category: "SQL Command"
+    template: |
+      # Post-Session Command — run cleanup SQL after pipeline
+      spark.sql("{post_sql}")
+    description: "Post-Session Command mapped to spark.sql() execution"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "Email Task"
+    category: "Notification"
+    template: |
+      # Email Task — send notification via webhook or SMTP
+      import requests
+      payload = {"text": f"Pipeline {{pipeline_name}} completed: {{status}}"}
+      requests.post("{webhook_url}", json=payload)
+    description: "Email Task mapped to webhook notification"
+    imports: ["import requests"]
+    confidence: 0.72
+    role: "process"
+
+  - type: "Event Wait"
+    category: "Event Handling"
+    template: |
+      # Event Wait — poll for file/event arrival
+      import time
+      while not dbutils.fs.ls("{watch_path}"):
+          time.sleep({poll_interval_sec})
+    description: "Event Wait mapped to dbutils.fs polling loop"
+    imports: ["import time"]
+    confidence: 0.65
+    role: "process"
+
+  - type: "Event Raise"
+    category: "Event Handling"
+    template: |
+      # Event Raise — signal event by writing marker file
+      dbutils.fs.put("{event_path}/{event_name}.marker", "triggered", overwrite=True)
+    description: "Event Raise mapped to marker file creation"
+    imports: []
+    confidence: 0.60
+    role: "process"
+
+  - type: "Control Task"
+    category: "Workflow Control"
+    template: |
+      # Control Task — conditional workflow branching
+      if {condition}:
+          dbutils.notebook.run("{notebook_path_true}", {timeout})
+      else:
+          dbutils.notebook.run("{notebook_path_false}", {timeout})
+    description: "Control Task mapped to conditional dbutils.notebook.run()"
+    imports: []
+    confidence: 0.78
+    role: "process"
+
+  - type: "Decision Task"
+    category: "Workflow Control"
+    template: |
+      # Decision Task — evaluate condition and branch
+      result = spark.sql("{decision_query}").collect()[0][0]
+      if result {operator} {threshold}:
+          dbutils.notebook.exit("path_a")
+      else:
+          dbutils.notebook.exit("path_b")
+    description: "Decision Task via SQL evaluation and notebook exit"
+    imports: []
+    confidence: 0.72
+    role: "process"
+
+  - type: "Timer"
+    category: "Workflow Control"
+    template: |
+      import time
+      time.sleep({wait_seconds})
+    description: "Timer mapped to time.sleep()"
+    imports: ["import time"]
+    confidence: 0.95
+    role: "process"
+
+  - type: "Unstructured Data"
+    category: "File Read"
+    template: |
+      df_{name} = (spark.read
+          .format("binaryFile")
+          .option("pathGlobFilter", "{file_pattern}")
+          .load("{input_path}"))
+    description: "Unstructured Data read via binaryFile format"
+    imports: []
+    confidence: 0.75
+    role: "source"
+
+  - type: "Python Transformation"
+    category: "Custom Transform"
+    template: |
+      import pandas as pd
+      @pandas_udf("{return_type}")
+      def py_transform(series: pd.Series) -> pd.Series:
+          return series.apply(lambda x: {python_logic})
+      df_{name} = df_{input}.withColumn("{output_col}", py_transform(col("{input_col}")))
+    description: "Python Transformation mapped to pandas_udf"
+    imports: ["from pyspark.sql.functions import pandas_udf, col", "import pandas as pd"]
+    confidence: 0.85
+    role: "transform"
+
+  - type: "R Transformation"
+    category: "Custom Transform"
+    template: |
+      # R Transformation — use SparkR or convert to pandas
+      df_pandas = df_{input}.toPandas()
+      # Apply R-equivalent logic in Python/pandas
+      df_pandas["{output_col}"] = df_pandas["{input_col}"].apply(lambda x: {r_equivalent_logic})
+      df_{name} = spark.createDataFrame(df_pandas)
+    description: "R Transformation mapped to pandas-based equivalent logic"
+    imports: []
+    confidence: 0.55
+    role: "transform"
+
+  - type: "Deduplicate"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.dropDuplicates({key_columns})
+    description: "Deduplicate via dropDuplicates()"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Synchronization Task"
+    category: "Delta Merge"
+    template: |
+      from delta.tables import DeltaTable
+      target = DeltaTable.forName(spark, "{catalog}.{schema}.{target_table}")
+      target.alias("t").merge(
+          df_{input}.alias("s"), "t.{key} = s.{key}"
+      ).whenMatchedUpdateAll().whenNotMatchedInsertAll().whenNotMatchedBySourceDelete().execute()
+    description: "Synchronization Task via Delta MERGE with delete unmatched"
+    imports: ["from delta.tables import DeltaTable"]
+    confidence: 0.88
+    role: "process"
+
+  - type: "Mapping Task"
+    category: "Workflow Orchestration"
+    template: |
+      # Mapping Task — run a parameterized notebook
+      result = dbutils.notebook.run("{mapping_notebook}", {timeout}, {parameters})
+    description: "Mapping Task mapped to dbutils.notebook.run()"
+    imports: []
+    confidence: 0.82
+    role: "process"
+
+  - type: "PowerCenter Task"
+    category: "Workflow Orchestration"
+    template: |
+      # PowerCenter Task — orchestrate via Databricks Jobs API
+      from databricks.sdk import WorkspaceClient
+      w = WorkspaceClient()
+      run = w.jobs.run_now(job_id={job_id}, notebook_params={params})
+      run.result()
+    description: "PowerCenter Task mapped to Databricks Jobs run_now()"
+    imports: ["from databricks.sdk import WorkspaceClient"]
+    confidence: 0.72
+    role: "process"
+
+  - type: "Mass Ingestion"
+    category: "Auto Loader"
+    template: |
+      df_{name} = (spark.readStream
+          .format("cloudFiles")
+          .option("cloudFiles.format", "{file_format}")
+          .option("cloudFiles.schemaLocation", "{schema_path}")
+          .load("{source_path}"))
+      (df_{name}.writeStream
+          .format("delta")
+          .option("checkpointLocation", "{checkpoint_path}")
+          .trigger(availableNow=True)
+          .toTable("{catalog}.{schema}.{table}"))
+    description: "Mass Ingestion via Databricks Auto Loader"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Aggregator Advanced"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import sum, avg, min, max, count, countDistinct, collect_list
+      df_{name} = (df_{input}
+          .groupBy({group_by_cols})
+          .agg(
+              sum("{measure}").alias("total_{measure}"),
+              avg("{measure}").alias("avg_{measure}"),
+              countDistinct("{distinct_col}").alias("distinct_count"),
+              collect_list("{detail_col}").alias("details")
+          ))
+    description: "Advanced Aggregator with multiple aggregation functions"
+    imports: ["from pyspark.sql.functions import sum, avg, min, max, count, countDistinct, collect_list"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Custom Transformation"
+    category: "Custom Transform"
+    template: |
+      from pyspark.sql.functions import udf
+      from pyspark.sql.types import {return_type}
+      @udf({return_type}())
+      def custom_fn({input_params}):
+          {custom_logic}
+          return result
+      df_{name} = df_{input}.withColumn("{output_col}", custom_fn({input_cols}))
+    description: "Custom Transformation mapped to PySpark UDF"
+    imports: ["from pyspark.sql.functions import udf", "from pyspark.sql.types import StringType"]
+    confidence: 0.72
+    role: "transform"
+
+  - type: "External Procedure"
+    category: "External Call"
+    template: |
+      import subprocess
+      result = subprocess.run(["{command}", {args}], capture_output=True, text=True, check=True)
+      print(result.stdout)
+    description: "External Procedure mapped to subprocess.run()"
+    imports: ["import subprocess"]
+    confidence: 0.62
+    role: "process"
+
+  - type: "Midstream"
+    category: "DataFrame API"
+    template: |
+      # Midstream — inline data transformation checkpoint
+      df_{name} = df_{input}.checkpoint()
+    description: "Midstream checkpoint via DataFrame.checkpoint()"
+    imports: []
+    confidence: 0.78
+    role: "transform"
+
+  - type: "Sorter Advanced"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import col, asc, desc
+      df_{name} = df_{input}.orderBy(
+          *[asc(col(c)) if d == "ASC" else desc(col(c)) for c, d in {sort_spec}]
+      ).limit({top_n}) if {top_n} else df_{input}.orderBy(
+          *[asc(col(c)) if d == "ASC" else desc(col(c)) for c, d in {sort_spec}]
+      )
+    description: "Advanced Sorter with multi-column sort and optional top-N"
+    imports: ["from pyspark.sql.functions import col, asc, desc"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Router Advanced"
+    category: "DataFrame API"
+    template: |
+      # Router Advanced — multi-condition row routing
+      route_conditions = {route_conditions}
+      routes = {}
+      for route_name, condition in route_conditions.items():
+          routes[route_name] = df_{input}.filter(condition)
+      routes["default"] = df_{input}.filter(
+          ~(reduce(lambda a, b: a | b, [col("_matched") for _ in route_conditions]))
+      )
+    description: "Advanced Router with named route conditions and default group"
+    imports: ["from pyspark.sql.functions import col", "from functools import reduce"]
+    confidence: 0.75
+    role: "transform"
+
+  - type: "Web Service Consumer"
+    category: "HTTP Request"
+    template: |
+      import requests
+      from pyspark.sql.functions import udf, col
+      from pyspark.sql.types import StringType
+      @udf(StringType())
+      def call_ws(payload):
+          resp = requests.post("{endpoint}", data=payload, headers={{"Content-Type": "application/xml"}})
+          return resp.text
+      df_{name} = df_{input}.withColumn("_ws_response", call_ws(col("{payload_col}")))
+    description: "Web Service Consumer via HTTP POST UDF"
+    imports: ["import requests", "from pyspark.sql.functions import udf, col", "from pyspark.sql.types import StringType"]
+    confidence: 0.68
+    role: "transform"
+
+  - type: "Flat File Source"
+    category: "File Read"
+    template: |
+      df_{name} = (spark.read
+          .format("csv")
+          .option("header", "{has_header}")
+          .option("delimiter", "{delimiter}")
+          .option("inferSchema", "true")
+          .load("{file_path}"))
+    description: "Flat File Source via CSV reader"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Flat File Target"
+    category: "File Write"
+    template: |
+      (df_{input}.write
+          .format("csv")
+          .option("header", "true")
+          .option("delimiter", "{delimiter}")
+          .mode("{write_mode}")
+          .save("{output_path}"))
+    description: "Flat File Target via CSV writer"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "Relational Source"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "{driver}")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="db-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="db-pass"))
+          .load())
+    description: "Relational Source via JDBC with secret-scoped credentials"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Relational Target"
+    category: "JDBC Sink"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "{driver}")
+          .mode("{write_mode}")
+          .save())
+    description: "Relational Target via JDBC write"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "SAP Source"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", "jdbc:sap://{host}:{port}")
+          .option("dbtable", "{table}")
+          .option("driver", "com.sap.db.jdbc.Driver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="sap-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="sap-pass"))
+          .load())
+    description: "SAP Source via JDBC with SAP HANA driver"
+    imports: []
+    confidence: 0.78
+    role: "source"
+
+  - type: "Salesforce Source"
+    category: "API Source"
+    template: |
+      # Salesforce Source — use SOQL via simple_salesforce
+      from simple_salesforce import Salesforce
+      sf = Salesforce(username="{user}", password="{pass}", security_token="{token}")
+      records = sf.query_all("{soql}")["records"]
+      df_{name} = spark.createDataFrame(records)
+    description: "Salesforce Source via simple_salesforce API"
+    imports: ["from simple_salesforce import Salesforce"]
+    confidence: 0.68
+    role: "source"
+
+  - type: "Command Task"
+    category: "System Command"
+    template: |
+      import subprocess
+      result = subprocess.run("{command}", shell=True, capture_output=True, text=True, check=True)
+      print(result.stdout)
+    description: "Command Task mapped to subprocess.run()"
+    imports: ["import subprocess"]
+    confidence: 0.72
+    role: "process"
+
+  - type: "Assignment Task"
+    category: "Variable Assignment"
+    template: |
+      # Assignment Task — set workflow variable
+      {variable_name} = {expression}
+    description: "Assignment Task mapped to Python variable assignment"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "Session Task"
+    category: "Workflow Orchestration"
+    template: |
+      # Session Task — execute a mapping as a Databricks notebook
+      result = dbutils.notebook.run("{mapping_notebook_path}", {timeout}, {params})
+    description: "Session Task mapped to dbutils.notebook.run()"
+    imports: []
+    confidence: 0.80
+    role: "process"
+
+  - type: "Lookup Advanced"
+    category: "DataFrame Join"
+    template: |
+      df_lookup = spark.table("{catalog}.{schema}.{lookup_table}").hint("broadcast")
+      df_{name} = df_{input}.join(df_lookup, col("{input_key}") == col("{lookup_key}"), "{join_type}")
+    description: "Advanced Lookup with broadcast hint for performance"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Cache Source"
+    category: "Cache Read"
+    template: |
+      # Cache Source — read from cached/broadcast table
+      df_{name} = spark.table("{catalog}.{schema}.{cache_table}").cache()
+      df_{name}.count()  # materialize
+    description: "Cache Source mapped to spark.table().cache()"
+    imports: []
+    confidence: 0.85
+    role: "source"
+
+  - type: "Cache Target"
+    category: "Cache Write"
+    template: |
+      df_{input}.createOrReplaceTempView("{cache_view}")
+      spark.catalog.cacheTable("{cache_view}")
+    description: "Cache Target via temp view and cacheTable()"
+    imports: []
+    confidence: 0.85
+    role: "sink"
+
+  - type: "SCD Type 2"
+    category: "Slowly Changing Dimension"
+    template: |
+      from delta.tables import DeltaTable
+      from pyspark.sql.functions import current_timestamp, lit, col
+      target = DeltaTable.forName(spark, "{catalog}.{schema}.{dim_table}")
+      target.alias("t").merge(
+          df_{input}.alias("s"), "t.{business_key} = s.{business_key} AND t._is_current = true"
+      ).whenMatchedUpdate(
+          condition="t.{hash_col} != s.{hash_col}",
+          set={{"_is_current": "false", "_end_date": "current_timestamp()"}}
+      ).whenNotMatchedInsert(
+          values={{**{{c: f"s.{{c}}" for c in df_{input}.columns}}, "_is_current": "true", "_start_date": "current_timestamp()", "_end_date": "lit('9999-12-31')"}}
+      ).execute()
+    description: "SCD Type 2 via Delta MERGE with current flag and date tracking"
+    imports: ["from delta.tables import DeltaTable", "from pyspark.sql.functions import current_timestamp, lit, col"]
+    confidence: 0.82
+    role: "sink"
+
+  - type: "XML Source"
+    category: "File Read"
+    template: |
+      df_{name} = (spark.read
+          .format("xml")
+          .option("rowTag", "{row_tag}")
+          .load("{xml_path}"))
+    description: "XML Source via spark-xml reader"
+    imports: []
+    confidence: 0.85
+    role: "source"

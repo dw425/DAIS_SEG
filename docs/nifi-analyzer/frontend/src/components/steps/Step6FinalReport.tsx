@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { usePipelineStore } from '../../store/pipeline';
 import { useUIStore } from '../../store/ui';
 import { usePipeline } from '../../hooks/usePipeline';
+import { exportDAB } from '../../api/client';
 import JsonExplorer from '../shared/JsonExplorer';
 
 export default function Step6FinalReport() {
@@ -11,7 +12,32 @@ export default function Step6FinalReport() {
   const report = usePipelineStore((s) => s.report);
   const [activeTab, setActiveTab] = useState<'summary' | 'sections' | 'json'>('summary');
 
+  const parsed = usePipelineStore((s) => s.parsed);
+  const assessment = usePipelineStore((s) => s.assessment);
+  const [dabExporting, setDabExporting] = useState(false);
+  const [dabError, setDabError] = useState('');
+
   const canRun = report && status !== 'running';
+
+  const downloadDAB = async () => {
+    if (!parsed || !assessment) return;
+    setDabExporting(true);
+    setDabError('');
+    try {
+      const blob = await exportDAB({ parsed, assessment });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'databricks_asset_bundle.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('DAB export failed:', err);
+      setDabError(err instanceof Error ? err.message : 'DAB export failed. Please try again.');
+    } finally {
+      setDabExporting(false);
+    }
+  };
 
   const exportReport = (format: string) => {
     if (!finalReport) return;
@@ -20,7 +46,7 @@ export default function Step6FinalReport() {
     let ext: string;
 
     if (format === 'json') {
-      content = JSON.stringify(finalReport.rawJson || finalReport, null, 2);
+      content = JSON.stringify(finalReport, null, 2);
       mimeType = 'application/json';
       ext = 'json';
     } else if (format === 'markdown') {
@@ -92,10 +118,26 @@ export default function Step6FinalReport() {
                 {fmt.toUpperCase()}
               </button>
             ))}
+            <button
+              onClick={downloadDAB}
+              disabled={dabExporting || !parsed || !assessment}
+              className="px-3 py-1 rounded-lg bg-orange-600/80 text-white text-xs hover:bg-orange-500 disabled:opacity-40 transition flex items-center gap-1.5"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+              </svg>
+              {dabExporting ? 'Exporting...' : 'Export DAB'}
+            </button>
             {finalReport.generatedAt && (
               <span className="ml-auto text-xs text-gray-600">Generated: {finalReport.generatedAt}</span>
             )}
           </div>
+
+          {dabError && (
+            <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-3 text-xs text-red-400">
+              {dabError}
+            </div>
+          )}
 
           {/* Tab navigation */}
           <div className="flex gap-1 border-b border-border">

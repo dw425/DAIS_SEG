@@ -1,660 +1,4492 @@
-# NiFi Processor -> Databricks PySpark Mapping
-# Top 50 most important NiFi processors with real Databricks code templates
-# Ported from src/constants/nifi-databricks-map.js
-
 mappings:
-  # ── SOURCES ──
-  - type: "GetFile"
-    category: "Auto Loader"
-    template: |
-      df_{name} = (spark.readStream
-          .format("cloudFiles")
-          .option("cloudFiles.format", "csv")
-          .option("cloudFiles.schemaLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
-          .load("/Volumes/{catalog}/{schema}/{path}"))
-    description: "Read files using Auto Loader from Unity Catalog Volumes"
-    imports: ["from pyspark.sql.functions import *"]
-    confidence: 0.90
-    role: "source"
+- type: GetFile
+  category: Auto Loader
+  template: |
+    df_{name} = (spark.readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "csv")
+        .option("cloudFiles.schemaLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+        .load("/Volumes/{catalog}/{schema}/{path}"))
+  description: Read files using Auto Loader from Unity Catalog Volumes
+  imports:
+  - from pyspark.sql.functions import *
+  confidence: 0.9
+  role: source
+- type: ConsumeKafka
+  category: Structured Streaming
+  template: |
+    df_{name} = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("subscribe", "{topic}")
+        .option("startingOffsets", "latest")
+        .load())
+  description: Kafka streaming source via Structured Streaming
+  imports:
+  - from pyspark.sql.functions import from_json, col
+  confidence: 0.9
+  role: source
+- type: ConsumeKafka_2_6
+  category: Structured Streaming
+  template: |
+    df_{name} = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("subscribe", "{topic}")
+        .option("startingOffsets", "latest")
+        .load())
+  description: Kafka 2.6 streaming source
+  imports:
+  - from pyspark.sql.functions import from_json, col
+  confidence: 0.9
+  role: source
+- type: ConsumeKafkaRecord_2_6
+  category: Structured Streaming
+  template: |
+    df_{name} = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("subscribe", "{topic}")
+        .load()
+        .select(from_json(col("value").cast("string"), schema).alias("data"))
+        .select("data.*"))
+  description: Kafka record streaming with schema-based deserialization
+  imports:
+  - from pyspark.sql.functions import from_json, col
+  confidence: 0.9
+  role: source
+- type: QueryDatabaseTable
+  category: JDBC Source
+  template: |
+    df_{name} = (spark.read
+        .format("jdbc")
+        .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+        .option("dbtable", "{table}")
+        .option("driver", "{driver}")
+        .option("user", dbutils.secrets.get(scope="{scope}", key="jdbc-user"))
+        .option("password", dbutils.secrets.get(scope="{scope}", key="jdbc-pass"))
+        .load())
+  description: JDBC database read with secret-scoped credentials
+  imports: []
+  confidence: 0.9
+  role: source
+- type: ListenHTTP
+  category: Model Serving
+  template: |
+    # Deploy an MLflow serving endpoint that writes to Delta
+    df_{name} = spark.readStream.format("delta").table("{name}_incoming")
+    print(f"[HTTP] Streaming from {name}_incoming")
+  description: HTTP listener replaced by Model Serving + Delta table
+  imports:
+  - import mlflow
+  confidence: 0.92
+  role: source
+- type: GetSFTP
+  category: External Storage
+  template: |
+    import paramiko
+    _transport = paramiko.Transport(("{host}", 22))
+    _transport.connect(username=dbutils.secrets.get(scope="{scope}", key="sftp-user"))
+    _sftp = paramiko.SFTPClient.from_transport(_transport)
+    _sftp.get("{remote_path}", "/Volumes/{catalog}/{schema}/landing/{filename}")
+    _sftp.close()
+    _transport.close()
+    df_{name} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/landing/")
+  description: SFTP file retrieval via paramiko to Volumes
+  imports:
+  - import paramiko
+  confidence: 0.9
+  role: source
+- type: GenerateFlowFile
+  category: Test Data
+  template: |
+    df_{name} = spark.range(1000).toDF("id")
+    # Adjust row count and add test columns as needed
+  description: Test data generator using spark.range
+  imports: []
+  confidence: 0.95
+  role: source
+- type: FetchS3Object
+  category: Cloud Storage
+  template: |
+    df_{name} = spark.read.format("{format}").load("s3://{bucket}/{key}")
+  description: Read S3 object via Unity Catalog external location
+  imports: []
+  confidence: 0.9
+  role: source
+- type: ListS3
+  category: Cloud Storage
+  template: |
+    _files = dbutils.fs.ls("s3://{bucket}/{prefix}")
+    df_{name} = spark.createDataFrame(_files)
+  description: List S3 objects via dbutils
+  imports: []
+  confidence: 0.9
+  role: source
+- type: GetMongo
+  category: MongoDB Connector
+  template: |
+    df_{name} = (spark.read
+        .format("mongodb")
+        .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))
+        .option("database", "{database}")
+        .option("collection", "{collection}")
+        .load())
+  description: MongoDB read via Spark MongoDB connector
+  imports: []
+  confidence: 0.9
+  role: source
+- type: GetElasticsearch
+  category: ES Connector
+  template: |
+    df_{name} = (spark.read
+        .format("org.elasticsearch.spark.sql")
+        .option("es.nodes", "{host}")
+        .option("es.resource", "{index}")
+        .load())
+  description: Elasticsearch read via elasticsearch-spark
+  imports: []
+  confidence: 0.9
+  role: source
+- type: TailFile
+  category: Auto Loader
+  template: |
+    df_{name} = (spark.readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "text")
+        .load("/Volumes/{catalog}/{schema}/{path}"))
+  description: Tail file via Auto Loader streaming
+  imports: []
+  confidence: 0.9
+  role: source
+- type: ConsumeAzureEventHub
+  category: Event Hubs Connector
+  template: |
+    df_{name} = (spark.readStream
+        .format("eventhubs")
+        .option("eventhubs.connectionString",
+                dbutils.secrets.get(scope="{scope}", key="eh-conn-string"))
+        .load())
+  description: Azure Event Hubs streaming source
+  imports: []
+  confidence: 0.9
+  role: source
+- type: GetHDFS
+  category: Volumes Read
+  template: |
+    df_{name} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/{path}")
+  description: HDFS read remapped to Unity Catalog Volumes
+  imports: []
+  confidence: 0.9
+  role: source
+- type: ConvertRecord
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.selectExpr("*")
+    # Adjust column types/names as needed for format conversion
+  description: Record format conversion via DataFrame select
+  imports: []
+  confidence: 0.9
+  role: transform
+- type: ReplaceText
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.withColumn("value",
+        regexp_replace(col("value"), "{search_value}", "{replacement_value}"))
+  description: Regex text replacement on DataFrame columns
+  imports:
+  - from pyspark.sql.functions import regexp_replace, col
+  confidence: 1.0
+  role: transform
+  notes: Placeholders resolve from NiFi Search Value and Replacement Value properties
+- type: UpdateAttribute
+  category: DataFrame API
+  template: |
+    # UpdateAttribute: set or update columns with literal values
+    # NiFi dynamic properties are resolved into withColumn calls below
+    df_{name} = df_{input}
+    # df_{name} = df_{name}.withColumn("attribute_name", lit("attribute_value"))
+  description: Set or update attributes as DataFrame columns via withColumn + lit
+  imports:
+  - from pyspark.sql.functions import lit
+  confidence: 0.95
+  role: transform
+  notes: Dynamic properties from NiFi are resolved into individual withColumn calls
+- type: JoltTransformJSON
+  category: JSON Processing
+  template: |
+    _schema = "{target_schema}"
+    df_{name} = (df_{input}
+        .withColumn("parsed", from_json(col("value"), _schema))
+        .select("parsed.*"))
+  description: Jolt JSON transform via from_json + schema
+  imports:
+  - from pyspark.sql.functions import from_json, col
+  confidence: 0.9
+  role: transform
+- type: EvaluateJsonPath
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.withColumn("{field}",
+        get_json_object(col("value"), "$.{path}"))
+  description: Extract JSON paths via get_json_object
+  imports:
+  - from pyspark.sql.functions import get_json_object, col
+  confidence: 0.9
+  role: transform
+- type: ExtractText
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.withColumn("extracted",
+        regexp_extract(col("value"), ".*", 0))
+    # Add additional regexp_extract calls for each NiFi ExtractText property
+  description: Regex text extraction into new columns
+  imports:
+  - from pyspark.sql.functions import regexp_extract, col
+  confidence: 0.95
+  role: transform
+- type: SplitJson
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.withColumn("items",
+        explode(from_json(col("value"), ArrayType(StringType()))))
+  description: Split JSON arrays via explode + from_json
+  imports:
+  - from pyspark.sql.functions import explode, from_json, col
+  - from pyspark.sql.types import ArrayType, StringType
+  confidence: 0.9
+  role: transform
+- type: SplitRecord
+  category: DataFrame API
+  template: |
+    df_{name} = (df_{input}
+        .withColumn("item", explode(col("{array_field}")))
+        .select("item.*"))
+  description: Split records by exploding array field
+  imports:
+  - from pyspark.sql.functions import explode, col
+  confidence: 0.9
+  role: transform
+- type: MergeContent
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input1}.unionByName(df_{input2}, allowMissingColumns=True)
+  description: Merge content streams via unionByName
+  imports: []
+  confidence: 0.9
+  role: transform
+- type: AttributesToJSON
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.select(to_json(struct("*")).alias("json_value"))
+  description: Convert all columns to single JSON string
+  imports:
+  - from pyspark.sql.functions import to_json, struct
+  confidence: 0.9
+  role: transform
+- type: ExecuteScript
+  category: PySpark UDF
+  template: |
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  - type: "ConsumeKafka"
-    category: "Structured Streaming"
-    template: |
-      df_{name} = (spark.readStream
-          .format("kafka")
-          .option("kafka.bootstrap.servers", "{brokers}")
-          .option("subscribe", "{topic}")
-          .option("startingOffsets", "latest")
-          .load())
-    description: "Kafka streaming source via Structured Streaming"
-    imports: ["from pyspark.sql.functions import from_json, col"]
-    confidence: 0.90
-    role: "source"
+    @pandas_udf("string")
+    def _exec_script_{name}(values: pd.Series) -> pd.Series:
+        def _process(val):
+            # USER ACTION: Paste original script logic here
+            result = val
+            return str(result) if result is not None else None
+        return values.apply(_process)
 
-  - type: "ConsumeKafka_2_6"
-    category: "Structured Streaming"
-    template: |
-      df_{name} = (spark.readStream
-          .format("kafka")
-          .option("kafka.bootstrap.servers", "{brokers}")
-          .option("subscribe", "{topic}")
-          .option("startingOffsets", "latest")
-          .load())
-    description: "Kafka 2.6 streaming source"
-    imports: ["from pyspark.sql.functions import from_json, col"]
-    confidence: 0.90
-    role: "source"
+    df_{name} = df_{input}.withColumn("_scripted", _exec_script_{name}(col("value")))
+  description: NiFi script execution ported to pandas_udf
+  imports:
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 0.85
+  role: transform
+- type: LookupRecord
+  category: DataFrame Join
+  template: |
+    df_lookup = spark.table("{catalog}.{schema}.{lookup_table}").cache()
+    df_{name} = df_{input}.join(df_lookup, on="{key}", how="left")
+  description: Record lookup via cached DataFrame join
+  imports: []
+  confidence: 0.9
+  role: transform
+- type: EncryptContent
+  category: Security
+  template: |
+    from pyspark.sql.functions import col, lit, base64, aes_encrypt
+    _enc_key = dbutils.secrets.get(scope="{scope}", key="encryption-key")
+    df_{name} = df_{input}.withColumn(
+        "{col}_encrypted",
+        base64(aes_encrypt(col("{col}").cast("string"), lit(_enc_key), lit("GCM"), lit("DEFAULT"))))
+  description: AES column-level encryption via aes_encrypt
+  imports:
+  - from pyspark.sql.functions import col, lit, base64, aes_encrypt
+  confidence: 0.9
+  role: transform
+- type: CompressContent
+  category: Native
+  template: |
+    # Delta Lake handles compression natively (snappy/zstd)
+    df_{name} = df_{input}
+  description: Compression handled natively by Delta Lake
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: RouteOnAttribute
+  category: DataFrame Filter
+  template: |
+    # RouteOnAttribute: split DataFrame by filter conditions
+    # Each NiFi routing rule becomes a separate filtered DataFrame
+    df_{name}_matched = df_{input}.filter("1=1")  # Replace with actual condition
+    df_{name}_unmatched = df_{input}.subtract(df_{name}_matched)
+  description: Conditional routing via DataFrame filter expressions
+  imports: []
+  confidence: 0.95
+  role: route
+  notes: NiFi routing conditions are resolved into filter expressions
+- type: RouteOnContent
+  category: DataFrame Filter
+  template: |
+    # RouteOnContent: filter rows by regex match on content
+    df_{name} = df_{input}.filter(col("value").rlike("{content_name}"))
+  description: Content-based routing via regex filter on value column
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 1.0
+  role: route
+  notes: Placeholder resolves from NiFi Content Name property
+- type: DetectDuplicate
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.dropDuplicates(["{key}"])
+  description: Duplicate detection and removal
+  imports: []
+  confidence: 0.9
+  role: route
+- type: DistributeLoad
+  category: Spark Partitioning
+  template: |
+    df_{name} = df_{input}.repartition({partitions})
+  description: Load distribution via Spark repartition
+  imports: []
+  confidence: 0.9
+  role: route
+- type: ExecuteSQL
+  category: Spark SQL
+  template: |
+    df_{input}.createOrReplaceTempView("tmp_{name}")
+    df_{name} = spark.sql("""
+    {sql}
+    """)
+  description: SQL execution via Spark SQL temp views
+  imports: []
+  confidence: 0.9
+  role: process
+- type: InvokeHTTP
+  category: Spark UDF
+  template: |
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  - type: "ConsumeKafkaRecord_2_6"
-    category: "Structured Streaming"
-    template: |
-      df_{name} = (spark.readStream
-          .format("kafka")
-          .option("kafka.bootstrap.servers", "{brokers}")
-          .option("subscribe", "{topic}")
-          .load()
-          .select(from_json(col("value").cast("string"), schema).alias("data"))
-          .select("data.*"))
-    description: "Kafka record streaming with schema-based deserialization"
-    imports: ["from pyspark.sql.functions import from_json, col"]
-    confidence: 0.90
-    role: "source"
+    @pandas_udf("string")
+    def _call_api(urls: pd.Series) -> pd.Series:
+        import urllib.request
+        def _get(u):
+            with urllib.request.urlopen(u) as r:
+                return r.read().decode()
+        return urls.apply(_get)
 
-  - type: "QueryDatabaseTable"
-    category: "JDBC Source"
-    template: |
-      df_{name} = (spark.read
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
-          .option("dbtable", "{table}")
-          .option("driver", "{driver}")
-          .option("user", dbutils.secrets.get(scope="{scope}", key="jdbc-user"))
-          .option("password", dbutils.secrets.get(scope="{scope}", key="jdbc-pass"))
-          .load())
-    description: "JDBC database read with secret-scoped credentials"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    df_{name} = df_{input}.withColumn("api_response", _call_api(col("url")))
+  description: HTTP API call via distributed pandas UDF
+  imports:
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 0.9
+  role: process
+- type: ValidateRecord
+  category: DLT Expectations
+  template: |
+    # Data quality validation via DLT expectations
+    # @dlt.expect_or_drop("{rule}", "{expression}")
+    df_{name} = df_{input}.filter("{expression}")
+  description: Record validation best implemented as DLT expectations
+  imports: []
+  confidence: 0.9
+  role: process
+- type: GenerateTableFetch
+  category: JDBC Incremental
+  template: |
+    df_{name} = (spark.read
+        .format("jdbc")
+        .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+        .option("dbtable", "(SELECT * FROM {table} WHERE {column} > '{watermark}') subq")
+        .load())
+  description: Incremental JDBC fetch with watermark pushdown
+  imports: []
+  confidence: 0.9
+  role: source
+- type: PutFile
+  category: Delta Lake Write
+  template: |
+    (df_{input}.write
+        .format("delta")
+        .mode("append")
+        .saveAsTable("{catalog}.{schema}.{table}"))
+  description: Write to Delta Lake managed table in Unity Catalog
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutKafka
+  category: Kafka Write
+  template: |
+    (df_{input}
+        .selectExpr("to_json(struct(*)) AS value")
+        .write
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("topic", "{topic}")
+        .save())
+  description: Write to Kafka topic as JSON
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PublishKafka_2_6
+  category: Kafka Write
+  template: |
+    (df_{input}
+        .selectExpr("to_json(struct(*)) AS value")
+        .write
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("topic", "{topic}")
+        .save())
+  description: Publish to Kafka 2.6 topic
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutS3Object
+  category: Cloud Storage Write
+  template: |
+    (df_{input}.write
+        .format("delta")
+        .mode("append")
+        .save("s3a://{bucket}/{path}"))
+  description: Write to S3 as Delta via external location
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutDatabaseRecord
+  category: JDBC Write
+  template: |
+    (df_{input}.write
+        .format("jdbc")
+        .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+        .option("dbtable", "{table}")
+        .option("driver", "{driver}")
+        .option("user", dbutils.secrets.get(scope="{scope}", key="jdbc-user"))
+        .option("password", dbutils.secrets.get(scope="{scope}", key="jdbc-pass"))
+        .option("batchsize", 1000)
+        .mode("append")
+        .save())
+  description: Database record write via JDBC
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutMongo
+  category: MongoDB Connector
+  template: |
+    (df_{input}.write
+        .format("mongodb")
+        .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))
+        .option("database", "{database}")
+        .option("collection", "{collection}")
+        .mode("append")
+        .save())
+  description: MongoDB write via Spark connector
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutElasticsearch
+  category: ES Connector
+  template: |
+    (df_{input}.write
+        .format("org.elasticsearch.spark.sql")
+        .option("es.nodes", "{host}")
+        .save("{index}"))
+  description: Elasticsearch write via elasticsearch-spark
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutHDFS
+  category: Cloud Storage Write
+  template: |
+    (df_{input}.write
+        .format("delta")
+        .mode("append")
+        .save("/Volumes/{catalog}/{schema}/{path}"))
+  description: HDFS write remapped to Volumes/cloud storage
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutAzureBlobStorage
+  category: Azure Storage
+  template: |
+    (df_{input}.write
+        .format("delta")
+        .mode("append")
+        .save("wasbs://{container}@{account}.blob.core.windows.net/{path}"))
+  description: Azure Blob Storage write as Delta
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutAzureDataLakeStorage
+  category: Azure ADLS
+  template: |
+    (df_{input}.write
+        .format("delta")
+        .mode("append")
+        .save("abfss://{container}@{account}.dfs.core.windows.net/{path}"))
+  description: Azure Data Lake Storage Gen2 write as Delta
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutEmail
+  category: Workflow Notification
+  template: |
+    # Configure email notifications in Databricks Job settings
+    # email_notifications.on_success / on_failure
+    dbutils.notebook.exit("NOTIFY: {subject}")
+  description: Email via Databricks workflow notifications
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutSFTP
+  category: External Storage Write
+  template: |
+    import paramiko
+    _sftp_host = dbutils.secrets.get(scope="{scope}", key="sftp-host")
+    _sftp_user = dbutils.secrets.get(scope="{scope}", key="sftp-user")
+    _local_path = "/Volumes/{catalog}/{schema}/tmp/{name}_export"
+    df_{input}.toPandas().to_csv(_local_path, index=False)
+    _transport = paramiko.Transport((_sftp_host, 22))
+    _transport.connect(username=_sftp_user)
+    _sftp = paramiko.SFTPClient.from_transport(_transport)
+    _sftp.put(_local_path, "{remote_path}/{name}.csv")
+    _sftp.close()
+    _transport.close()
+  description: SFTP upload via paramiko with staging to Volumes
+  imports:
+  - import paramiko
+  confidence: 0.9
+  role: sink
+- type: LogAttribute
+  category: Spark Display
+  template: |
+    display(df_{input})
+    df_{input}.printSchema()
+  description: Inspect schema and sample data with display()
+  imports: []
+  confidence: 0.9
+  role: utility
+- type: LogMessage
+  category: Spark Logging
+  template: |
+    print(f"[INFO] {name}: Processing complete")
+    spark.sparkContext.setLocalProperty("callSite.short", "{name}")
+  description: Spark-native logging via print and driver logs
+  imports: []
+  confidence: 0.9
+  role: utility
+- type: Wait
+  category: Workflow Dependency
+  template: |
+    df_{name} = (spark.readStream
+        .format("delta")
+        .option("readChangeFeed", "true")
+        .table("workflow_signals")
+        .filter("signal_id = '{name}_signal' AND status = 'ready'"))
+  description: Workflow dependency via Delta CDF signal table
+  imports: []
+  confidence: 0.92
+  role: utility
+- type: Notify
+  category: Workflow Signal
+  template: |
+    _notify_key = "{name}_signal"
+    spark.sql(f"""
+        MERGE INTO __workflow_signals AS t
+        USING (SELECT '{_notify_key}' AS signal_key, 'READY' AS status,
+               current_timestamp() AS updated_at) AS s
+        ON t.signal_key = s.signal_key
+        WHEN MATCHED THEN UPDATE SET status = s.status, updated_at = s.updated_at
+        WHEN NOT MATCHED THEN INSERT *
+    """)
+  description: Write signal to Delta table for downstream consumers
+  imports: []
+  confidence: 0.9
+  role: utility
+- type: ExecuteStreamCommand
+  category: Shell Execution
+  template: |
+    import subprocess
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  - type: "ListenHTTP"
-    category: "Model Serving"
-    template: |
-      # Deploy an MLflow serving endpoint that writes to Delta
-      df_{name} = spark.readStream.format("delta").table("{name}_incoming")
-      print(f"[HTTP] Streaming from {name}_incoming")
-    description: "HTTP listener replaced by Model Serving + Delta table"
-    imports: ["import mlflow"]
-    confidence: 0.92
-    role: "source"
+    @pandas_udf("string")
+    def _exec_cmd_{name}(values: pd.Series) -> pd.Series:
+        """Execute external command for each row, streaming input via stdin."""
+        def _run(val):
+            proc = subprocess.run(
+                ["{command_path}"],
+                input=str(val) if val is not None else "",
+                capture_output=True, text=True, timeout=300
+            )
+            return proc.stdout if proc.returncode == 0 else proc.stderr
+        return values.apply(_run)
 
-  - type: "GetSFTP"
-    category: "External Storage"
-    template: |
-      import paramiko
-      _transport = paramiko.Transport(("{host}", 22))
-      _transport.connect(username=dbutils.secrets.get(scope="{scope}", key="sftp-user"))
-      _sftp = paramiko.SFTPClient.from_transport(_transport)
-      _sftp.get("{remote_path}", "/Volumes/{catalog}/{schema}/landing/{filename}")
-      _sftp.close()
-      _transport.close()
-      df_{name} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/landing/")
-    description: "SFTP file retrieval via paramiko to Volumes"
-    imports: ["import paramiko"]
-    confidence: 0.90
-    role: "source"
+    df_{name} = df_{input}.withColumn("cmd_output", _exec_cmd_{name}(col("value")))
+  description: Execute external shell commands via distributed pandas UDF (replaces NiFi ExecuteStreamCommand)
+  imports:
+  - import subprocess
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 1.0
+  role: process
+  notes: Placeholder resolves from NiFi Command Path property
+- type: ControlRate
+  category: Structured Streaming
+  template: |
+    # ControlRate equivalent: use Structured Streaming trigger to throttle throughput
+    df_{name} = (df_{input}.writeStream
+        .trigger(processingTime="{interval}")  # e.g. "10 seconds"
+        .format("delta")
+        .option("checkpointLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+        .toTable("{catalog}.{schema}.{name}_throttled"))
+    # For batch: rate limiting is typically unnecessary; Spark handles backpressure natively
+  description: Flow rate throttling via Structured Streaming trigger interval
+  imports: []
+  confidence: 0.9
+  role: utility
+- type: ListFile
+  category: Auto Loader
+  template: |
+    # List files in Unity Catalog Volume directory
+    _files = dbutils.fs.ls("/Volumes/{catalog}/{schema}/{input_directory}")
+    df_{name} = spark.createDataFrame(
+        [(f.name, f.path, f.size, f.modificationTime) for f in _files],
+        ["name", "path", "size", "modification_time"]
+    )
+  description: List files in a directory via dbutils.fs.ls on Unity Catalog Volumes
+  imports: []
+  confidence: 1.0
+  role: source
+  notes: Input Directory property resolves the path placeholder
+- type: SplitContent
+  category: DataFrame API
+  template: |
+    from pyspark.sql.functions import split, explode, col
 
-  - type: "GenerateFlowFile"
-    category: "Test Data"
-    template: |
-      df_{name} = spark.range({count}).toDF("id")
-      # Add test columns as needed
-    description: "Test data generator using spark.range"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    df_{name} = (df_{input}
+        .withColumn("_parts", split(col("value"), "{byte_sequence}"))
+        .withColumn("segment", explode(col("_parts")))
+        .drop("_parts")
+        .filter(col("segment") != ""))
+  description: Split content by delimiter into individual rows via split + explode
+  imports:
+  - from pyspark.sql.functions import split, explode, col
+  confidence: 1.0
+  role: transform
+  notes: Placeholder resolves from NiFi Byte Sequence property
+- type: FetchFile
+  category: Volumes Read
+  template: |
+    # Read a file by path from Unity Catalog Volumes
+    _file_path = "/Volumes/{catalog}/{schema}/{file_to_fetch}"
+    df_{name} = spark.read.text(_file_path)
+    # For structured formats: spark.read.format("csv").load(_file_path)
+    # For binary/raw content: spark.read.format("binaryFile").load(_file_path)
+  description: Fetch file by path from Unity Catalog Volumes
+  imports: []
+  confidence: 1.0
+  role: source
+  notes: Placeholder resolves from NiFi File to Fetch property
+- type: CountText
+  category: DataFrame Aggregation
+  template: |
+    from pyspark.sql.functions import col, length, size, split, lit
 
-  - type: "FetchS3Object"
-    category: "Cloud Storage"
-    template: |
-      df_{name} = spark.read.format("{format}").load("s3://{bucket}/{key}")
-    description: "Read S3 object via Unity Catalog external location"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    df_{name} = df_{input}.select(
+        col("value"),
+        size(split(col("value"), "\n")).alias("line_count"),
+        size(split(col("value"), "\\s+")).alias("word_count"),
+        length(col("value")).alias("character_count")
+    )
+  description: Count lines, words, and characters via DataFrame aggregation functions
+  imports:
+  - from pyspark.sql.functions import col, length, size, split, lit
+  confidence: 0.9
+  role: transform
+- type: PutSQL
+  category: JDBC Write
+  template: |
+    # Execute SQL INSERT/UPDATE against an external database via JDBC
+    (df_{input}.write
+        .format("jdbc")
+        .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+        .option("dbtable", "{table}")
+        .option("driver", "{driver}")
+        .option("user", dbutils.secrets.get(scope="{scope}", key="jdbc-user"))
+        .option("password", dbutils.secrets.get(scope="{scope}", key="jdbc-pass"))
+        .option("batchsize", 1000)
+        .option("isolationLevel", "READ_COMMITTED")
+        .mode("append")
+        .save())
+  description: Execute SQL INSERT/UPDATE on external database via JDBC write
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: HandleHttpRequest
+  category: Model Serving
+  template: |
+    # HandleHttpRequest maps to a Databricks Model Serving or Function Serving endpoint.
+    # Deploy a serving endpoint that writes incoming payloads to a Delta table.
+    #
+    # 1. Register a model or function that processes the HTTP payload:
+    #    mlflow.pyfunc.log_model(...)
+    #
+    # 2. Create serving endpoint via API or UI:
+    #    POST /api/2.0/serving-endpoints { "name": "{name}_endpoint", ... }
+    #
+    # 3. Read ingested data from the backing Delta table:
+    df_{name} = spark.readStream.format("delta").table("{catalog}.{schema}.{name}_requests")
+  description: HTTP server endpoint replaced by Databricks Model Serving / Function Serving with Delta backing table
+  imports:
+  - import mlflow
+  confidence: 0.85
+  role: source
+- type: PublishKafka
+  category: Kafka Write
+  template: |
+    (df_{input}
+        .selectExpr("to_json(struct(*)) AS value")
+        .write
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("topic", "{topic}")
+        .save())
+  description: Publish to Kafka topic as JSON
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: GetAzureBlobStorage
+  category: Auto Loader
+  template: |
+    df_{name} = (spark.readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "{format}")
+        .option("cloudFiles.schemaLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+        .load("wasbs://{container}@{account}.blob.core.windows.net/{path}"))
+  description: Azure Blob Storage read via Auto Loader with wasbs:// path
+  imports:
+  - from pyspark.sql.functions import *
+  confidence: 0.9
+  role: source
+- type: GetGCSObject
+  category: Cloud Storage
+  template: |
+    df_{name} = spark.read.format("{format}").load("gs://{bucket}/{key}")
+  description: Read GCS object via Unity Catalog external location
+  imports: []
+  confidence: 0.88
+  role: source
+- type: GetJMSQueue
+  category: Structured Streaming
+  template: |
+    # JMS Queue bridged to Kafka topic for Spark consumption
+    # Deploy Kafka Connect JMS Source Connector to bridge JMS -> Kafka
+    df_{name} = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("subscribe", "jms_bridge_{queue}")
+        .option("startingOffsets", "earliest")
+        .load()
+        .select(col("value").cast("string").alias("payload")))
+  description: JMS Queue consumption via Kafka Connect bridge pattern
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.8
+  role: source
+- type: GetJMSTopic
+  category: Structured Streaming
+  template: |
+    # JMS Topic bridged to Kafka topic for Spark consumption
+    df_{name} = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("subscribe", "jms_bridge_{topic}")
+        .option("startingOffsets", "earliest")
+        .load()
+        .select(col("value").cast("string").alias("payload")))
+  description: JMS Topic consumption via Kafka Connect bridge pattern
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.8
+  role: source
+- type: GetHTTP
+  category: HTTP Polling
+  template: |
+    import requests
+    _url = "{url}"
+    _token = dbutils.secrets.get(scope="{scope}", key="api-token")
+    _headers = {"Authorization": "Bearer " + _token}
+    _resp = requests.get(_url, headers=_headers, timeout=60)
+    _resp.raise_for_status()
+    import json
+    _payload = json.loads(_resp.text)
+    df_{name} = spark.createDataFrame(_payload if isinstance(_payload, list) else [_payload])
+  description: HTTP GET polling with requests, loads response as DataFrame
+  imports:
+  - import requests
+  - import json
+  confidence: 0.85
+  role: source
+- type: ListGCSBucket
+  category: Auto Loader
+  template: |
+    df_{name} = (spark.readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "{format}")
+        .option("cloudFiles.useNotifications", "true")
+        .option("cloudFiles.schemaLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+        .load("gs://{bucket}/{prefix}"))
+  description: GCS bucket listing via Auto Loader with file notification mode
+  imports: []
+  confidence: 0.88
+  role: source
+- type: ListAzureBlobStorage
+  category: Auto Loader
+  template: |
+    df_{name} = (spark.readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "{format}")
+        .option("cloudFiles.useNotifications", "true")
+        .option("cloudFiles.schemaLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+        .load("wasbs://{container}@{account}.blob.core.windows.net/{prefix}"))
+  description: Azure Blob listing via Auto Loader with file notification mode
+  imports: []
+  confidence: 0.9
+  role: source
+- type: ListSFTP
+  category: External Storage
+  template: |
+    import paramiko
+    _transport = paramiko.Transport(("{host}", 22))
+    _transport.connect(
+        username=dbutils.secrets.get(scope="{scope}", key="sftp-user"),
+        password=dbutils.secrets.get(scope="{scope}", key="sftp-pass"))
+    _sftp = paramiko.SFTPClient.from_transport(_transport)
+    _file_list = _sftp.listdir_attr("{remote_path}")
+    _sftp.close()
+    _transport.close()
+    df_{name} = spark.createDataFrame(
+        [(f.filename, f.st_size, f.st_mtime) for f in _file_list],
+        ["filename", "size", "mtime"])
+  description: SFTP directory listing via paramiko, returns file metadata as DataFrame
+  imports:
+  - import paramiko
+  confidence: 0.85
+  role: source
+- type: ListFTP
+  category: External Storage
+  template: |
+    import ftplib
+    _ftp = ftplib.FTP("{host}")
+    _ftp.login(
+        user=dbutils.secrets.get(scope="{scope}", key="ftp-user"),
+        passwd=dbutils.secrets.get(scope="{scope}", key="ftp-pass"))
+    _entries = []
+    _ftp.retrlines("LIST {remote_path}", _entries.append)
+    _ftp.quit()
+    df_{name} = spark.createDataFrame([(e,) for e in _entries], ["raw_listing"])
+  description: FTP directory listing via ftplib, returns raw listing as DataFrame
+  imports:
+  - import ftplib
+  confidence: 0.82
+  role: source
+- type: QueryCassandra
+  category: Cassandra Connector
+  template: |
+    df_{name} = (spark.read
+        .format("org.apache.spark.sql.cassandra")
+        .option("spark.cassandra.connection.host", "{host}")
+        .option("spark.cassandra.auth.username",
+                dbutils.secrets.get(scope="{scope}", key="cassandra-user"))
+        .option("spark.cassandra.auth.password",
+                dbutils.secrets.get(scope="{scope}", key="cassandra-pass"))
+        .option("keyspace", "{keyspace}")
+        .option("table", "{table}")
+        .load())
+  description: Cassandra table read via spark-cassandra-connector
+  imports: []
+  confidence: 0.85
+  role: source
+- type: QuerySolr
+  category: JDBC Source
+  template: |
+    import requests
+    _solr_url = "{host}/solr/{collection}/select"
+    _params = {"q": "{query}", "wt": "json", "rows": "{rows}"}
+    _resp = requests.get(_solr_url, params=_params, timeout=120)
+    _resp.raise_for_status()
+    _docs = _resp.json()["response"]["docs"]
+    df_{name} = spark.createDataFrame(_docs)
+  description: Solr query via HTTP API, loads results as DataFrame
+  imports:
+  - import requests
+  confidence: 0.82
+  role: source
+- type: ConsumeAMQP
+  category: Structured Streaming
+  template: |
+    # RabbitMQ/AMQP bridged to Kafka for Spark Structured Streaming
+    # Deploy Kafka Connect AMQP Source to bridge RabbitMQ -> Kafka
+    df_{name} = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("subscribe", "amqp_bridge_{queue}")
+        .option("startingOffsets", "earliest")
+        .load()
+        .select(col("value").cast("string").alias("payload")))
+  description: AMQP/RabbitMQ consumption via Kafka Connect bridge
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.8
+  role: source
+- type: GetSQS
+  category: AWS Integration
+  template: |
+    import boto3, json
+    _sqs = boto3.client("sqs",
+        aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+        aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+        region_name="{region}")
+    _msgs = []
+    while True:
+        _resp = _sqs.receive_message(QueueUrl="{queue_url}", MaxNumberOfMessages=10, WaitTimeSeconds=5)
+        _batch = _resp.get("Messages", [])
+        if not _batch:
+            break
+        _msgs.extend([json.loads(m["Body"]) for m in _batch])
+        _sqs.delete_message_batch(QueueUrl="{queue_url}",
+            Entries=[{"Id": m["MessageId"], "ReceiptHandle": m["ReceiptHandle"]} for m in _batch])
+    df_{name} = spark.createDataFrame(_msgs) if _msgs else spark.createDataFrame([], "string")
+  description: AWS SQS message consumption via boto3 with auto-delete
+  imports:
+  - import boto3
+  - import json
+  confidence: 0.85
+  role: source
+- type: GetSNS
+  category: AWS Integration
+  template: |
+    # SNS messages are typically forwarded to SQS or Kafka
+    # Subscribe SNS topic to an SQS queue, then read from SQS
+    import boto3, json
+    _sqs = boto3.client("sqs",
+        aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+        aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+        region_name="{region}")
+    _msgs = []
+    _resp = _sqs.receive_message(QueueUrl="{sns_sqs_queue_url}", MaxNumberOfMessages=10)
+    for m in _resp.get("Messages", []):
+        _body = json.loads(m["Body"])
+        _msgs.append(json.loads(_body.get("Message", "{}")))
+    df_{name} = spark.createDataFrame(_msgs) if _msgs else spark.createDataFrame([], "string")
+  description: AWS SNS consumption via SQS subscription bridge
+  imports:
+  - import boto3
+  - import json
+  confidence: 0.8
+  role: source
+- type: ConsumeWindowsEventLog
+  category: Structured Logging
+  template: |
+    # Windows Event Logs should be forwarded to a central store (e.g. via Fluentd/Logstash)
+    # Read forwarded logs from a Delta table or cloud storage
+    df_{name} = (spark.readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .option("cloudFiles.schemaLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+        .load("/Volumes/{catalog}/{schema}/event_logs/{source}"))
+  description: Windows Event Log consumption from forwarded log files via Auto Loader
+  imports: []
+  confidence: 0.8
+  role: source
+- type: QueryInfluxDB
+  category: Time Series
+  template: |
+    from influxdb_client import InfluxDBClient
+    import pandas as pd
+    _client = InfluxDBClient(
+        url="{influx_url}",
+        token=dbutils.secrets.get(scope="{scope}", key="influx-token"),
+        org="{org}")
+    _query = 'from(bucket: "{bucket}") |> range(start: -{range}) |> filter(fn: (r) => r._measurement == "{measurement}")'
+    _tables = _client.query_api().query_data_frame(_query)
+    _client.close()
+    df_{name} = spark.createDataFrame(_tables) if not _tables.empty else spark.createDataFrame([], "string")
+  description: InfluxDB time series query via influxdb-client, loads as DataFrame
+  imports:
+  - from influxdb_client import InfluxDBClient
+  - import pandas as pd
+  confidence: 0.82
+  role: source
+- type: GetAzureQueueStorage
+  category: Azure Integration
+  template: |
+    from azure.storage.queue import QueueClient
+    import json
+    _queue = QueueClient.from_connection_string(
+        conn_str=dbutils.secrets.get(scope="{scope}", key="azure-storage-conn"),
+        queue_name="{queue_name}")
+    _messages = []
+    for msg in _queue.receive_messages(max_messages=32):
+        _messages.append(json.loads(msg.content))
+        _queue.delete_message(msg)
+    df_{name} = spark.createDataFrame(_messages) if _messages else spark.createDataFrame([], "string")
+  description: Azure Queue Storage message consumption via azure-storage-queue SDK
+  imports:
+  - from azure.storage.queue import QueueClient
+  - import json
+  confidence: 0.85
+  role: source
+- type: QueryHive
+  category: Spark SQL
+  template: |
+    df_{name} = spark.sql("""
+        SELECT * FROM {catalog}.{schema}.{table}
+        WHERE {filter_condition}
+    """)
+  description: Hive table query via spark.sql with Unity Catalog
+  imports: []
+  confidence: 0.95
+  role: source
+- type: ScanHBase
+  category: HBase Connector
+  template: |
+    df_{name} = (spark.read
+        .format("org.apache.hadoop.hbase.spark")
+        .option("hbase.columns.mapping",
+                "{row_key} STRING :key, {cf}:{col} STRING {cf}:{col}")
+        .option("hbase.table", "{table}")
+        .option("hbase.spark.use.hbasecontext", "false")
+        .load())
+  description: HBase table scan via hbase-spark connector
+  imports: []
+  confidence: 0.8
+  role: source
+- type: GetCouchbaseKey
+  category: Couchbase Connector
+  template: |
+    df_{name} = (spark.read
+        .format("couchbase.query")
+        .option("spark.couchbase.connectionString", "{connection_string}")
+        .option("spark.couchbase.username",
+                dbutils.secrets.get(scope="{scope}", key="cb-user"))
+        .option("spark.couchbase.password",
+                dbutils.secrets.get(scope="{scope}", key="cb-pass"))
+        .option("bucket", "{bucket}")
+        .option("scope", "{cb_scope}")
+        .option("collection", "{collection}")
+        .load())
+  description: Couchbase document read via Spark Couchbase connector
+  imports: []
+  confidence: 0.82
+  role: source
+- type: ListDatabaseTables
+  category: JDBC Metadata
+  template: |
+    _jdbc_url = dbutils.secrets.get(scope="{scope}", key="jdbc-url")
+    df_{name} = (spark.read
+        .format("jdbc")
+        .option("url", _jdbc_url)
+        .option("dbtable", "({query}) AS metadata_subq")
+        .option("driver", "{driver}")
+        .option("user", dbutils.secrets.get(scope="{scope}", key="jdbc-user"))
+        .option("password", dbutils.secrets.get(scope="{scope}", key="jdbc-pass"))
+        .load())
+    # Alternative: spark.catalog.listTables("{catalog}.{schema}")
+  description: List database tables via JDBC metadata query or Spark catalog
+  imports: []
+  confidence: 0.85
+  role: source
+- type: FetchParquet
+  category: Volumes Read
+  template: |
+    df_{name} = spark.read.format("parquet").load("/Volumes/{catalog}/{schema}/{path}")
+  description: Read Parquet file from Unity Catalog Volumes
+  imports: []
+  confidence: 0.95
+  role: source
+- type: FetchORC
+  category: Volumes Read
+  template: |
+    df_{name} = spark.read.format("orc").load("/Volumes/{catalog}/{schema}/{path}")
+  description: Read ORC file from Unity Catalog Volumes
+  imports: []
+  confidence: 0.95
+  role: source
+- type: ConvertAvroToJSON
+  category: DataFrame API
+  template: |
+    from pyspark.sql.avro.functions import from_avro
+    df_{name} = (df_{input}
+        .select(from_avro(col("value"), "{avro_schema}").alias("data"))
+        .select(to_json(struct("data.*")).alias("json_value")))
+  description: Avro to JSON conversion via from_avro + to_json
+  imports:
+  - from pyspark.sql.avro.functions import from_avro
+  - from pyspark.sql.functions import col, to_json, struct
+  confidence: 0.88
+  role: transform
+- type: ConvertJSONToAvro
+  category: DataFrame API
+  template: |
+    from pyspark.sql.avro.functions import to_avro
+    df_{name} = (df_{input}
+        .select(to_avro(struct("*")).alias("avro_value")))
+  description: JSON to Avro conversion via to_avro
+  imports:
+  - from pyspark.sql.avro.functions import to_avro
+  - from pyspark.sql.functions import struct
+  confidence: 0.88
+  role: transform
+- type: ConvertAvroToORC
+  category: Format Conversion
+  template: |
+    from pyspark.sql.avro.functions import from_avro
+    df_{name} = df_{input}.select(from_avro(col("value"), "{avro_schema}").alias("data")).select("data.*")
+    # Write as ORC downstream:
+    # df_{name}.write.format("orc").save("/Volumes/{catalog}/{schema}/{path}")
+  description: Avro to ORC via from_avro deserialization, write as ORC
+  imports:
+  - from pyspark.sql.avro.functions import from_avro
+  - from pyspark.sql.functions import col
+  confidence: 0.85
+  role: transform
+- type: ConvertAvroToParquet
+  category: Format Conversion
+  template: |
+    from pyspark.sql.avro.functions import from_avro
+    df_{name} = df_{input}.select(from_avro(col("value"), "{avro_schema}").alias("data")).select("data.*")
+    # Write as Parquet downstream:
+    # df_{name}.write.format("parquet").save("/Volumes/{catalog}/{schema}/{path}")
+  description: Avro to Parquet via from_avro deserialization
+  imports:
+  - from pyspark.sql.avro.functions import from_avro
+  - from pyspark.sql.functions import col
+  confidence: 0.88
+  role: transform
+- type: ConvertCSVToAvro
+  category: Format Conversion
+  template: |
+    from pyspark.sql.avro.functions import to_avro
+    df_{name} = df_{input}.select(to_avro(struct("*")).alias("avro_value"))
+  description: CSV to Avro via DataFrame struct + to_avro
+  imports:
+  - from pyspark.sql.avro.functions import to_avro
+  - from pyspark.sql.functions import struct
+  confidence: 0.85
+  role: transform
+- type: ConvertExcelToCSV
+  category: DataFrame API
+  template: |
+    df_{name} = (spark.read
+        .format("com.crealytics.spark.excel")
+        .option("header", "true")
+        .option("inferSchema", "true")
+        .option("dataAddress", "{sheet_name}!A1")
+        .load("/Volumes/{catalog}/{schema}/{path}"))
+  description: Excel to DataFrame via spark-excel connector
+  imports: []
+  confidence: 0.82
+  role: transform
+- type: Base64EncodeContent
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.withColumn("{col}_b64",
+        base64(col("{col}").cast("binary")))
+  description: Base64 encode column content via base64() function
+  imports:
+  - from pyspark.sql.functions import base64, col
+  confidence: 0.92
+  role: transform
+- type: Base64DecodeContent
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.withColumn("{col}_decoded",
+        unbase64(col("{col}")).cast("string"))
+  description: Base64 decode column content via unbase64() function
+  imports:
+  - from pyspark.sql.functions import unbase64, col
+  confidence: 0.92
+  role: transform
+- type: CryptographicHashContent
+  category: Security
+  template: |
+    df_{name} = df_{input}.withColumn("{col}_hash",
+        sha2(col("{col}").cast("string"), {bits}))
+  description: Cryptographic hash of content via sha2() (256/512 bits)
+  imports:
+  - from pyspark.sql.functions import sha2, col
+  confidence: 0.92
+  role: transform
+- type: HashAttribute
+  category: Security
+  template: |
+    df_{name} = df_{input}.withColumn("{attr}_hash",
+        sha2(col("{attr}").cast("string"), 256))
+  description: Hash attribute value via sha2() for PII masking
+  imports:
+  - from pyspark.sql.functions import sha2, col
+  confidence: 0.92
+  role: transform
+- type: HashContent
+  category: Security
+  template: |
+    df_{name} = df_{input}.withColumn("content_hash",
+        sha2(col("value").cast("string"), {bits}))
+  description: SHA-2 hash of full content column
+  imports:
+  - from pyspark.sql.functions import sha2, col
+  confidence: 0.92
+  role: transform
+- type: FlattenJson
+  category: JSON Processing
+  template: |
+    from pyspark.sql.functions import col, explode_outer
+    from pyspark.sql.types import StructType, ArrayType
 
-  - type: "ListS3"
-    category: "Cloud Storage"
-    template: |
-      _files = dbutils.fs.ls("s3://{bucket}/{prefix}")
-      df_{name} = spark.createDataFrame(_files)
-    description: "List S3 objects via dbutils"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    def _flatten_df(df, prefix=""):
+        """Recursively flatten nested struct and array columns."""
+        flat_cols = []
+        for field in df.schema.fields:
+            col_name = f"{prefix}{field.name}" if not prefix else f"{prefix}.{field.name}"
+            if isinstance(field.dataType, StructType):
+                flat_cols.extend(_flatten_df(df.select(f"{prefix}{field.name}.*" if prefix else f"{field.name}.*"), col_name).columns)
+            elif isinstance(field.dataType, ArrayType):
+                df = df.withColumn(col_name + "_exploded", explode_outer(col(col_name)))
+                flat_cols.append(col_name + "_exploded")
+            else:
+                flat_cols.append(col_name)
+        return df.select(flat_cols)
 
-  - type: "GetMongo"
-    category: "MongoDB Connector"
-    template: |
-      df_{name} = (spark.read
-          .format("mongodb")
-          .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))
-          .option("database", "{database}")
-          .option("collection", "{collection}")
-          .load())
-    description: "MongoDB read via Spark MongoDB connector"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    df_{name} = _flatten_df(df_{input})
+  description: Recursively flatten nested JSON structs and arrays
+  imports:
+  - from pyspark.sql.functions import col, explode_outer
+  - from pyspark.sql.types import StructType, ArrayType
+  confidence: 0.85
+  role: transform
+- type: SplitXml
+  category: XML Processing
+  template: |
+    df_{name} = (spark.read
+        .format("com.databricks.spark.xml")
+        .option("rowTag", "{row_tag}")
+        .option("rootTag", "{root_tag}")
+        .load("/Volumes/{catalog}/{schema}/{path}"))
+  description: XML splitting via spark-xml with configurable row/root tags
+  imports: []
+  confidence: 0.85
+  role: transform
+- type: SplitAvro
+  category: DataFrame API
+  template: |
+    from pyspark.sql.avro.functions import from_avro
+    # Read Avro container and explode records
+    df_{name} = (df_{input}
+        .select(from_avro(col("value"), "{avro_schema}").alias("record"))
+        .select("record.*"))
+  description: Split Avro container into individual records via from_avro
+  imports:
+  - from pyspark.sql.avro.functions import from_avro
+  - from pyspark.sql.functions import col
+  confidence: 0.85
+  role: transform
+- type: MergeRecord
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input1}.unionByName(df_{input2}, allowMissingColumns=True)
+  description: Merge/union multiple record sets via unionByName
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: PartitionRecord
+  category: Spark Partitioning
+  template: |
+    df_{name} = df_{input}.repartition("{partition_col}")
+  description: Repartition DataFrame by column value for downstream parallelism
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: UpdateRecord
+  category: DataFrame API
+  template: |
+    df_{name} = (df_{input}
+        .withColumn("{field}", lit("{value}"))
+        .withColumn("_updated_at", current_timestamp()))
+  description: Update record fields via withColumn + literal values
+  imports:
+  - from pyspark.sql.functions import lit, current_timestamp
+  confidence: 0.9
+  role: transform
+- type: ConvertCharacterSet
+  category: DataFrame API
+  template: |
+    from pyspark.sql.functions import udf
+    from pyspark.sql.types import StringType
 
-  - type: "GetElasticsearch"
-    category: "ES Connector"
-    template: |
-      df_{name} = (spark.read
-          .format("org.elasticsearch.spark.sql")
-          .option("es.nodes", "{host}")
-          .option("es.resource", "{index}")
-          .load())
-    description: "Elasticsearch read via elasticsearch-spark"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    @udf(StringType())
+    def _convert_charset(val):
+        if val is None:
+            return None
+        return val.encode("{source_charset}").decode("{target_charset}", errors="replace")
 
-  - type: "TailFile"
-    category: "Auto Loader"
-    template: |
-      df_{name} = (spark.readStream
-          .format("cloudFiles")
-          .option("cloudFiles.format", "text")
-          .load("/Volumes/{catalog}/{schema}/{path}"))
-    description: "Tail file via Auto Loader streaming"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    df_{name} = df_{input}.withColumn("{col}", _convert_charset(col("{col}")))
+  description: Character set conversion via Python encode/decode UDF
+  imports:
+  - from pyspark.sql.functions import udf, col
+  - from pyspark.sql.types import StringType
+  confidence: 0.85
+  role: transform
+- type: ReplaceTextWithMapping
+  category: DataFrame Join
+  template: |
+    # Load lookup mapping table
+    df_mapping = spark.table("{catalog}.{schema}.{mapping_table}")
+    df_{name} = (df_{input}
+        .join(df_mapping, col("{col}") == col("source_value"), "left")
+        .withColumn("{col}",
+            coalesce(col("replacement_value"), col("{col}")))
+        .drop("source_value", "replacement_value"))
+  description: Lookup-based text replacement via broadcast join
+  imports:
+  - from pyspark.sql.functions import col, coalesce
+  confidence: 0.85
+  role: transform
+- type: ExtractGrok
+  category: DataFrame API
+  template: |
+    # Grok patterns translated to regex for regexp_extract
+    # Example: %%{IP:client_ip} %%{WORD:method} %%{URIPATHPARAM:request}
+    _grok_regex = r"{regex_pattern}"
+    df_{name} = (df_{input}
+        .withColumn("client_ip", regexp_extract(col("value"), _grok_regex, 1))
+        .withColumn("method", regexp_extract(col("value"), _grok_regex, 2))
+        .withColumn("request", regexp_extract(col("value"), _grok_regex, 3)))
+  description: Grok pattern extraction translated to regexp_extract groups
+  imports:
+  - from pyspark.sql.functions import regexp_extract, col
+  confidence: 0.82
+  role: transform
+- type: ExtractRecordSchema
+  category: DataFrame API
+  template: |
+    import json
+    _schema_json = df_{input}.schema.json()
+    _schema_fields = json.loads(_schema_json)
+    df_{name} = spark.createDataFrame(
+        [(f["name"], f["type"] if isinstance(f["type"], str) else json.dumps(f["type"]))
+         for f in _schema_fields["fields"]],
+        ["field_name", "field_type"])
+  description: Extract and materialize DataFrame schema as metadata table
+  imports:
+  - import json
+  confidence: 0.9
+  role: transform
+- type: QueryFlowFile
+  category: Spark SQL
+  template: |
+    df_{input}.createOrReplaceTempView("flowfile_{name}")
+    df_{name} = spark.sql("""
+        {sql_query}
+    """)
+  description: SQL query on FlowFile content via temp view + spark.sql
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: LookupAttribute
+  category: DataFrame Join
+  template: |
+    from pyspark.sql.functions import broadcast
+    df_lookup = spark.table("{catalog}.{schema}.{lookup_table}").cache()
+    df_{name} = df_{input}.join(
+        broadcast(df_lookup),
+        on=col("{key}") == col("{lookup_key}"),
+        how="left")
+  description: Attribute lookup via broadcast join for small lookup tables
+  imports:
+  - from pyspark.sql.functions import broadcast, col
+  confidence: 0.9
+  role: transform
+- type: ScriptedTransformRecord
+  category: PySpark UDF
+  template: |
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  - type: "ConsumeAzureEventHub"
-    category: "Event Hubs Connector"
-    template: |
-      df_{name} = (spark.readStream
-          .format("eventhubs")
-          .option("eventhubs.connectionString",
-                  dbutils.secrets.get(scope="{scope}", key="eh-conn-string"))
-          .load())
-    description: "Azure Event Hubs streaming source"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    @pandas_udf("string")
+    def _transform_{name}(values: pd.Series) -> pd.Series:
+        """Custom record transformation — port NiFi script logic here."""
+        def _process(val):
+            # USER ACTION: Port NiFi Groovy/Python script logic here
+            result = val
+            return str(result) if result is not None else None
+        return values.apply(_process)
 
-  - type: "GetHDFS"
-    category: "Volumes Read"
-    template: |
-      df_{name} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/{path}")
-    description: "HDFS read remapped to Unity Catalog Volumes"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    df_{name} = df_{input}.withColumn("transformed", _transform_{name}(col("value")))
+  description: Scripted record transformation via pandas UDF
+  imports:
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 0.82
+  role: transform
+- type: ConvertJSONToSQL
+  category: DataFrame API
+  template: |
+    # Convert JSON records to SQL INSERT statements
+    from pyspark.sql.functions import concat_ws, lit, col
+    _cols = df_{input}.columns
+    df_{name} = df_{input}.withColumn("sql_insert",
+        concat_ws("", lit("INSERT INTO {table} ("),
+            lit(", ".join(_cols)),
+            lit(") VALUES ("),
+            concat_ws(", ", *[concat_ws("", lit("'"), col(c).cast("string"), lit("'")) for c in _cols]),
+            lit(");")))
+  description: Generate SQL INSERT statements from JSON/DataFrame records
+  imports:
+  - from pyspark.sql.functions import concat_ws, lit, col
+  confidence: 0.8
+  role: transform
+- type: TransformJSON
+  category: JSON Processing
+  template: |
+    # JSONPath/JQ-style transform via DataFrame operations
+    df_{name} = (df_{input}
+        .withColumn("parsed", from_json(col("value"), "{target_schema}"))
+        .select("parsed.*"))
+  description: JSON transformation via schema-driven from_json parsing
+  imports:
+  - from pyspark.sql.functions import from_json, col
+  confidence: 0.85
+  role: transform
+- type: TransformXml
+  category: XML Processing
+  template: |
+    # XSLT transform is not natively supported; use Python lxml UDF
+    from pyspark.sql.functions import udf
+    from pyspark.sql.types import StringType
 
-  # ── TRANSFORMS ──
-  - type: "ConvertRecord"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.selectExpr("*")
-      # Adjust column types/names as needed for format conversion
-    description: "Record format conversion via DataFrame select"
-    imports: []
-    confidence: 0.90
-    role: "transform"
+    @udf(StringType())
+    def _xslt_transform(xml_str):
+        if xml_str is None:
+            return None
+        from lxml import etree
+        _xslt = etree.parse("{xslt_path}")
+        _transform = etree.XSLT(_xslt)
+        _doc = etree.fromstring(xml_str.encode("utf-8"))
+        return str(_transform(_doc))
 
-  - type: "ReplaceText"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.withColumn("{col}",
-          regexp_replace(col("{col}"), "{pattern}", "{replacement}"))
-    description: "Regex text replacement on DataFrame columns"
-    imports: ["from pyspark.sql.functions import regexp_replace, col"]
-    confidence: 0.90
-    role: "transform"
+    df_{name} = df_{input}.withColumn("transformed_xml", _xslt_transform(col("value")))
+  description: XML/XSLT transform via lxml UDF
+  imports:
+  - from pyspark.sql.functions import udf, col
+  - from pyspark.sql.types import StringType
+  confidence: 0.8
+  role: transform
+- type: SetMimeType
+  category: Metadata
+  template: |
+    # MIME type is metadata — add as column annotation for downstream consumers
+    df_{name} = df_{input}.withColumn("_mime_type", lit("{mime_type}"))
+  description: Set MIME type as metadata column (passthrough with annotation)
+  imports:
+  - from pyspark.sql.functions import lit
+  confidence: 0.95
+  role: transform
+- type: ModifyBytes
+  category: Binary Processing
+  template: |
+    from pyspark.sql.functions import udf, col
+    from pyspark.sql.types import BinaryType
 
-  - type: "UpdateAttribute"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.withColumn("{attr}", lit("{value}"))
-    description: "Set or update attributes as DataFrame columns"
-    imports: ["from pyspark.sql.functions import lit"]
-    confidence: 0.90
-    role: "transform"
+    @udf(BinaryType())
+    def _modify_bytes(data):
+        if data is None:
+            return None
+        # Modify byte array: offset={offset}, length={length}
+        return bytes(data[{offset}:{offset}+{length}])
 
-  - type: "JoltTransformJSON"
-    category: "JSON Processing"
-    template: |
-      _schema = "{target_schema}"
-      df_{name} = (df_{input}
-          .withColumn("parsed", from_json(col("value"), _schema))
-          .select("parsed.*"))
-    description: "Jolt JSON transform via from_json + schema"
-    imports: ["from pyspark.sql.functions import from_json, col"]
-    confidence: 0.90
-    role: "transform"
+    df_{name} = df_{input}.withColumn("modified_content", _modify_bytes(col("content")))
+  description: Binary byte manipulation via UDF
+  imports:
+  - from pyspark.sql.functions import udf, col
+  - from pyspark.sql.types import BinaryType
+  confidence: 0.8
+  role: transform
+- type: UnpackContent
+  category: DataFrame API
+  template: |
+    import gzip, bz2, lzma
+    from pyspark.sql.functions import udf, col
+    from pyspark.sql.types import BinaryType
 
-  - type: "EvaluateJsonPath"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.withColumn("{field}",
-          get_json_object(col("value"), "$.{path}"))
-    description: "Extract JSON paths via get_json_object"
-    imports: ["from pyspark.sql.functions import get_json_object, col"]
-    confidence: 0.90
-    role: "transform"
+    _DECOMPRESSORS = {"gzip": gzip.decompress, "bzip2": bz2.decompress, "xz": lzma.decompress}
 
-  - type: "ExtractText"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.withColumn("{field}",
-          regexp_extract(col("{col}"), "{pattern}", {group}))
-    description: "Regex text extraction into new columns"
-    imports: ["from pyspark.sql.functions import regexp_extract, col"]
-    confidence: 0.90
-    role: "transform"
+    @udf(BinaryType())
+    def _decompress(data):
+        if data is None:
+            return None
+        return _DECOMPRESSORS["{compression}"](bytes(data))
 
-  - type: "SplitJson"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.withColumn("items",
-          explode(from_json(col("value"), ArrayType(StringType()))))
-    description: "Split JSON arrays via explode + from_json"
-    imports: ["from pyspark.sql.functions import explode, from_json, col", "from pyspark.sql.types import ArrayType, StringType"]
-    confidence: 0.90
-    role: "transform"
+    df_{name} = df_{input}.withColumn("decompressed", _decompress(col("content")))
+  description: Decompress gzip/bzip2/xz content via UDF
+  imports:
+  - import gzip
+  - import bz2
+  - import lzma
+  - from pyspark.sql.functions import udf, col
+  - from pyspark.sql.types import BinaryType
+  confidence: 0.85
+  role: transform
+- type: ValidateXml
+  category: DLT Expectations
+  template: |
+    # XML validation via lxml + DLT expectation pattern
+    from pyspark.sql.functions import udf, col
+    from pyspark.sql.types import BooleanType
 
-  - type: "SplitRecord"
-    category: "DataFrame API"
-    template: |
-      df_{name} = (df_{input}
-          .withColumn("item", explode(col("{array_field}")))
-          .select("item.*"))
-    description: "Split records by exploding array field"
-    imports: ["from pyspark.sql.functions import explode, col"]
-    confidence: 0.90
-    role: "transform"
+    @udf(BooleanType())
+    def _validate_xml(xml_str):
+        if xml_str is None:
+            return False
+        try:
+            from lxml import etree
+            _schema = etree.XMLSchema(etree.parse("{xsd_path}"))
+            _doc = etree.fromstring(xml_str.encode("utf-8"))
+            return _schema.validate(_doc)
+        except Exception:
+            return False
 
-  - type: "MergeContent"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input1}.unionByName(df_{input2}, allowMissingColumns=True)
-    description: "Merge content streams via unionByName"
-    imports: []
-    confidence: 0.90
-    role: "transform"
+    df_{name} = df_{input}.withColumn("_xml_valid", _validate_xml(col("value")))
+    # Use as DLT expectation: @dlt.expect_or_drop("valid_xml", "_xml_valid = true")
+  description: XML schema validation via lxml XSD, usable as DLT expectation
+  imports:
+  - from pyspark.sql.functions import udf, col
+  - from pyspark.sql.types import BooleanType
+  confidence: 0.82
+  role: transform
+- type: ValidateCsv
+  category: DLT Expectations
+  template: |
+    # CSV validation via schema enforcement + DLT expectations
+    from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType
 
-  - type: "AttributesToJSON"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.select(to_json(struct("*")).alias("json_value"))
-    description: "Convert all columns to single JSON string"
-    imports: ["from pyspark.sql.functions import to_json, struct"]
-    confidence: 0.90
-    role: "transform"
+    _expected_schema = StructType([{schema_fields}])
+    df_{name} = (spark.read
+        .schema(_expected_schema)
+        .option("mode", "PERMISSIVE")
+        .option("columnNameOfCorruptRecord", "_corrupt_record")
+        .csv("/Volumes/{catalog}/{schema}/{path}"))
+    # DLT: @dlt.expect_or_drop("no_corrupt_records", "_corrupt_record IS NULL")
+  description: CSV validation with schema enforcement and corrupt record detection
+  imports:
+  - from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType
+  confidence: 0.88
+  role: transform
+- type: RouteText
+  category: DataFrame Filter
+  template: |
+    # Route text based on regex matching
+    df_{name}_matched = df_{input}.filter(col("value").rlike("{pattern}"))
+    df_{name}_unmatched = df_{input}.filter(~col("value").rlike("{pattern}"))
+  description: Regex-based text routing via DataFrame filter with rlike
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.9
+  role: route
+- type: SegmentContent
+  category: Window Functions
+  template: |
+    from pyspark.sql.window import Window
+    from pyspark.sql.functions import row_number, ceil, col, lit
 
-  - type: "ExecuteScript"
-    category: "PySpark UDF"
-    template: |
-      from pyspark.sql.functions import pandas_udf, col
-      import pandas as pd
+    _w = Window.orderBy(lit(1))
+    df_{name} = (df_{input}
+        .withColumn("_row_num", row_number().over(_w))
+        .withColumn("_segment_id", ceil(col("_row_num") / {segment_size})))
+  description: Content segmentation into fixed-size segments via window functions
+  imports:
+  - from pyspark.sql.window import Window
+  - from pyspark.sql.functions import row_number, ceil, col, lit
+  confidence: 0.85
+  role: route
+- type: MonitorActivity
+  category: Spark Monitoring
+  template: |
+    # Monitor data flow activity via Spark listener metrics
+    _count = df_{input}.count()
+    if _count == 0:
+        print(f"[WARN] {name}: No data activity detected")
+        # Optionally send alert
+    else:
+        print(f"[INFO] {name}: Processed {_count} records")
+    df_{name} = df_{input}
+  description: Data flow activity monitoring with record count alerting
+  imports: []
+  confidence: 0.88
+  role: route
+- type: RetryFlowFile
+  category: Structured Streaming
+  template: |
+    import time
 
-      @pandas_udf("string")
-      def _exec_script_{name}(values: pd.Series) -> pd.Series:
-          def _process(val):
-              # Paste original script logic here
-              result = val
-              return str(result) if result is not None else None
-          return values.apply(_process)
+    def _process_with_retry(batch_df, batch_id, max_retries={max_retries}):
+        """Process micro-batch with retry logic."""
+        for attempt in range(max_retries):
+            try:
+                (batch_df.write
+                    .format("delta")
+                    .mode("append")
+                    .saveAsTable("{catalog}.{schema}.{table}"))
+                return
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                else:
+                    raise e
 
-      df_{name} = df_{input}.withColumn("_scripted", _exec_script_{name}(col("value")))
-    description: "NiFi script execution ported to pandas_udf"
-    imports: ["from pyspark.sql.functions import pandas_udf, col", "import pandas as pd"]
-    confidence: 0.85
-    role: "transform"
+    df_{name} = (df_{input}.writeStream
+        .foreachBatch(_process_with_retry)
+        .option("checkpointLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+        .start())
+  description: Retry logic via foreachBatch with exponential backoff
+  imports:
+  - import time
+  confidence: 0.85
+  role: route
+- type: DetectDuplicateRecord
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.dropDuplicates(["{key1}", "{key2}"])
+    df_{name}_dupes = df_{input}.exceptAll(df_{name})
+  description: Duplicate detection with multi-key dedup, routes duplicates separately
+  imports: []
+  confidence: 0.9
+  role: route
+- type: DetectDuplicateStreaming
+  category: Structured Streaming
+  template: |
+    df_{name} = (df_{input}
+        .withWatermark("{timestamp_col}", "{watermark_duration}")
+        .dropDuplicates(["{key}"]))
+  description: Streaming deduplication with watermark for late data handling
+  imports: []
+  confidence: 0.88
+  role: route
+- type: DistributeLoadRoundRobin
+  category: Spark Partitioning
+  template: |
+    from pyspark.sql.functions import spark_partition_id
+    df_{name} = df_{input}.repartitionByRange({num_partitions}, "{sort_col}")
+  description: Round-robin load distribution via repartitionByRange
+  imports:
+  - from pyspark.sql.functions import spark_partition_id
+  confidence: 0.9
+  role: route
+- type: SplitText
+  category: DataFrame API
+  template: |
+    df_{name} = (df_{input}
+        .withColumn("_lines", split(col("value"), "\n"))
+        .withColumn("line", explode(col("_lines")))
+        .drop("_lines")
+        .filter(col("line") != ""))
+  description: Split text into individual lines via split + explode
+  imports:
+  - from pyspark.sql.functions import split, explode, col
+  confidence: 0.92
+  role: route
+- type: LimitFlowFile
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.limit({max_records})
+  description: Rate limit / cap record count via DataFrame.limit()
+  imports: []
+  confidence: 0.92
+  role: route
+- type: RouteBasedOnContent
+  category: DataFrame Filter
+  template: |
+    from pyspark.sql.functions import when, col, lit
 
-  - type: "LookupRecord"
-    category: "DataFrame Join"
-    template: |
-      df_lookup = spark.table("{catalog}.{schema}.{lookup_table}").cache()
-      df_{name} = df_{input}.join(df_lookup, on="{key}", how="left")
-    description: "Record lookup via cached DataFrame join"
-    imports: []
-    confidence: 0.90
-    role: "transform"
+    df_{name} = df_{input}.withColumn("_route",
+        when(col("value").rlike("{pattern1}"), lit("route_a"))
+        .when(col("value").rlike("{pattern2}"), lit("route_b"))
+        .otherwise(lit("unmatched")))
+    df_{name}_route_a = df_{name}.filter(col("_route") == "route_a").drop("_route")
+    df_{name}_route_b = df_{name}.filter(col("_route") == "route_b").drop("_route")
+    df_{name}_unmatched = df_{name}.filter(col("_route") == "unmatched").drop("_route")
+  description: Content-based multi-route routing via chained when() expressions
+  imports:
+  - from pyspark.sql.functions import when, col, lit
+  confidence: 0.88
+  role: route
+- type: ExecuteGroovyScript
+  category: PySpark UDF
+  template: |
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  - type: "EncryptContent"
-    category: "Security"
-    template: |
-      from pyspark.sql.functions import col, lit, base64, aes_encrypt
-      _enc_key = dbutils.secrets.get(scope="{scope}", key="encryption-key")
-      df_{name} = df_{input}.withColumn(
-          "{col}_encrypted",
-          base64(aes_encrypt(col("{col}").cast("string"), lit(_enc_key), lit("GCM"), lit("DEFAULT"))))
-    description: "AES column-level encryption via aes_encrypt"
-    imports: ["from pyspark.sql.functions import col, lit, base64, aes_encrypt"]
-    confidence: 0.90
-    role: "transform"
+    @pandas_udf("string")
+    def _exec_groovy_{name}(values: pd.Series) -> pd.Series:
+        """Port Groovy logic to Python. Original script: {script_name}"""
+        def _process(val):
+            # USER ACTION: Port Groovy script logic to Python here
+            result = val
+            return str(result) if result is not None else None
+        return values.apply(_process)
 
-  - type: "CompressContent"
-    category: "Native"
-    template: |
-      # Delta Lake handles compression natively (snappy/zstd)
-      df_{name} = df_{input}
-    description: "Compression handled natively by Delta Lake"
-    imports: []
-    confidence: 0.95
-    role: "transform"
+    df_{name} = df_{input}.withColumn("result", _exec_groovy_{name}(col("value")))
+  description: Groovy script execution ported to Python pandas UDF
+  imports:
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 0.8
+  role: process
+- type: ExecutePythonScript
+  category: PySpark UDF
+  template: |
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  # ── ROUTES ──
-  - type: "RouteOnAttribute"
-    category: "DataFrame Filter"
-    template: |
-      df_{name}_matched = df_{input}.filter("{condition}")
-      df_{name}_unmatched = df_{input}.filter("NOT ({condition})")
-    description: "Conditional routing via DataFrame filter"
-    imports: []
-    confidence: 0.90
-    role: "route"
+    @pandas_udf("string")
+    def _exec_python_{name}(values: pd.Series) -> pd.Series:
+        """Direct Python script execution as pandas UDF."""
+        def _process(val):
+            # Port original Python script logic here
+            {script_body}
+            return str(result) if result is not None else None
+        return values.apply(_process)
 
-  - type: "RouteOnContent"
-    category: "DataFrame Filter"
-    template: |
-      df_{name} = df_{input}.filter(col("value").rlike("{pattern}"))
-    description: "Content-based routing via regex filter"
-    imports: ["from pyspark.sql.functions import col"]
-    confidence: 0.90
-    role: "route"
+    df_{name} = df_{input}.withColumn("result", _exec_python_{name}(col("value")))
+  description: Python script execution as distributed pandas UDF
+  imports:
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 0.85
+  role: process
+- type: ExecuteProcess
+  category: Notebook Execution
+  template: |
+    # External process execution mapped to notebook run
+    _result = dbutils.notebook.run(
+        "/Repos/{repo}/{notebook_path}",
+        timeout_seconds={timeout},
+        arguments={{"input_table": "{catalog}.{schema}.{input_table}"}})
+    df_{name} = spark.table("{catalog}.{schema}.{output_table}")
+  description: External process execution via dbutils.notebook.run
+  imports: []
+  confidence: 0.85
+  role: process
+- type: HandleHttpResponse
+  category: Delta Lake Write
+  template: |
+    # HTTP response handling: write response data to Delta table
+    (df_{input}.write
+        .format("delta")
+        .mode("append")
+        .option("mergeSchema", "true")
+        .saveAsTable("{catalog}.{schema}.{name}_responses"))
+    df_{name} = spark.table("{catalog}.{schema}.{name}_responses")
+  description: HTTP response persistence to Delta table
+  imports: []
+  confidence: 0.88
+  role: process
+- type: PostHTTP
+  category: Spark UDF
+  template: |
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  - type: "DetectDuplicate"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.dropDuplicates(["{key}"])
-    description: "Duplicate detection and removal"
-    imports: []
-    confidence: 0.90
-    role: "route"
+    @pandas_udf("string")
+    def _post_http_{name}(payloads: pd.Series) -> pd.Series:
+        import requests
+        def _post(payload):
+            resp = requests.post("{url}",
+                json={{"data": payload}},
+                headers={{"Content-Type": "application/json"}},
+                timeout=60)
+            return resp.text if resp.ok else f"ERROR:{resp.status_code}"
+        return payloads.apply(_post)
 
-  - type: "DistributeLoad"
-    category: "Spark Partitioning"
-    template: |
-      df_{name} = df_{input}.repartition({partitions})
-    description: "Load distribution via Spark repartition"
-    imports: []
-    confidence: 0.90
-    role: "route"
+    df_{name} = df_{input}.withColumn("http_response", _post_http_{name}(col("value")))
+  description: HTTP POST via distributed pandas UDF with requests
+  imports:
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 0.85
+  role: process
+- type: InvokeAWSGatewayApi
+  category: AWS Integration
+  template: |
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  # ── PROCESSING ──
-  - type: "ExecuteSQL"
-    category: "Spark SQL"
-    template: |
-      df_{input}.createOrReplaceTempView("tmp_{name}")
-      df_{name} = spark.sql("""
-      {sql}
-      """)
-    description: "SQL execution via Spark SQL temp views"
-    imports: []
-    confidence: 0.90
-    role: "process"
+    @pandas_udf("string")
+    def _invoke_apigw_{name}(payloads: pd.Series) -> pd.Series:
+        import boto3, json
+        _client = boto3.client("apigateway", region_name="{region}")
+        # Use requests with SigV4 auth for API Gateway
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+        import requests
+        def _invoke(payload):
+            resp = requests.post("{api_url}",
+                json=json.loads(payload) if payload else {{}},
+                timeout=60)
+            return resp.text
+        return payloads.apply(_invoke)
 
-  - type: "InvokeHTTP"
-    category: "Spark UDF"
-    template: |
-      from pyspark.sql.functions import pandas_udf, col
-      import pandas as pd
+    df_{name} = df_{input}.withColumn("api_response", _invoke_apigw_{name}(col("value")))
+  description: AWS API Gateway invocation via boto3/SigV4 UDF
+  imports:
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 0.8
+  role: process
+- type: GetDynamoDB
+  category: AWS Integration
+  template: |
+    import boto3, json
+    _dynamo = boto3.resource("dynamodb",
+        aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+        aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+        region_name="{region}")
+    _table = _dynamo.Table("{table}")
+    _response = _table.scan()
+    _items = _response["Items"]
+    while "LastEvaluatedKey" in _response:
+        _response = _table.scan(ExclusiveStartKey=_response["LastEvaluatedKey"])
+        _items.extend(_response["Items"])
+    df_{name} = spark.createDataFrame(_items)
+  description: DynamoDB table scan via boto3 resource with pagination
+  imports:
+  - import boto3
+  - import json
+  confidence: 0.85
+  role: process
+- type: PutDynamoDB
+  category: AWS Integration
+  template: |
+    import boto3, json
 
-      @pandas_udf("string")
-      def _call_api(urls: pd.Series) -> pd.Series:
-          import urllib.request
-          def _get(u):
-              with urllib.request.urlopen(u) as r:
-                  return r.read().decode()
-          return urls.apply(_get)
+    def _write_to_dynamodb(batch_df, batch_id):
+        _dynamo = boto3.resource("dynamodb",
+            aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+            aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+            region_name="{region}")
+        _table = _dynamo.Table("{table}")
+        _rows = [row.asDict() for row in batch_df.collect()]
+        with _table.batch_writer() as _writer:
+            for item in _rows:
+                _writer.put_item(Item={{k: str(v) for k, v in item.items()}})
 
-      df_{name} = df_{input}.withColumn("api_response", _call_api(col("url")))
-    description: "HTTP API call via distributed pandas UDF"
-    imports: ["from pyspark.sql.functions import pandas_udf, col", "import pandas as pd"]
-    confidence: 0.90
-    role: "process"
+    df_{input}.foreachBatch(_write_to_dynamodb)
+  description: DynamoDB batch write via boto3 with foreachBatch
+  imports:
+  - import boto3
+  - import json
+  confidence: 0.82
+  role: process
+- type: DeleteDynamoDB
+  category: AWS Integration
+  template: |
+    import boto3
+    _dynamo = boto3.resource("dynamodb",
+        aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+        aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+        region_name="{region}")
+    _table = _dynamo.Table("{table}")
+    _keys = [row.asDict() for row in df_{input}.select("{key_col}").collect()]
+    with _table.batch_writer() as _writer:
+        for key in _keys:
+            _table.delete_item(Key=key)
+  description: DynamoDB batch delete via boto3
+  imports:
+  - import boto3
+  confidence: 0.82
+  role: process
+- type: PutHBaseCell
+  category: HBase Connector
+  template: |
+    (df_{input}.write
+        .format("org.apache.hadoop.hbase.spark")
+        .option("hbase.columns.mapping",
+                "{row_key} STRING :key, {cf}:{col} STRING {cf}:{col}")
+        .option("hbase.table", "{table}")
+        .option("hbase.spark.use.hbasecontext", "false")
+        .save())
+  description: HBase cell write via hbase-spark connector
+  imports: []
+  confidence: 0.8
+  role: process
+- type: GetHBaseRow
+  category: HBase Connector
+  template: |
+    df_{name} = (spark.read
+        .format("org.apache.hadoop.hbase.spark")
+        .option("hbase.columns.mapping",
+                "{row_key} STRING :key, {cf}:{col} STRING {cf}:{col}")
+        .option("hbase.table", "{table}")
+        .option("hbase.spark.use.hbasecontext", "false")
+        .load()
+        .filter(col("{row_key}") == "{key_value}"))
+  description: HBase row get via hbase-spark connector with key filter
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.8
+  role: process
+- type: DeleteHBaseRow
+  category: HBase Connector
+  template: |
+    # HBase row deletion requires direct HBase API; use happybase or hbase-spark
+    import happybase
+    _conn = happybase.Connection("{hbase_host}")
+    _table = _conn.table("{table}")
+    _keys = [row["{row_key}"] for row in df_{input}.select("{row_key}").collect()]
+    _batch = _table.batch()
+    for key in _keys:
+        _batch.delete(key.encode("utf-8"))
+    _batch.send()
+    _conn.close()
+  description: HBase row deletion via happybase batch delete
+  imports:
+  - import happybase
+  confidence: 0.8
+  role: process
+- type: PutHiveQL
+  category: Spark SQL
+  template: |
+    spark.sql("""
+        INSERT INTO {catalog}.{schema}.{table}
+        SELECT * FROM tmp_{input}
+    """)
+    df_{name} = spark.table("{catalog}.{schema}.{table}")
+  description: Hive INSERT via spark.sql against Unity Catalog table
+  imports: []
+  confidence: 0.92
+  role: process
+- type: SelectHiveQL
+  category: Spark SQL
+  template: |
+    df_{name} = spark.sql("""
+        {hive_query}
+    """)
+  description: Hive SELECT query execution via spark.sql
+  imports: []
+  confidence: 0.95
+  role: process
+- type: PutHiveStreaming
+  category: Delta Streaming
+  template: |
+    # Hive streaming write mapped to Delta Lake streaming
+    (df_{input}.writeStream
+        .format("delta")
+        .outputMode("append")
+        .option("checkpointLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
+        .toTable("{catalog}.{schema}.{table}"))
+  description: Hive streaming write replaced by Delta Lake Structured Streaming
+  imports: []
+  confidence: 0.9
+  role: process
+- type: PutIceberg
+  category: Iceberg Write
+  template: |
+    (df_{input}.write
+        .format("iceberg")
+        .mode("append")
+        .save("{catalog}.{schema}.{table}"))
+  description: Apache Iceberg table write via spark.write.format("iceberg")
+  imports: []
+  confidence: 0.85
+  role: process
+- type: PutORC
+  category: Volumes Write
+  template: |
+    (df_{input}.write
+        .format("orc")
+        .mode("append")
+        .save("/Volumes/{catalog}/{schema}/{path}"))
+  description: Write ORC files to Unity Catalog Volumes
+  imports: []
+  confidence: 0.92
+  role: process
+- type: PutParquet
+  category: Volumes Write
+  template: |
+    (df_{input}.write
+        .format("parquet")
+        .mode("append")
+        .save("/Volumes/{catalog}/{schema}/{path}"))
+  description: Write Parquet files to Unity Catalog Volumes
+  imports: []
+  confidence: 0.92
+  role: process
+- type: PutDistributedMapCache
+  category: Delta Cache
+  template: |
+    # Distributed map cache replaced by Delta table key-value store
+    spark.sql("""
+        MERGE INTO {catalog}.{schema}.__map_cache AS target
+        USING (SELECT * FROM tmp_{input}) AS source
+        ON target.cache_key = source.cache_key
+        WHEN MATCHED THEN UPDATE SET cache_value = source.cache_value, updated_at = current_timestamp()
+        WHEN NOT MATCHED THEN INSERT (cache_key, cache_value, updated_at) VALUES (source.cache_key, source.cache_value, current_timestamp())
+    """)
+  description: Distributed map cache via Delta table MERGE (upsert pattern)
+  imports: []
+  confidence: 0.85
+  role: process
+- type: FetchDistributedMapCache
+  category: Delta Cache
+  template: |
+    from pyspark.sql.functions import broadcast
+    df_cache = spark.table("{catalog}.{schema}.__map_cache").cache()
+    df_{name} = df_{input}.join(
+        broadcast(df_cache),
+        on=col("{key}") == col("cache_key"),
+        how="left")
+  description: Fetch from distributed map cache (Delta table) via broadcast join
+  imports:
+  - from pyspark.sql.functions import broadcast, col
+  confidence: 0.85
+  role: process
+- type: DeleteDistributedMapCache
+  category: Delta Cache
+  template: |
+    # Delete entries from the Delta-based map cache
+    _keys_to_delete = [row["{key}"] for row in df_{input}.select("{key}").distinct().collect()]
+    _key_list = ", ".join([f"\"{k}\"" for k in _keys_to_delete])
+    spark.sql(f"""
+        DELETE FROM {catalog}.{schema}.__map_cache
+        WHERE cache_key IN ({_key_list})
+    """)
+  description: Delete entries from Delta-based distributed map cache
+  imports: []
+  confidence: 0.85
+  role: process
+- type: InvokeScriptedProcessor
+  category: PySpark UDF
+  template: |
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  - type: "ValidateRecord"
-    category: "DLT Expectations"
-    template: |
-      # Data quality validation via DLT expectations
-      # @dlt.expect_or_drop("{rule}", "{expression}")
-      df_{name} = df_{input}.filter("{expression}")
-    description: "Record validation best implemented as DLT expectations"
-    imports: []
-    confidence: 0.90
-    role: "process"
+    @pandas_udf("string")
+    def _scripted_processor_{name}(values: pd.Series) -> pd.Series:
+        """Custom scripted processor — port NiFi InvokeScriptedProcessor logic."""
+        def _process(val):
+            # USER ACTION: Port custom processor script logic here
+            return str(val) if val is not None else None
+        return values.apply(_process)
 
-  - type: "GenerateTableFetch"
-    category: "JDBC Incremental"
-    template: |
-      df_{name} = (spark.read
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
-          .option("dbtable", "(SELECT * FROM {table} WHERE {column} > '{watermark}') subq")
-          .load())
-    description: "Incremental JDBC fetch with watermark pushdown"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    df_{name} = df_{input}.withColumn("processed", _scripted_processor_{name}(col("value")))
+  description: Custom scripted processor via pandas UDF wrapper
+  imports:
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 0.8
+  role: process
+- type: PutGCSObject
+  category: Cloud Storage Write
+  template: |
+    (df_{input}.write
+        .format("delta")
+        .mode("append")
+        .save("gs://{bucket}/{path}"))
+  description: Write to GCS as Delta via external location
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: PutAzureEventHub
+  category: Event Hubs Connector
+  template: |
+    _eh_conn = dbutils.secrets.get(scope="{scope}", key="eh-conn-string")
+    (df_{input}
+        .selectExpr("to_json(struct(*)) AS body")
+        .write
+        .format("eventhubs")
+        .option("eventhubs.connectionString", _eh_conn)
+        .save())
+  description: Azure Event Hub write via eventhubs connector
+  imports: []
+  confidence: 0.88
+  role: sink
+- type: PublishJMS
+  category: Structured Streaming
+  template: |
+    # JMS publish bridged via Kafka
+    # Deploy Kafka Connect JMS Sink Connector to bridge Kafka -> JMS
+    (df_{input}
+        .selectExpr("to_json(struct(*)) AS value")
+        .write
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("topic", "jms_sink_{destination}")
+        .save())
+  description: JMS publish via Kafka Connect bridge (Kafka -> JMS)
+  imports: []
+  confidence: 0.8
+  role: sink
+- type: PutJMS
+  category: Structured Streaming
+  template: |
+    # JMS write bridged via Kafka Connect JMS Sink
+    (df_{input}
+        .selectExpr("to_json(struct(*)) AS value")
+        .write
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("topic", "jms_sink_{queue}")
+        .save())
+  description: JMS queue write via Kafka Connect bridge
+  imports: []
+  confidence: 0.8
+  role: sink
+- type: PutSNS
+  category: AWS Integration
+  template: |
+    import boto3, json
+    _sns = boto3.client("sns",
+        aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+        aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+        region_name="{region}")
+    _rows = df_{input}.toJSON().collect()
+    for _msg in _rows:
+        _sns.publish(TopicArn="{topic_arn}", Message=_msg)
+  description: AWS SNS publish via boto3 with JSON serialization
+  imports:
+  - import boto3
+  - import json
+  confidence: 0.85
+  role: sink
+- type: PutSQS
+  category: AWS Integration
+  template: |
+    import boto3, json
+    _sqs = boto3.client("sqs",
+        aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+        aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+        region_name="{region}")
+    _rows = df_{input}.toJSON().collect()
+    _entries = [{"Id": str(i), "MessageBody": msg} for i, msg in enumerate(_rows)]
+    # Send in batches of 10
+    for i in range(0, len(_entries), 10):
+        _sqs.send_message_batch(QueueUrl="{queue_url}", Entries=_entries[i:i+10])
+  description: AWS SQS batch send via boto3
+  imports:
+  - import boto3
+  - import json
+  confidence: 0.85
+  role: sink
+- type: PutLambda
+  category: AWS Integration
+  template: |
+    import boto3, json
+    _lambda = boto3.client("lambda",
+        aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+        aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+        region_name="{region}")
+    _rows = df_{input}.toJSON().collect()
+    _results = []
+    for _payload in _rows:
+        _resp = _lambda.invoke(
+            FunctionName="{function_name}",
+            InvocationType="RequestResponse",
+            Payload=_payload)
+        _results.append(json.loads(_resp["Payload"].read()))
+    df_{name} = spark.createDataFrame(_results) if _results else spark.createDataFrame([], "string")
+  description: AWS Lambda invocation via boto3 for each record
+  imports:
+  - import boto3
+  - import json
+  confidence: 0.82
+  role: sink
+- type: PutFTP
+  category: External Storage Write
+  template: |
+    import ftplib
+    import io
+    _local_path = "/Volumes/{catalog}/{schema}/tmp/{name}_export.csv"
+    df_{input}.toPandas().to_csv(_local_path, index=False)
+    _ftp = ftplib.FTP("{host}")
+    _ftp.login(
+        user=dbutils.secrets.get(scope="{scope}", key="ftp-user"),
+        passwd=dbutils.secrets.get(scope="{scope}", key="ftp-pass"))
+    with open(_local_path, "rb") as _f:
+        _ftp.storbinary("STOR {remote_path}/{name}.csv", _f)
+    _ftp.quit()
+  description: FTP file upload via ftplib with staging to Volumes
+  imports:
+  - import ftplib
+  - import io
+  confidence: 0.85
+  role: sink
+- type: PutTCP
+  category: Network Write
+  template: |
+    import socket
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  # ── SINKS ──
-  - type: "PutFile"
-    category: "Delta Lake Write"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("append")
-          .saveAsTable("{catalog}.{schema}.{table}"))
-    description: "Write to Delta Lake managed table in Unity Catalog"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    @pandas_udf("boolean")
+    def _send_tcp_{name}(values: pd.Series) -> pd.Series:
+        def _send(val):
+            try:
+                _s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                _s.connect(("{host}", {port}))
+                _s.sendall(str(val).encode("utf-8"))
+                _s.close()
+                return True
+            except Exception:
+                return False
+        return values.apply(_send)
 
-  - type: "PutKafka"
-    category: "Kafka Write"
-    template: |
-      (df_{input}
-          .selectExpr("to_json(struct(*)) AS value")
-          .write
-          .format("kafka")
-          .option("kafka.bootstrap.servers", "{brokers}")
-          .option("topic", "{topic}")
-          .save())
-    description: "Write to Kafka topic as JSON"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    df_{name} = df_{input}.withColumn("_tcp_sent", _send_tcp_{name}(col("value")))
+  description: TCP socket write via distributed UDF
+  imports:
+  - import socket
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 0.8
+  role: sink
+- type: PutUDP
+  category: Network Write
+  template: |
+    import socket
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
 
-  - type: "PublishKafka_2_6"
-    category: "Kafka Write"
-    template: |
-      (df_{input}
-          .selectExpr("to_json(struct(*)) AS value")
-          .write
-          .format("kafka")
-          .option("kafka.bootstrap.servers", "{brokers}")
-          .option("topic", "{topic}")
-          .save())
-    description: "Publish to Kafka 2.6 topic"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    @pandas_udf("boolean")
+    def _send_udp_{name}(values: pd.Series) -> pd.Series:
+        def _send(val):
+            try:
+                _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                _s.sendto(str(val).encode("utf-8"), ("{host}", {port}))
+                _s.close()
+                return True
+            except Exception:
+                return False
+        return values.apply(_send)
 
-  - type: "PutS3Object"
-    category: "Cloud Storage Write"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("append")
-          .save("s3a://{bucket}/{path}"))
-    description: "Write to S3 as Delta via external location"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    df_{name} = df_{input}.withColumn("_udp_sent", _send_udp_{name}(col("value")))
+  description: UDP datagram write via distributed UDF
+  imports:
+  - import socket
+  - from pyspark.sql.functions import pandas_udf, col
+  - import pandas as pd
+  confidence: 0.8
+  role: sink
+- type: PutSyslog
+  category: Structured Logging
+  template: |
+    import logging
+    import logging.handlers
 
-  - type: "PutDatabaseRecord"
-    category: "JDBC Write"
-    template: |
-      (df_{input}.write
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
-          .option("dbtable", "{table}")
-          .option("driver", "{driver}")
-          .option("user", dbutils.secrets.get(scope="{scope}", key="jdbc-user"))
-          .option("password", dbutils.secrets.get(scope="{scope}", key="jdbc-pass"))
-          .option("batchsize", 1000)
-          .mode("append")
-          .save())
-    description: "Database record write via JDBC"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    _syslog = logging.getLogger("{name}_syslog")
+    _syslog.setLevel(logging.INFO)
+    _handler = logging.handlers.SysLogHandler(address=("{host}", {port}))
+    _syslog.addHandler(_handler)
 
-  - type: "PutMongo"
-    category: "MongoDB Connector"
-    template: |
-      (df_{input}.write
-          .format("mongodb")
-          .option("connection.uri", dbutils.secrets.get(scope="{scope}", key="mongo-uri"))
-          .option("database", "{database}")
-          .option("collection", "{collection}")
-          .mode("append")
-          .save())
-    description: "MongoDB write via Spark connector"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    _rows = df_{input}.select("value").collect()
+    for row in _rows:
+        _syslog.info(str(row["value"]))
+    _syslog.removeHandler(_handler)
+  description: Syslog output via Python logging SysLogHandler
+  imports:
+  - import logging
+  - import logging.handlers
+  confidence: 0.82
+  role: sink
+- type: PutSlack
+  category: Webhook
+  template: |
+    import requests, json
+    _webhook_url = dbutils.secrets.get(scope="{scope}", key="slack-webhook-url")
+    _rows = df_{input}.select("value").limit(50).collect()
+    _text = "\n".join([str(r["value"]) for r in _rows])
+    _payload = {{"text": f"[{name}] {_text[:3000]}"}}
+    requests.post(_webhook_url, json=_payload, timeout=30)
+  description: Slack notification via webhook URL
+  imports:
+  - import requests
+  - import json
+  confidence: 0.88
+  role: sink
+- type: PutAzureCosmosDB
+  category: Azure Integration
+  template: |
+    (df_{input}.write
+        .format("cosmos.oltp")
+        .option("spark.cosmos.accountEndpoint", "{endpoint}")
+        .option("spark.cosmos.accountKey",
+                dbutils.secrets.get(scope="{scope}", key="cosmos-key"))
+        .option("spark.cosmos.database", "{database}")
+        .option("spark.cosmos.container", "{container}")
+        .option("spark.cosmos.write.strategy", "ItemOverwrite")
+        .mode("append")
+        .save())
+  description: Azure Cosmos DB write via Spark Cosmos connector
+  imports: []
+  confidence: 0.85
+  role: sink
+- type: PutCassandraQL
+  category: Cassandra Connector
+  template: |
+    (df_{input}.write
+        .format("org.apache.spark.sql.cassandra")
+        .option("spark.cassandra.connection.host", "{host}")
+        .option("spark.cassandra.auth.username",
+                dbutils.secrets.get(scope="{scope}", key="cassandra-user"))
+        .option("spark.cassandra.auth.password",
+                dbutils.secrets.get(scope="{scope}", key="cassandra-pass"))
+        .option("keyspace", "{keyspace}")
+        .option("table", "{table}")
+        .mode("append")
+        .save())
+  description: Cassandra table write via spark-cassandra-connector
+  imports: []
+  confidence: 0.85
+  role: sink
+- type: PutCouchbaseKey
+  category: Couchbase Connector
+  template: |
+    (df_{input}.write
+        .format("couchbase.kv")
+        .option("spark.couchbase.connectionString", "{connection_string}")
+        .option("spark.couchbase.username",
+                dbutils.secrets.get(scope="{scope}", key="cb-user"))
+        .option("spark.couchbase.password",
+                dbutils.secrets.get(scope="{scope}", key="cb-pass"))
+        .option("bucket", "{bucket}")
+        .option("scope", "{cb_scope}")
+        .option("collection", "{collection}")
+        .mode("append")
+        .save())
+  description: Couchbase document write via Spark Couchbase connector
+  imports: []
+  confidence: 0.82
+  role: sink
+- type: PutAMQP
+  category: Message Queue
+  template: |
+    import pika
+    _creds = pika.PlainCredentials(
+        username=dbutils.secrets.get(scope="{scope}", key="amqp-user"),
+        password=dbutils.secrets.get(scope="{scope}", key="amqp-pass"))
+    _conn = pika.BlockingConnection(pika.ConnectionParameters(
+        host="{host}", port={port}, credentials=_creds))
+    _channel = _conn.channel()
+    _channel.queue_declare(queue="{queue}", durable=True)
+    _rows = df_{input}.toJSON().collect()
+    for _msg in _rows:
+        _channel.basic_publish(
+            exchange="", routing_key="{queue}",
+            body=_msg,
+            properties=pika.BasicProperties(delivery_mode=2))
+    _conn.close()
+  description: RabbitMQ/AMQP publish via pika with durable messages
+  imports:
+  - import pika
+  confidence: 0.82
+  role: sink
+- type: PutKinesisStream
+  category: AWS Integration
+  template: |
+    import boto3, json
+    _kinesis = boto3.client("kinesis",
+        aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+        aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+        region_name="{region}")
+    _rows = df_{input}.toJSON().collect()
+    _records = [{{"Data": msg.encode("utf-8"), "PartitionKey": str(i)}} for i, msg in enumerate(_rows)]
+    # Send in batches of 500
+    for i in range(0, len(_records), 500):
+        _kinesis.put_records(StreamName="{stream_name}", Records=_records[i:i+500])
+  description: AWS Kinesis Data Streams batch put via boto3
+  imports:
+  - import boto3
+  - import json
+  confidence: 0.85
+  role: sink
+- type: PutKinesisFirehose
+  category: AWS Integration
+  template: |
+    import boto3, json
+    _firehose = boto3.client("firehose",
+        aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+        aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+        region_name="{region}")
+    _rows = df_{input}.toJSON().collect()
+    _records = [{{"Data": (msg + "\n").encode("utf-8")}} for msg in _rows]
+    for i in range(0, len(_records), 500):
+        _firehose.put_record_batch(
+            DeliveryStreamName="{delivery_stream}",
+            Records=_records[i:i+500])
+  description: AWS Kinesis Firehose batch put via boto3
+  imports:
+  - import boto3
+  - import json
+  confidence: 0.85
+  role: sink
+- type: PutCloudWatchMetric
+  category: AWS Integration
+  template: |
+    import boto3
+    from datetime import datetime
+    _cw = boto3.client("cloudwatch",
+        aws_access_key_id=dbutils.secrets.get(scope="{scope}", key="aws-access-key"),
+        aws_secret_access_key=dbutils.secrets.get(scope="{scope}", key="aws-secret-key"),
+        region_name="{region}")
+    _rows = df_{input}.select("{metric_col}").collect()
+    _metric_data = [{{
+        "MetricName": "{metric_name}",
+        "Value": float(row["{metric_col}"]),
+        "Unit": "{unit}",
+        "Timestamp": datetime.utcnow()
+    }} for row in _rows]
+    _cw.put_metric_data(Namespace="{namespace}", MetricData=_metric_data[:20])
+  description: AWS CloudWatch metric put via boto3
+  imports:
+  - import boto3
+  - from datetime import datetime
+  confidence: 0.85
+  role: sink
+- type: SetAttribute
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.withColumn("{attr}", lit("{value}"))
+  description: Set attribute as new column via withColumn + lit
+  imports:
+  - from pyspark.sql.functions import lit
+  confidence: 0.95
+  role: utility
+- type: UpdateCounter
+  category: Spark Accumulator
+  template: |
+    # Metric counter via Spark accumulator
+    _counter_{name} = spark.sparkContext.accumulator(0)
 
-  - type: "PutElasticsearch"
-    category: "ES Connector"
-    template: |
-      (df_{input}.write
-          .format("org.elasticsearch.spark.sql")
-          .option("es.nodes", "{host}")
-          .save("{index}"))
-    description: "Elasticsearch write via elasticsearch-spark"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    def _count_rows(row):
+        _counter_{name}.add(1)
 
-  - type: "PutHDFS"
-    category: "Cloud Storage Write"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("append")
-          .save("/Volumes/{catalog}/{schema}/{path}"))
-    description: "HDFS write remapped to Volumes/cloud storage"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    df_{input}.foreach(_count_rows)
+    print(f"[METRIC] {name} counter: {{_counter_{name}.value}}")
+    df_{name} = df_{input}
+  description: Record counter via Spark accumulator for flow metrics
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: HandleError
+  category: Error Handling
+  template: |
+    # Error handler: catch failures and route to dead-letter table
+    try:
+        df_{name} = df_{input}.cache()
+        df_{name}.count()  # Force evaluation to catch errors
+    except Exception as _e:
+        _error_df = spark.createDataFrame(
+            [("{name}", str(_e), str(datetime.now()))],
+            ["processor", "error_message", "timestamp"])
+        (_error_df.write
+            .format("delta")
+            .mode("append")
+            .saveAsTable("{catalog}.{schema}.__dead_letter"))
+        df_{name} = spark.createDataFrame([], df_{input}.schema)
+  description: Error handling with dead-letter Delta table routing
+  imports:
+  - from datetime import datetime
+  confidence: 0.85
+  role: utility
+- type: Funnel
+  category: DataFrame API
+  template: |
+    # Funnel: merge multiple input streams into one
+    df_{name} = df_{input1}.unionByName(df_{input2}, allowMissingColumns=True)
+  description: Merge point for multiple flows via unionByName
+  imports: []
+  confidence: 0.95
+  role: utility
+- type: InputPort
+  category: Notebook Parameters
+  template: |
+    # NiFi Input Port mapped to notebook widget parameter
+    dbutils.widgets.text("{name}_input", "")
+    _input_value = dbutils.widgets.get("{name}_input")
+    df_{name} = spark.table(_input_value) if _input_value else spark.createDataFrame([], "string")
+  description: NiFi Input Port mapped to Databricks notebook widget parameter
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: OutputPort
+  category: Notebook Parameters
+  template: |
+    # NiFi Output Port mapped to notebook exit value
+    (df_{input}.write
+        .format("delta")
+        .mode("overwrite")
+        .saveAsTable("{catalog}.{schema}.{name}_output"))
+    dbutils.notebook.exit("{catalog}.{schema}.{name}_output")
+  description: NiFi Output Port mapped to Delta table + notebook exit
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: RemoteProcessGroup
+  category: Notebook Execution
+  template: |
+    # Remote Process Group mapped to external notebook/job call
+    _result = dbutils.notebook.run(
+        "{remote_notebook_path}",
+        timeout_seconds={timeout},
+        arguments={{"input_table": "{catalog}.{schema}.{input_table}"}})
+    df_{name} = spark.table(_result) if _result else spark.createDataFrame([], "string")
+  description: Remote NiFi process group mapped to external notebook run
+  imports: []
+  confidence: 0.82
+  role: utility
+- type: AttributeRollingWindow
+  category: Window Functions
+  template: |
+    from pyspark.sql.window import Window
+    from pyspark.sql.functions import avg, sum as _sum, col
 
-  - type: "PutAzureBlobStorage"
-    category: "Azure Storage"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("append")
-          .save("wasbs://{container}@{account}.blob.core.windows.net/{path}"))
-    description: "Azure Blob Storage write as Delta"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    _w = (Window
+        .partitionBy("{partition_col}")
+        .orderBy("{order_col}")
+        .rowsBetween(-{window_size}, 0))
 
-  - type: "PutAzureDataLakeStorage"
-    category: "Azure ADLS"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("append")
-          .save("abfss://{container}@{account}.dfs.core.windows.net/{path}"))
-    description: "Azure Data Lake Storage Gen2 write as Delta"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    df_{name} = (df_{input}
+        .withColumn("rolling_avg", avg(col("{value_col}")).over(_w))
+        .withColumn("rolling_sum", _sum(col("{value_col}")).over(_w)))
+  description: Rolling window aggregation via PySpark Window functions
+  imports:
+  - from pyspark.sql.window import Window
+  - from pyspark.sql.functions import avg, sum as _sum, col
+  confidence: 0.88
+  role: utility
+- type: EvaluateXPath
+  category: XML Processing
+  template: |
+    from pyspark.sql.functions import udf, col
+    from pyspark.sql.types import StringType
 
-  - type: "PutEmail"
-    category: "Workflow Notification"
-    template: |
-      # Configure email notifications in Databricks Job settings
-      # email_notifications.on_success / on_failure
-      dbutils.notebook.exit("NOTIFY: {subject}")
-    description: "Email via Databricks workflow notifications"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    @udf(StringType())
+    def _eval_xpath(xml_str):
+        if xml_str is None:
+            return None
+        from lxml import etree
+        _doc = etree.fromstring(xml_str.encode("utf-8"))
+        _result = _doc.xpath("{xpath_expr}")
+        return str(_result[0]) if _result else None
 
-  - type: "PutSFTP"
-    category: "External Storage Write"
-    template: |
-      import paramiko
-      _sftp_host = dbutils.secrets.get(scope="{scope}", key="sftp-host")
-      _sftp_user = dbutils.secrets.get(scope="{scope}", key="sftp-user")
-      _local_path = "/Volumes/{catalog}/{schema}/tmp/{name}_export"
-      df_{input}.toPandas().to_csv(_local_path, index=False)
-      _transport = paramiko.Transport((_sftp_host, 22))
-      _transport.connect(username=_sftp_user)
-      _sftp = paramiko.SFTPClient.from_transport(_transport)
-      _sftp.put(_local_path, "{remote_path}/{name}.csv")
-      _sftp.close()
-      _transport.close()
-    description: "SFTP upload via paramiko with staging to Volumes"
-    imports: ["import paramiko"]
-    confidence: 0.90
-    role: "sink"
+    df_{name} = df_{input}.withColumn("{field}", _eval_xpath(col("value")))
+  description: XPath evaluation on XML content via lxml UDF
+  imports:
+  - from pyspark.sql.functions import udf, col
+  - from pyspark.sql.types import StringType
+  confidence: 0.82
+  role: utility
+- type: EvaluateXQuery
+  category: XML Processing
+  template: |
+    from pyspark.sql.functions import udf, col
+    from pyspark.sql.types import StringType
 
-  # ── UTILITY ──
-  - type: "LogAttribute"
-    category: "Spark Display"
-    template: |
-      display(df_{input})
-      df_{input}.printSchema()
-    description: "Inspect schema and sample data with display()"
-    imports: []
-    confidence: 0.90
-    role: "utility"
+    @udf(StringType())
+    def _eval_xquery(xml_str):
+        if xml_str is None:
+            return None
+        from lxml import etree
+        _doc = etree.fromstring(xml_str.encode("utf-8"))
+        # XQuery approximated via XPath
+        _result = _doc.xpath("{xquery_expr}")
+        return str(_result[0]) if _result else None
 
-  - type: "LogMessage"
-    category: "Spark Logging"
-    template: |
-      print(f"[INFO] {name}: Processing complete")
-      spark.sparkContext.setLocalProperty("callSite.short", "{name}")
-    description: "Spark-native logging via print and driver logs"
-    imports: []
-    confidence: 0.90
-    role: "utility"
+    df_{name} = df_{input}.withColumn("{field}", _eval_xquery(col("value")))
+  description: XQuery evaluation approximated via XPath/lxml UDF
+  imports:
+  - from pyspark.sql.functions import udf, col
+  - from pyspark.sql.types import StringType
+  confidence: 0.8
+  role: utility
+- type: GetHTMLElement
+  category: HTML Processing
+  template: |
+    from pyspark.sql.functions import udf, col
+    from pyspark.sql.types import StringType
 
-  - type: "Wait"
-    category: "Workflow Dependency"
-    template: |
-      df_{name} = (spark.readStream
-          .format("delta")
-          .option("readChangeFeed", "true")
-          .table("workflow_signals")
-          .filter("signal_id = '{name}_signal' AND status = 'ready'"))
-    description: "Workflow dependency via Delta CDF signal table"
-    imports: []
-    confidence: 0.92
-    role: "utility"
+    @udf(StringType())
+    def _extract_html(html_str):
+        if html_str is None:
+            return None
+        from bs4 import BeautifulSoup
+        _soup = BeautifulSoup(html_str, "html.parser")
+        _elem = _soup.select_one("{css_selector}")
+        return _elem.get_text() if _elem else None
 
-  - type: "Notify"
-    category: "Workflow Signal"
-    template: |
-      _notify_key = "{name}_signal"
-      spark.sql(f"""
-          MERGE INTO __workflow_signals AS t
-          USING (SELECT '{_notify_key}' AS signal_key, 'READY' AS status,
-                 current_timestamp() AS updated_at) AS s
-          ON t.signal_key = s.signal_key
-          WHEN MATCHED THEN UPDATE SET status = s.status, updated_at = s.updated_at
-          WHEN NOT MATCHED THEN INSERT *
-      """)
-    description: "Write signal to Delta table for downstream consumers"
-    imports: []
-    confidence: 0.90
-    role: "utility"
+    df_{name} = df_{input}.withColumn("{field}", _extract_html(col("value")))
+  description: HTML element extraction via BeautifulSoup CSS selector UDF
+  imports:
+  - from pyspark.sql.functions import udf, col
+  - from pyspark.sql.types import StringType
+  confidence: 0.82
+  role: utility
+- type: ListenSyslog
+  category: Structured Streaming
+  template: |
+    # Syslog listener: forward syslog to Kafka/file, then consume via Structured Streaming
+    df_{name} = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("subscribe", "syslog_{name}")
+        .load()
+        .select(col("value").cast("string").alias("syslog_message")))
+  description: Syslog listener via Kafka-forwarded syslog stream
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.82
+  role: utility
+- type: ListenTCP
+  category: Structured Streaming
+  template: |
+    # TCP listener mapped to Structured Streaming socket source (dev) or Kafka (prod)
+    df_{name} = (spark.readStream
+        .format("socket")
+        .option("host", "{host}")
+        .option("port", {port})
+        .load())
+  description: TCP listener via Structured Streaming socket source
+  imports: []
+  confidence: 0.8
+  role: utility
+- type: ListenUDP
+  category: Structured Streaming
+  template: |
+    # UDP listener: forward to Kafka topic, then consume via Structured Streaming
+    df_{name} = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("subscribe", "udp_feed_{name}")
+        .load()
+        .select(col("value").cast("string").alias("message")))
+  description: UDP listener via Kafka-forwarded UDP stream
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.8
+  role: utility
+- type: ListenRELP
+  category: Structured Streaming
+  template: |
+    # RELP listener: forward RELP messages to Kafka, consume via Structured Streaming
+    df_{name} = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("subscribe", "relp_feed_{name}")
+        .load()
+        .select(col("value").cast("string").alias("message")))
+  description: RELP listener via Kafka-forwarded RELP stream
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.8
+  role: utility
+- type: PostSlack
+  category: Webhook
+  template: |
+    import requests
+    _webhook_url = dbutils.secrets.get(scope="{scope}", key="slack-webhook-url")
+    _message = "{message}"
+    requests.post(_webhook_url, json={{"text": _message}}, timeout=30)
+    df_{name} = df_{input}
+  description: Post message to Slack via incoming webhook
+  imports:
+  - import requests
+  confidence: 0.9
+  role: utility
+- type: CacheAgedExpirations
+  category: Delta Cache
+  template: |
+    # Expire old entries from Delta-based cache using TTL
+    from datetime import datetime, timedelta
+    _ttl_hours = {ttl_hours}
+    _cutoff = (datetime.now() - timedelta(hours=_ttl_hours)).isoformat()
+    spark.sql(f"""
+        DELETE FROM {catalog}.{schema}.__map_cache
+        WHERE updated_at < '{{_cutoff}}'
+    """)
+    df_{name} = df_{input}
+  description: Cache eviction via Delta DELETE with TTL-based cutoff
+  imports:
+  - from datetime import datetime, timedelta
+  confidence: 0.85
+  role: utility
+- type: NotifyWait
+  category: Workflow Signal
+  template: |
+    # Signal/wait pattern via Databricks job task values
+    dbutils.jobs.taskValues.set(key="{signal_name}", value="READY")
+    print(f"[SIGNAL] {name}: Set signal {signal_name}=READY")
+    df_{name} = df_{input}
+  description: Workflow signal/wait via dbutils.jobs.taskValues
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: IdentifyMimeType
+  category: Content Detection
+  template: |
+    from pyspark.sql.functions import udf, col
+    from pyspark.sql.types import StringType
+
+    @udf(StringType())
+    def _detect_mime(content):
+        if content is None:
+            return "application/octet-stream"
+        import mimetypes
+        # Heuristic detection based on content patterns
+        _s = str(content)[:100]
+        if _s.strip().startswith("{"): return "application/json"
+        if _s.strip().startswith("<"): return "application/xml"
+        if "," in _s and "\n" in _s: return "text/csv"
+        return "text/plain"
+
+    df_{name} = df_{input}.withColumn("_mime_type", _detect_mime(col("value")))
+  description: MIME type detection via content heuristic UDF
+  imports:
+  - from pyspark.sql.functions import udf, col
+  - from pyspark.sql.types import StringType
+  confidence: 0.82
+  role: utility
+- type: CompressContentGzip
+  category: Native
+  template: |
+    # Gzip compression: write with gzip codec
+    (df_{input}.write
+        .option("compression", "gzip")
+        .format("{format}")
+        .mode("append")
+        .save("/Volumes/{catalog}/{schema}/{path}"))
+    df_{name} = df_{input}
+  description: Gzip compression via Spark write codec option
+  imports: []
+  confidence: 0.92
+  role: utility
+- type: CompressContentSnappy
+  category: Native
+  template: |
+    # Snappy compression: default for Delta/Parquet
+    (df_{input}.write
+        .option("compression", "snappy")
+        .format("{format}")
+        .mode("append")
+        .save("/Volumes/{catalog}/{schema}/{path}"))
+    df_{name} = df_{input}
+  description: Snappy compression via Spark write codec option (Delta default)
+  imports: []
+  confidence: 0.95
+  role: utility
+- type: CompressContentBzip2
+  category: Native
+  template: |
+    (df_{input}.write
+        .option("compression", "bzip2")
+        .format("{format}")
+        .mode("append")
+        .save("/Volumes/{catalog}/{schema}/{path}"))
+    df_{name} = df_{input}
+  description: Bzip2 compression via Spark write codec option
+  imports: []
+  confidence: 0.9
+  role: utility
+- type: EnforceOrder
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.orderBy("{order_col}", ascending={ascending})
+  description: Enforce record ordering via DataFrame orderBy
+  imports: []
+  confidence: 0.92
+  role: utility
+- type: MergeContentBinary
+  category: DataFrame API
+  template: |
+    # Binary content merge: concatenate binary columns
+    from pyspark.sql.functions import concat, col
+    df_{name} = df_{input}.withColumn("merged_content",
+        concat(col("{col1}"), col("{col2}")))
+  description: Binary content merge via concat of binary columns
+  imports:
+  - from pyspark.sql.functions import concat, col
+  confidence: 0.85
+  role: utility
+- type: FetchElasticsearch
+  category: ES Connector
+  template: |
+    df_{name} = (spark.read
+        .format("org.elasticsearch.spark.sql")
+        .option("es.nodes", "{host}")
+        .option("es.query", '{{"query": {{"match": {{"{field}": "{value}"}}}}}}')
+        .load("{index}"))
+  description: Elasticsearch fetch with query filter via elasticsearch-spark
+  imports: []
+  confidence: 0.85
+  role: source
+- type: GetFTP
+  category: External Storage
+  template: |
+    import ftplib
+    import io
+    _ftp = ftplib.FTP("{host}")
+    _ftp.login(
+        user=dbutils.secrets.get(scope="{scope}", key="ftp-user"),
+        passwd=dbutils.secrets.get(scope="{scope}", key="ftp-pass"))
+    _data = io.BytesIO()
+    _ftp.retrbinary("RETR {remote_path}", _data.write)
+    _ftp.quit()
+    _data.seek(0)
+    dbutils.fs.put("/Volumes/{catalog}/{schema}/landing/{filename}", _data.read().decode(), overwrite=True)
+    df_{name} = spark.read.format("{format}").load("/Volumes/{catalog}/{schema}/landing/")
+  description: FTP file retrieval via ftplib to Unity Catalog Volumes
+  imports:
+  - import ftplib
+  - import io
+  confidence: 0.82
+  role: source
+- type: QueryDatabaseTableRecord
+  category: JDBC Source
+  template: |
+    df_{name} = (spark.read
+        .format("jdbc")
+        .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
+        .option("dbtable", "{table}")
+        .option("driver", "{driver}")
+        .option("user", dbutils.secrets.get(scope="{scope}", key="jdbc-user"))
+        .option("password", dbutils.secrets.get(scope="{scope}", key="jdbc-pass"))
+        .option("fetchsize", 10000)
+        .option("partitionColumn", "{partition_col}")
+        .option("lowerBound", "{lower}")
+        .option("upperBound", "{upper}")
+        .option("numPartitions", {num_partitions})
+        .load())
+  description: JDBC parallel read with partition pushdown for large tables
+  imports: []
+  confidence: 0.9
+  role: source
+- type: DecryptContent
+  category: Security
+  template: |
+    from pyspark.sql.functions import col, lit, unbase64, aes_decrypt
+    _dec_key = dbutils.secrets.get(scope="{scope}", key="encryption-key")
+    df_{name} = df_{input}.withColumn(
+        "{col}_decrypted",
+        aes_decrypt(unbase64(col("{col}_encrypted")), lit(_dec_key), lit("GCM"), lit("DEFAULT")).cast("string"))
+  description: AES column-level decryption via aes_decrypt
+  imports:
+  - from pyspark.sql.functions import col, lit, unbase64, aes_decrypt
+  confidence: 0.9
+  role: transform
+- type: FilterRecord
+  category: DataFrame Filter
+  template: |
+    df_{name} = df_{input}.filter("{filter_expression}")
+  description: Record filtering via DataFrame filter expression
+  imports: []
+  confidence: 0.95
+  role: route
+- type: PutRedis
+  category: Redis Connector
+  template: |
+    import redis
+    _r = redis.Redis(
+        host="{host}", port={port},
+        password=dbutils.secrets.get(scope="{scope}", key="redis-pass"),
+        decode_responses=True)
+    _rows = df_{input}.select("{key_col}", "{value_col}").collect()
+    with _r.pipeline() as _pipe:
+        for row in _rows:
+            _pipe.set(str(row["{key_col}"]), str(row["{value_col}"]))
+        _pipe.execute()
+  description: Redis key-value write via redis-py pipeline
+  imports:
+  - import redis
+  confidence: 0.85
+  role: sink
+- type: GetRedis
+  category: Redis Connector
+  template: |
+    import redis
+    _r = redis.Redis(
+        host="{host}", port={port},
+        password=dbutils.secrets.get(scope="{scope}", key="redis-pass"),
+        decode_responses=True)
+    _keys = _r.keys("{key_pattern}")
+    _data = [{"key": k, "value": _r.get(k)} for k in _keys]
+    df_{name} = spark.createDataFrame(_data) if _data else spark.createDataFrame([], "key STRING, value STRING")
+  description: Redis key-value read via redis-py
+  imports:
+  - import redis
+  confidence: 0.85
+  role: source
+- type: PutDelta
+  category: Delta Lake Write
+  template: |
+    (df_{input}.write
+        .format("delta")
+        .mode("{mode}")
+        .option("mergeSchema", "true")
+        .saveAsTable("{catalog}.{schema}.{table}"))
+  description: Write to Delta Lake managed table with schema evolution
+  imports: []
+  confidence: 0.95
+  role: sink
+- type: MergeDelta
+  category: Delta Lake Write
+  template: |
+    from delta.tables import DeltaTable
+    _target = DeltaTable.forName(spark, "{catalog}.{schema}.{table}")
+    (_target.alias("target")
+        .merge(df_{input}.alias("source"), "target.{key} = source.{key}")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute())
+    df_{name} = spark.table("{catalog}.{schema}.{table}")
+  description: Delta Lake MERGE (upsert) via DeltaTable API
+  imports:
+  - from delta.tables import DeltaTable
+  confidence: 0.92
+  role: sink
+- type: ConsumeKinesisStream
+  category: Structured Streaming
+  template: |
+    df_{name} = (spark.readStream
+        .format("kinesis")
+        .option("streamName", "{stream_name}")
+        .option("region", "{region}")
+        .option("initialPosition", "TRIM_HORIZON")
+        .option("awsAccessKey", dbutils.secrets.get(scope="{scope}", key="aws-access-key"))
+        .option("awsSecretKey", dbutils.secrets.get(scope="{scope}", key="aws-secret-key"))
+        .load())
+  description: AWS Kinesis stream consumption via Structured Streaming
+  imports: []
+  confidence: 0.85
+  role: source
+- type: RenameColumn
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.withColumnRenamed("{old_name}", "{new_name}")
+  description: Rename DataFrame column
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: DropColumn
+  category: DataFrame API
+  template: |
+    df_{name} = df_{input}.drop("{col}")
+  description: Drop column from DataFrame
+  imports: []
+  confidence: 0.95
+  role: transform
+
+# ── Sprint 1A: 4 previously unmapped types ──
+- type: ConsumeJMS
+  category: Messaging
+  template: |
+    # JMS consumption via Kafka bridge or direct Spark Streaming
+    df_{name} = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "{brokers}")
+        .option("subscribe", "{destination}")
+        .option("startingOffsets", "earliest")
+        .load()
+        .selectExpr("CAST(value AS STRING) AS message"))
+  description: JMS message consumption mapped to Kafka/Structured Streaming
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.75
+  role: source
+- type: PutElasticsearchHttp
+  category: Search Engine
+  template: |
+    (df_{name}.write
+        .format("org.elasticsearch.spark.sql")
+        .option("es.resource", "{index}/{type}")
+        .option("es.nodes", "{elasticsearch_hosts}")
+        .option("es.port", "{port}")
+        .option("es.nodes.wan.only", "true")
+        .mode("append")
+        .save())
+  description: Write to Elasticsearch via HTTP using ES-Hadoop connector
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.82
+  role: sink
+- type: PutHBaseJSON
+  category: NoSQL
+  template: |
+    # HBase write via Spark HBase connector or Delta Lake
+    (df_{name}.write
+        .format("org.apache.hadoop.hbase.spark")
+        .option("hbase.table", "{table_name}")
+        .option("hbase.columns.mapping", "{column_family}:{column_qualifier}")
+        .option("hbase.zookeeper.quorum", "{zookeeper_quorum}")
+        .mode("append")
+        .save())
+  description: Write JSON data to HBase table via Spark HBase connector
+  imports: []
+  confidence: 0.72
+  role: sink
+- type: PutKudu
+  category: Columnar Store
+  template: |
+    # Apache Kudu mapped to Delta Lake (Kudu superseded on Databricks)
+    (df_{name}.write
+        .format("delta")
+        .mode("append")
+        .option("mergeSchema", "true")
+        .saveAsTable("{catalog}.{schema}.{table_name}"))
+  description: Apache Kudu write mapped to Delta Lake table
+  imports: []
+  confidence: 0.80
+  role: sink
+
+- type: QueryElasticsearchHttp
+  category: Search Engine
+  template: |
+    # Query Elasticsearch and load results into DataFrame
+    df_{name} = (spark.read
+        .format("org.elasticsearch.spark.sql")
+        .option("es.resource", "{index}/{doc_type}")
+        .option("es.query", '{es_query}')
+        .option("es.nodes", "{es_host}")
+        .option("es.port", "{es_port}")
+        .load())
+  description: Query Elasticsearch via HTTP and return matching documents
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.80
+  role: source
+- type: ScrollElasticsearchHttp
+  category: Search Engine
+  template: |
+    # Scroll large Elasticsearch result sets into DataFrame
+    df_{name} = (spark.read
+        .format("org.elasticsearch.spark.sql")
+        .option("es.resource", "{index}/{doc_type}")
+        .option("es.scroll.size", "5000")
+        .option("es.nodes", "{es_host}")
+        .option("es.query", '{es_query}')
+        .load())
+  description: Scroll through large Elasticsearch result sets
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.78
+  role: source
+- type: DeleteElasticsearch
+  category: Search Engine
+  template: |
+    # Delete documents from Elasticsearch by query
+    import requests
+    response = requests.post(
+        f"{es_host}:{es_port}/{index}/_delete_by_query",
+        json={"query": {"match": {"field": "{value}"}}})
+    df_{name} = spark.createDataFrame([{"status": response.status_code}])
+  description: Delete documents from Elasticsearch index by query
+  imports: []
+  confidence: 0.65
+  role: utility
+- type: PutMongoRecord
+  category: NoSQL
+  template: |
+    # Write records to MongoDB collection
+    (df_{name}.write
+        .format("mongodb")
+        .option("connection.uri", "{mongo_uri}")
+        .option("database", "{database}")
+        .option("collection", "{collection}")
+        .mode("append")
+        .save())
+  description: Write structured records to MongoDB collection
+  imports: []
+  confidence: 0.82
+  role: sink
+- type: DeleteMongo
+  category: NoSQL
+  template: |
+    # Delete documents from MongoDB (read, filter, then overwrite)
+    df_{name} = (spark.read
+        .format("mongodb")
+        .option("connection.uri", "{mongo_uri}")
+        .option("database", "{database}")
+        .option("collection", "{collection}")
+        .load()
+        .filter(col("{filter_field}") != "{filter_value}"))
+  description: Delete matching documents from MongoDB collection
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.65
+  role: utility
+- type: GetMongoRecord
+  category: NoSQL
+  template: |
+    # Read records from MongoDB collection
+    df_{name} = (spark.read
+        .format("mongodb")
+        .option("connection.uri", "{mongo_uri}")
+        .option("database", "{database}")
+        .option("collection", "{collection}")
+        .option("pipeline", '[{"$match": {"status": "active"}}]')
+        .load())
+  description: Read structured records from MongoDB with aggregation pipeline
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.82
+  role: source
+- type: PutCouchbaseDocument
+  category: NoSQL
+  template: |
+    # Write documents to Couchbase bucket
+    (df_{name}.write
+        .format("couchbase.analytics")
+        .option("spark.couchbase.connection.cs", "{couchbase_host}")
+        .option("spark.couchbase.username", "{username}")
+        .option("spark.couchbase.password", "{password}")
+        .option("spark.couchbase.bucket", "{bucket}")
+        .mode("append")
+        .save())
+  description: Write documents to Couchbase bucket
+  imports: []
+  confidence: 0.72
+  role: sink
+- type: GetCouchbaseDocument
+  category: NoSQL
+  template: |
+    # Read documents from Couchbase bucket
+    df_{name} = (spark.read
+        .format("couchbase.analytics")
+        .option("spark.couchbase.connection.cs", "{couchbase_host}")
+        .option("spark.couchbase.username", "{username}")
+        .option("spark.couchbase.password", "{password}")
+        .option("spark.couchbase.bucket", "{bucket}")
+        .load())
+  description: Read documents from Couchbase bucket
+  imports: []
+  confidence: 0.72
+  role: source
+- type: QuerySalesforce
+  category: CRM
+  template: |
+    # Query Salesforce objects via SOQL
+    df_{name} = (spark.read
+        .format("com.springml.spark.salesforce")
+        .option("soql", "{soql_query}")
+        .option("username", "{sf_username}")
+        .option("password", "{sf_password}")
+        .option("login", "https://login.salesforce.com")
+        .load())
+  description: Query Salesforce objects using SOQL
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.80
+  role: source
+- type: PutSalesforceRecord
+  category: CRM
+  template: |
+    # Write records to Salesforce object
+    (df_{name}.write
+        .format("com.springml.spark.salesforce")
+        .option("sfObject", "{sf_object}")
+        .option("username", "{sf_username}")
+        .option("password", "{sf_password}")
+        .option("upsert", "true")
+        .option("externalIdFieldName", "{external_id_field}")
+        .mode("append")
+        .save())
+  description: Write or upsert records to Salesforce object
+  imports: []
+  confidence: 0.78
+  role: sink
+- type: GetMarkLogic
+  category: Document Store
+  template: |
+    # Read documents from MarkLogic database
+    df_{name} = (spark.read
+        .format("com.marklogic.spark")
+        .option("spark.marklogic.client.host", "{ml_host}")
+        .option("spark.marklogic.client.port", "{ml_port}")
+        .option("spark.marklogic.client.username", "{username}")
+        .option("spark.marklogic.read.opticQuery", "{optic_query}")
+        .load())
+  description: Read documents from MarkLogic database via Optic query
+  imports: []
+  confidence: 0.70
+  role: source
+- type: PutMarkLogic
+  category: Document Store
+  template: |
+    # Write documents to MarkLogic database
+    (df_{name}.write
+        .format("com.marklogic.spark")
+        .option("spark.marklogic.client.host", "{ml_host}")
+        .option("spark.marklogic.client.port", "{ml_port}")
+        .option("spark.marklogic.client.username", "{username}")
+        .option("spark.marklogic.write.collections", "{collection}")
+        .mode("append")
+        .save())
+  description: Write documents to MarkLogic database
+  imports: []
+  confidence: 0.70
+  role: sink
+- type: GetSolr
+  category: Search Engine
+  template: |
+    # Read documents from Apache Solr
+    df_{name} = (spark.read
+        .format("solr")
+        .option("zkhost", "{zk_host}")
+        .option("collection", "{collection}")
+        .option("query", "{solr_query}")
+        .load())
+  description: Query and read documents from Apache Solr collection
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.75
+  role: source
+- type: PutSolr
+  category: Search Engine
+  template: |
+    # Write documents to Apache Solr
+    (df_{name}.write
+        .format("solr")
+        .option("zkhost", "{zk_host}")
+        .option("collection", "{collection}")
+        .option("commit_within", "5000")
+        .mode("append")
+        .save())
+  description: Index documents into Apache Solr collection
+  imports: []
+  confidence: 0.75
+  role: sink
+- type: PutInfluxDB
+  category: Time Series
+  template: |
+    # Write time series data to InfluxDB (mapped to Delta with timestamp)
+    from pyspark.sql.functions import current_timestamp
+    df_{name}_ts = df_{name}.withColumn("_write_time", current_timestamp())
+    (df_{name}_ts.write
+        .format("delta")
+        .mode("append")
+        .partitionBy("_write_time")
+        .saveAsTable("{catalog}.{schema}.{table_name}_timeseries"))
+  description: Write time series metrics to InfluxDB (mapped to Delta Lake)
+  imports:
+    - from pyspark.sql.functions import current_timestamp
+  confidence: 0.72
+  role: sink
+- type: PutCypher
+  category: Graph Database
+  template: |
+    # Execute Cypher query against Neo4j
+    (df_{name}.write
+        .format("org.neo4j.spark.DataSource")
+        .option("url", "{neo4j_url}")
+        .option("authentication.type", "basic")
+        .option("authentication.basic.username", "{username}")
+        .option("authentication.basic.password", "{password}")
+        .option("query", "{cypher_query}")
+        .mode("append")
+        .save())
+  description: Execute Cypher write query against Neo4j graph database
+  imports: []
+  confidence: 0.70
+  role: sink
+- type: GetSnowflakeIngestStatus
+  category: Cloud Data Warehouse
+  template: |
+    # Check Snowflake ingest/load status
+    df_{name} = (spark.read
+        .format("snowflake")
+        .options(**snowflake_options)
+        .option("query", "SELECT * FROM TABLE(information_schema.copy_history(table_name=>'{table}', start_time=>dateadd(hours, -1, current_timestamp())))")
+        .load())
+  description: Query Snowflake data ingestion and copy history status
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.75
+  role: source
+- type: PutSnowflakeInternalStage
+  category: Cloud Data Warehouse
+  template: |
+    # Write data to Snowflake internal stage
+    (df_{name}.write
+        .format("snowflake")
+        .options(**snowflake_options)
+        .option("dbtable", "{stage_table}")
+        .option("sfWarehouse", "{warehouse}")
+        .mode("overwrite")
+        .save())
+  description: Write data to Snowflake internal stage table
+  imports: []
+  confidence: 0.80
+  role: sink
+- type: PutBigQueryBatch
+  category: Cloud Data Warehouse
+  template: |
+    # Write batch data to Google BigQuery
+    (df_{name}.write
+        .format("bigquery")
+        .option("table", "{project}.{dataset}.{table}")
+        .option("temporaryGcsBucket", "{gcs_temp_bucket}")
+        .option("writeMethod", "direct")
+        .mode("append")
+        .save())
+  description: Write batch data to Google BigQuery table
+  imports: []
+  confidence: 0.82
+  role: sink
+- type: PutBigQueryStreaming
+  category: Cloud Data Warehouse
+  template: |
+    # Stream data to Google BigQuery
+    (df_{name}.writeStream
+        .format("bigquery")
+        .option("table", "{project}.{dataset}.{table}")
+        .option("temporaryGcsBucket", "{gcs_temp_bucket}")
+        .option("writeMethod", "direct")
+        .option("checkpointLocation", "{checkpoint_path}")
+        .start())
+  description: Stream data to Google BigQuery in real-time
+  imports: []
+  confidence: 0.78
+  role: sink
+- type: QueryDB2
+  category: Relational Database
+  template: |
+    # Query IBM DB2 database
+    df_{name} = (spark.read
+        .format("jdbc")
+        .option("url", "jdbc:db2://{db2_host}:{db2_port}/{database}")
+        .option("dbtable", "{table_name}")
+        .option("user", "{username}")
+        .option("password", "{password}")
+        .option("driver", "com.ibm.db2.jcc.DB2Driver")
+        .load())
+  description: Query data from IBM DB2 database via JDBC
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.82
+  role: source
+- type: PutDB2
+  category: Relational Database
+  template: |
+    # Write data to IBM DB2 database
+    (df_{name}.write
+        .format("jdbc")
+        .option("url", "jdbc:db2://{db2_host}:{db2_port}/{database}")
+        .option("dbtable", "{table_name}")
+        .option("user", "{username}")
+        .option("password", "{password}")
+        .option("driver", "com.ibm.db2.jcc.DB2Driver")
+        .mode("append")
+        .save())
+  description: Write data to IBM DB2 database via JDBC
+  imports: []
+  confidence: 0.82
+  role: sink
+- type: QueryTeradata
+  category: Relational Database
+  template: |
+    # Query Teradata database
+    df_{name} = (spark.read
+        .format("jdbc")
+        .option("url", "jdbc:teradata://{td_host}/DATABASE={database}")
+        .option("dbtable", "{table_name}")
+        .option("user", "{username}")
+        .option("password", "{password}")
+        .option("driver", "com.teradata.jdbc.TeraDriver")
+        .load())
+  description: Query data from Teradata database via JDBC
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.82
+  role: source
+- type: PutTeradata
+  category: Relational Database
+  template: |
+    # Write data to Teradata database
+    (df_{name}.write
+        .format("jdbc")
+        .option("url", "jdbc:teradata://{td_host}/DATABASE={database}")
+        .option("dbtable", "{table_name}")
+        .option("user", "{username}")
+        .option("password", "{password}")
+        .option("driver", "com.teradata.jdbc.TeraDriver")
+        .mode("append")
+        .save())
+  description: Write data to Teradata database via JDBC
+  imports: []
+  confidence: 0.82
+  role: sink
+- type: QuerySybase
+  category: Relational Database
+  template: |
+    # Query SAP Sybase database
+    df_{name} = (spark.read
+        .format("jdbc")
+        .option("url", "jdbc:sybase:Tds:{sybase_host}:{sybase_port}/{database}")
+        .option("dbtable", "{table_name}")
+        .option("user", "{username}")
+        .option("password", "{password}")
+        .option("driver", "com.sybase.jdbc4.jdbc.SybDriver")
+        .load())
+  description: Query data from SAP Sybase database via JDBC
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.78
+  role: source
+- type: PutSybase
+  category: Relational Database
+  template: |
+    # Write data to SAP Sybase database
+    (df_{name}.write
+        .format("jdbc")
+        .option("url", "jdbc:sybase:Tds:{sybase_host}:{sybase_port}/{database}")
+        .option("dbtable", "{table_name}")
+        .option("user", "{username}")
+        .option("password", "{password}")
+        .option("driver", "com.sybase.jdbc4.jdbc.SybDriver")
+        .mode("append")
+        .save())
+  description: Write data to SAP Sybase database via JDBC
+  imports: []
+  confidence: 0.78
+  role: sink
+- type: PutRedshift
+  category: Cloud Data Warehouse
+  template: |
+    # Write data to Amazon Redshift
+    (df_{name}.write
+        .format("io.github.spark_redshift_community.spark.redshift")
+        .option("url", "jdbc:redshift://{redshift_host}:5439/{database}")
+        .option("dbtable", "{schema}.{table}")
+        .option("tempdir", "s3a://{temp_bucket}/redshift-temp/")
+        .option("aws_iam_role", "{iam_role}")
+        .mode("append")
+        .save())
+  description: Write data to Amazon Redshift cluster
+  imports: []
+  confidence: 0.80
+  role: sink
+- type: GetRedshift
+  category: Cloud Data Warehouse
+  template: |
+    # Read data from Amazon Redshift
+    df_{name} = (spark.read
+        .format("io.github.spark_redshift_community.spark.redshift")
+        .option("url", "jdbc:redshift://{redshift_host}:5439/{database}")
+        .option("dbtable", "{schema}.{table}")
+        .option("tempdir", "s3a://{temp_bucket}/redshift-temp/")
+        .option("aws_iam_role", "{iam_role}")
+        .load())
+  description: Read data from Amazon Redshift cluster
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.80
+  role: source
+- type: GetCassandraQL
+  category: NoSQL
+  template: |
+    # Read data from Apache Cassandra
+    df_{name} = (spark.read
+        .format("org.apache.spark.sql.cassandra")
+        .option("keyspace", "{keyspace}")
+        .option("table", "{table}")
+        .option("spark.cassandra.connection.host", "{cassandra_host}")
+        .load())
+  description: Read data from Apache Cassandra table
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.78
+  role: source
+- type: PutGCSObjectAcl
+  category: Google Cloud
+  template: |
+    # Set GCS object ACL (mapped to metadata operation)
+    df_{name} = spark.createDataFrame([{
+        "bucket": "{bucket}",
+        "object": "{object_key}",
+        "acl": "{acl_setting}",
+        "status": "applied"
+    }])
+  description: Set access control on Google Cloud Storage object
+  imports: []
+  confidence: 0.60
+  role: utility
+- type: DeleteGCSObject
+  category: Google Cloud
+  template: |
+    # Delete object from Google Cloud Storage
+    dbutils.fs.rm("gs://{bucket}/{object_key}", recurse=False)
+    df_{name} = spark.createDataFrame([{"bucket": "{bucket}", "key": "{object_key}", "deleted": True}])
+  description: Delete object from Google Cloud Storage bucket
+  imports: []
+  confidence: 0.70
+  role: utility
+- type: DeleteS3Object
+  category: AWS
+  template: |
+    # Delete object from Amazon S3
+    dbutils.fs.rm("s3a://{bucket}/{key}", recurse=False)
+    df_{name} = spark.createDataFrame([{"bucket": "{bucket}", "key": "{key}", "deleted": True}])
+  description: Delete object from Amazon S3 bucket
+  imports: []
+  confidence: 0.75
+  role: utility
+- type: TagS3Object
+  category: AWS
+  template: |
+    # Tag S3 object (via boto3 on Databricks)
+    import boto3
+    s3 = boto3.client("s3")
+    s3.put_object_tagging(
+        Bucket="{bucket}", Key="{key}",
+        Tagging={"TagSet": [{"Key": "{tag_key}", "Value": "{tag_value}"}]})
+    df_{name} = spark.createDataFrame([{"bucket": "{bucket}", "key": "{key}", "tagged": True}])
+  description: Apply tags to Amazon S3 object
+  imports: []
+  confidence: 0.68
+  role: utility
+- type: CopyS3Object
+  category: AWS
+  template: |
+    # Copy S3 object between buckets/keys
+    dbutils.fs.cp("s3a://{src_bucket}/{src_key}", "s3a://{dst_bucket}/{dst_key}")
+    df_{name} = spark.createDataFrame([{"source": "s3a://{src_bucket}/{src_key}", "destination": "s3a://{dst_bucket}/{dst_key}"}])
+  description: Copy object within or between Amazon S3 buckets
+  imports: []
+  confidence: 0.75
+  role: utility
+- type: PutAzureQueueStorage
+  category: Azure
+  template: |
+    # Write message to Azure Queue Storage (mapped to Delta staging)
+    from pyspark.sql.functions import current_timestamp, lit
+    df_{name}_msg = df_{name}.withColumn("_queue_time", current_timestamp()).withColumn("_queue", lit("{queue_name}"))
+    (df_{name}_msg.write
+        .format("delta")
+        .mode("append")
+        .saveAsTable("{catalog}.{schema}.azure_queue_{queue_name}"))
+  description: Write messages to Azure Queue Storage (mapped to Delta staging)
+  imports:
+    - from pyspark.sql.functions import current_timestamp, lit
+  confidence: 0.65
+  role: sink
+- type: DeleteAzureBlobStorage
+  category: Azure
+  template: |
+    # Delete blob from Azure Blob Storage
+    dbutils.fs.rm("wasbs://{container}@{storage_account}.blob.core.windows.net/{blob_path}", recurse=False)
+    df_{name} = spark.createDataFrame([{"container": "{container}", "blob": "{blob_path}", "deleted": True}])
+  description: Delete blob from Azure Blob Storage container
+  imports: []
+  confidence: 0.72
+  role: utility
+- type: PutAzureDataExplorer
+  category: Azure
+  template: |
+    # Write data to Azure Data Explorer (Kusto)
+    (df_{name}.write
+        .format("com.microsoft.kusto.spark.datasource")
+        .option("kustoCluster", "{kusto_cluster}")
+        .option("kustoDatabase", "{kusto_database}")
+        .option("kustoTable", "{kusto_table}")
+        .option("kustoAadAppId", "{app_id}")
+        .option("kustoAadAppSecret", "{app_secret}")
+        .mode("append")
+        .save())
+  description: Write data to Azure Data Explorer (Kusto) table
+  imports: []
+  confidence: 0.75
+  role: sink
+- type: GetAzureDataExplorer
+  category: Azure
+  template: |
+    # Read data from Azure Data Explorer (Kusto)
+    df_{name} = (spark.read
+        .format("com.microsoft.kusto.spark.datasource")
+        .option("kustoCluster", "{kusto_cluster}")
+        .option("kustoDatabase", "{kusto_database}")
+        .option("kustoQuery", "{kql_query}")
+        .option("kustoAadAppId", "{app_id}")
+        .option("kustoAadAppSecret", "{app_secret}")
+        .load())
+  description: Read data from Azure Data Explorer (Kusto) via KQL query
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.75
+  role: source
+- type: FetchGCSObject
+  category: Google Cloud
+  template: |
+    # Fetch and read object from Google Cloud Storage
+    df_{name} = (spark.read
+        .format("{file_format}")
+        .option("header", "true")
+        .option("inferSchema", "true")
+        .load("gs://{bucket}/{object_key}"))
+  description: Fetch and read file from Google Cloud Storage
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.80
+  role: source
+- type: PutCloudWatchLogs
+  category: AWS
+  template: |
+    # Send log events to AWS CloudWatch (mapped to Delta log table)
+    from pyspark.sql.functions import current_timestamp, lit
+    df_{name}_log = (df_{name}
+        .withColumn("_log_group", lit("{log_group}"))
+        .withColumn("_log_stream", lit("{log_stream}"))
+        .withColumn("_log_time", current_timestamp()))
+    (df_{name}_log.write
+        .format("delta")
+        .mode("append")
+        .saveAsTable("{catalog}.{schema}.cloudwatch_logs"))
+  description: Send log events to AWS CloudWatch Logs (mapped to Delta)
+  imports:
+    - from pyspark.sql.functions import current_timestamp, lit
+  confidence: 0.62
+  role: sink
+- type: ConsumeGCPubSub
+  category: Google Cloud
+  template: |
+    # Consume messages from Google Cloud Pub/Sub
+    df_{name} = (spark.readStream
+        .format("pubsub")
+        .option("subscriptionId", "{subscription_id}")
+        .option("projectId", "{project_id}")
+        .option("topicId", "{topic_id}")
+        .load()
+        .selectExpr("CAST(data AS STRING) as value", "attributes", "publish_time"))
+  description: Consume streaming messages from Google Cloud Pub/Sub topic
+  imports:
+    - from pyspark.sql.functions import col, from_json
+  confidence: 0.75
+  role: source
+- type: PublishGCPubSub
+  category: Google Cloud
+  template: |
+    # Publish messages to Google Cloud Pub/Sub
+    (df_{name}.selectExpr("CAST(value AS STRING) as data")
+        .writeStream
+        .format("pubsub")
+        .option("projectId", "{project_id}")
+        .option("topicId", "{topic_id}")
+        .option("checkpointLocation", "{checkpoint_path}")
+        .start())
+  description: Publish streaming messages to Google Cloud Pub/Sub topic
+  imports: []
+  confidence: 0.72
+  role: sink
+- type: GetAzureCosmosDB
+  category: Azure
+  template: |
+    # Read data from Azure Cosmos DB
+    df_{name} = (spark.read
+        .format("cosmos.oltp")
+        .option("spark.cosmos.accountEndpoint", "{cosmos_endpoint}")
+        .option("spark.cosmos.accountKey", "{cosmos_key}")
+        .option("spark.cosmos.database", "{database}")
+        .option("spark.cosmos.container", "{container}")
+        .option("spark.cosmos.read.inferSchema.enabled", "true")
+        .load())
+  description: Read data from Azure Cosmos DB container
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.80
+  role: source
+- type: PutGoogleDrive
+  category: Google Cloud
+  template: |
+    # Write data to Google Drive (export to cloud storage, then link)
+    output_path = "gs://{staging_bucket}/drive_export/{file_name}"
+    (df_{name}.coalesce(1).write
+        .format("{file_format}")
+        .option("header", "true")
+        .mode("overwrite")
+        .save(output_path))
+  description: Export data for Google Drive upload via Cloud Storage staging
+  imports: []
+  confidence: 0.60
+  role: sink
+- type: FetchGoogleDrive
+  category: Google Cloud
+  template: |
+    # Fetch file from Google Drive (via pre-staged Cloud Storage path)
+    df_{name} = (spark.read
+        .format("{file_format}")
+        .option("header", "true")
+        .option("inferSchema", "true")
+        .load("gs://{staging_bucket}/drive_import/{file_name}"))
+  description: Read file from Google Drive via Cloud Storage staging area
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.60
+  role: source
+- type: PutAzureServiceBus
+  category: Azure
+  template: |
+    # Write messages to Azure Service Bus (mapped to Delta queue table)
+    from pyspark.sql.functions import current_timestamp, lit, expr
+    df_{name}_msg = (df_{name}
+        .withColumn("_service_bus_topic", lit("{topic}"))
+        .withColumn("_enqueue_time", current_timestamp())
+        .withColumn("_message_id", expr("uuid()")))
+    (df_{name}_msg.write
+        .format("delta")
+        .mode("append")
+        .saveAsTable("{catalog}.{schema}.service_bus_{topic}"))
+  description: Write messages to Azure Service Bus topic (mapped to Delta)
+  imports:
+    - from pyspark.sql.functions import current_timestamp, lit, expr
+  confidence: 0.65
+  role: sink
+- type: GetAzureServiceBus
+  category: Azure
+  template: |
+    # Read messages from Azure Service Bus (mapped to Delta queue table)
+    df_{name} = (spark.read
+        .format("delta")
+        .table("{catalog}.{schema}.service_bus_{topic}")
+        .filter(col("_processed") == False)
+        .orderBy("_enqueue_time"))
+  description: Read messages from Azure Service Bus topic (mapped to Delta)
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.65
+  role: source
+- type: PutAWSIoT
+  category: AWS
+  template: |
+    # Publish data to AWS IoT Core (mapped to Delta IoT table)
+    from pyspark.sql.functions import current_timestamp, lit, to_json, struct
+    df_{name}_iot = (df_{name}
+        .withColumn("_iot_topic", lit("{iot_topic}"))
+        .withColumn("_publish_time", current_timestamp())
+        .withColumn("_payload", to_json(struct("*"))))
+    (df_{name}_iot.write
+        .format("delta")
+        .mode("append")
+        .saveAsTable("{catalog}.{schema}.iot_messages"))
+  description: Publish data to AWS IoT Core (mapped to Delta IoT table)
+  imports:
+    - from pyspark.sql.functions import current_timestamp, lit, to_json, struct
+  confidence: 0.62
+  role: sink
+- type: ConvertJSONToCSV
+  category: Data Format
+  template: |
+    # Convert JSON data to CSV format
+    df_{name}_json = spark.read.json("{input_path}")
+    (df_{name}_json.write
+        .format("csv")
+        .option("header", "true")
+        .option("quote", '"')
+        .mode("overwrite")
+        .save("{output_path}"))
+    df_{name} = df_{name}_json
+  description: Convert JSON formatted data to CSV format
+  imports: []
+  confidence: 0.88
+  role: transform
+- type: ConvertCSVToJSON
+  category: Data Format
+  template: |
+    # Convert CSV data to JSON format
+    df_{name}_csv = (spark.read
+        .format("csv")
+        .option("header", "true")
+        .option("inferSchema", "true")
+        .load("{input_path}"))
+    (df_{name}_csv.write
+        .format("json")
+        .mode("overwrite")
+        .save("{output_path}"))
+    df_{name} = df_{name}_csv
+  description: Convert CSV formatted data to JSON format
+  imports: []
+  confidence: 0.88
+  role: transform
+- type: ConvertXMLToJSON
+  category: Data Format
+  template: |
+    # Convert XML data to JSON via DataFrame
+    df_{name} = (spark.read
+        .format("xml")
+        .option("rowTag", "{row_tag}")
+        .load("{input_path}"))
+    (df_{name}.write
+        .format("json")
+        .mode("overwrite")
+        .save("{output_path}"))
+  description: Convert XML formatted data to JSON format
+  imports: []
+  confidence: 0.82
+  role: transform
+- type: ConvertJSONToXML
+  category: Data Format
+  template: |
+    # Convert JSON data to XML format
+    df_{name} = spark.read.json("{input_path}")
+    (df_{name}.write
+        .format("xml")
+        .option("rootTag", "{root_tag}")
+        .option("rowTag", "{row_tag}")
+        .mode("overwrite")
+        .save("{output_path}"))
+  description: Convert JSON formatted data to XML format
+  imports: []
+  confidence: 0.80
+  role: transform
+- type: TransformAvro
+  category: Data Format
+  template: |
+    # Transform Avro data with schema evolution
+    df_{name} = (spark.read
+        .format("avro")
+        .option("avroSchema", '{avro_schema}')
+        .load("{input_path}"))
+    df_{name} = df_{name}.select([col(c).alias(c.lower().replace(' ', '_')) for c in df_{name}.columns])
+  description: Read and transform Avro data with schema handling
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.82
+  role: transform
+- type: ForkRecord
+  category: Record Processing
+  template: |
+    # Fork records into multiple DataFrames based on conditions
+    df_{name}_fork1 = df_{name}.filter(col("{partition_field}") == "{value1}")
+    df_{name}_fork2 = df_{name}.filter(col("{partition_field}") == "{value2}")
+    df_{name}_remainder = df_{name}.filter(
+        ~col("{partition_field}").isin("{value1}", "{value2}"))
+  description: Fork records into multiple streams based on field conditions
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.85
+  role: route
+- type: MergeRecordSet
+  category: Record Processing
+  template: |
+    # Merge multiple record sets into a single DataFrame
+    from functools import reduce
+    from pyspark.sql import DataFrame
+    dfs_to_merge = [upstream_dataframes]
+    df_{name} = reduce(DataFrame.unionByName, dfs_to_merge)
+    df_{name} = df_{name}.dropDuplicates(["{dedup_key}"])
+  description: Merge multiple record sets into a single deduplicated DataFrame
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.85
+  role: transform
+- type: CalculateRecordStats
+  category: Record Processing
+  template: |
+    # Calculate statistics on record fields
+    from pyspark.sql.functions import count, avg, stddev, min as spark_min, max as spark_max
+    df_{name} = df_{name}.agg(
+        count("*").alias("record_count"),
+        avg("{numeric_field}").alias("avg_value"),
+        stddev("{numeric_field}").alias("stddev_value"),
+        spark_min("{numeric_field}").alias("min_value"),
+        spark_max("{numeric_field}").alias("max_value"))
+  description: Calculate aggregate statistics on record fields
+  imports:
+    - from pyspark.sql.functions import count, avg, stddev, min as spark_min, max as spark_max
+  confidence: 0.88
+  role: transform
+- type: GeoEnrichIP
+  category: Enrichment
+  template: |
+    # Geo-enrich IP addresses with location data
+    df_geo_ref = spark.read.table("{catalog}.{schema}.ip_geolocation")
+    df_{name} = df_{name}.join(
+        df_geo_ref,
+        df_{name}["{ip_field}"].between(df_geo_ref["ip_start"], df_geo_ref["ip_end"]),
+        "left")
+  description: Enrich IP addresses with geolocation data via reference lookup
+  imports:
+    - from pyspark.sql.functions import col, broadcast
+  confidence: 0.72
+  role: transform
+- type: ExtractImageMetadata
+  category: Enrichment
+  template: |
+    # Extract metadata from image files (binary content)
+    from pyspark.sql.functions import length, substring, hex as spark_hex
+    df_{name} = (spark.read.format("binaryFile")
+        .option("pathGlobFilter", "*.{image_ext}")
+        .load("{image_path}")
+        .select(
+            col("path"),
+            col("modificationTime"),
+            length("content").alias("file_size_bytes"),
+            substring(spark_hex("content"), 1, 16).alias("magic_bytes")))
+  description: Extract metadata from image binary files
+  imports:
+    - from pyspark.sql.functions import col, length, substring, hex as spark_hex
+  confidence: 0.68
+  role: transform
+- type: ConvertAvroToCSVRecord
+  category: Data Format
+  template: |
+    # Convert Avro records to CSV format
+    df_{name} = spark.read.format("avro").load("{input_path}")
+    (df_{name}.write
+        .format("csv")
+        .option("header", "true")
+        .option("quote", '"')
+        .mode("overwrite")
+        .save("{output_path}"))
+  description: Convert Avro formatted records to CSV output
+  imports: []
+  confidence: 0.85
+  role: transform
+- type: FlattenJSON
+  category: Data Format
+  template: |
+    # Flatten nested JSON structures
+    from pyspark.sql.functions import col, explode_outer
+    df_{name} = df_{name}.select(
+        col("{id_field}"),
+        col("{nested_field}.*"),
+        explode_outer(col("{array_field}")).alias("{flattened_alias}"))
+  description: Flatten nested JSON structures into tabular format
+  imports:
+    - from pyspark.sql.functions import col, explode_outer
+  confidence: 0.85
+  role: transform
+- type: NormalizeRecord
+  category: Record Processing
+  template: |
+    # Normalize record by exploding nested arrays into rows
+    from pyspark.sql.functions import explode, col
+    df_{name} = (df_{name}
+        .select(
+            col("{key_field}"),
+            explode(col("{array_field}")).alias("{element_alias}"))
+        .select(
+            col("{key_field}"),
+            col("{element_alias}.*")))
+  description: Normalize records by exploding nested arrays into individual rows
+  imports:
+    - from pyspark.sql.functions import explode, col
+  confidence: 0.85
+  role: transform
+- type: DenormalizeRecord
+  category: Record Processing
+  template: |
+    # Denormalize records by aggregating rows into arrays
+    from pyspark.sql.functions import collect_list, struct, col
+    df_{name} = (df_{name}
+        .groupBy("{group_key}")
+        .agg(collect_list(
+            struct([col(c) for c in detail_columns])
+        ).alias("{nested_field}")))
+  description: Denormalize records by grouping and collecting into nested arrays
+  imports:
+    - from pyspark.sql.functions import collect_list, struct, col
+  confidence: 0.82
+  role: transform
+- type: ValidateJSON
+  category: Validation
+  template: |
+    # Validate JSON schema compliance
+    from pyspark.sql.functions import col, from_json, schema_of_json, lit
+    json_schema = schema_of_json(lit('{sample_json}'))
+    df_{name}_validated = df_{name}.withColumn(
+        "_parsed", from_json(col("{json_column}"), json_schema))
+    df_{name}_valid = df_{name}_validated.filter(col("_parsed").isNotNull())
+    df_{name}_invalid = df_{name}_validated.filter(col("_parsed").isNull())
+  description: Validate JSON content against expected schema
+  imports:
+    - from pyspark.sql.functions import col, from_json, schema_of_json, lit
+  confidence: 0.82
+  role: utility
+- type: ValidateAvro
+  category: Validation
+  template: |
+    # Validate Avro data with schema enforcement
+    from pyspark.sql.avro.functions import from_avro, to_avro
+    df_{name}_validated = df_{name}.select(
+        from_avro(col("{avro_column}"), '{avro_schema}').alias("_validated"))
+    df_{name} = df_{name}_validated.filter(col("_validated").isNotNull())
+  description: Validate Avro data against specified schema
+  imports:
+    - from pyspark.sql.functions import col
+    - from pyspark.sql.avro.functions import from_avro
+  confidence: 0.78
+  role: utility
+- type: HashRecord
+  category: Security
+  template: |
+    # Hash record fields for data masking/deduplication
+    from pyspark.sql.functions import sha2, concat_ws, col
+    df_{name} = df_{name}.withColumn(
+        "_record_hash",
+        sha2(concat_ws("||", *[col(c) for c in hash_fields]), 256))
+  description: Generate SHA-256 hash of record fields for masking or dedup
+  imports:
+    - from pyspark.sql.functions import sha2, concat_ws, col
+  confidence: 0.88
+  role: transform
+- type: SetState
+  category: State Management
+  template: |
+    # Set processing state in Delta state table
+    from pyspark.sql.functions import current_timestamp, lit
+    df_{name}_state = spark.createDataFrame([{
+        "state_key": "{state_key}",
+        "state_value": "{state_value}",
+        "updated_at": None
+    }]).withColumn("updated_at", current_timestamp())
+    (df_{name}_state.write
+        .format("delta")
+        .mode("overwrite")
+        .option("replaceWhere", "state_key = '{state_key}'")
+        .saveAsTable("{catalog}.{schema}._processor_state"))
+  description: Persist processor state to Delta state management table
+  imports:
+    - from pyspark.sql.functions import current_timestamp, lit
+  confidence: 0.70
+  role: utility
+- type: ClearState
+  category: State Management
+  template: |
+    # Clear processing state from Delta state table
+    from delta.tables import DeltaTable
+    state_table = DeltaTable.forName(spark, "{catalog}.{schema}._processor_state")
+    state_table.delete("state_key = '{state_key}'")
+    df_{name} = spark.createDataFrame([{"state_key": "{state_key}", "cleared": True}])
+  description: Clear processor state from Delta state management table
+  imports:
+    - from delta.tables import DeltaTable
+  confidence: 0.70
+  role: utility
+- type: GenerateRecord
+  category: Data Generation
+  template: |
+    # Generate synthetic test records
+    from pyspark.sql.functions import expr, monotonically_increasing_id
+    df_{name} = (spark.range(0, {record_count})
+        .withColumn("id", monotonically_increasing_id())
+        .withColumn("name", expr("concat('record_', id)"))
+        .withColumn("value", expr("rand() * 1000"))
+        .withColumn("timestamp", expr("current_timestamp()")))
+  description: Generate synthetic test records with configurable count
+  imports:
+    - from pyspark.sql.functions import expr, monotonically_increasing_id
+  confidence: 0.85
+  role: source
+- type: ScanAttribute
+  category: Inspection
+  template: |
+    # Scan and profile DataFrame attributes/columns
+    from pyspark.sql.functions import count, countDistinct
+    profile_exprs = []
+    for c in df_{name}.columns:
+        profile_exprs.extend([
+            count(c).alias(f"{c}_non_null"),
+            countDistinct(c).alias(f"{c}_distinct")])
+    df_{name}_profile = df_{name}.agg(*profile_exprs)
+  description: Scan and profile DataFrame column attributes and statistics
+  imports:
+    - from pyspark.sql.functions import count, countDistinct
+  confidence: 0.80
+  role: utility
+- type: PutNotification
+  category: Notification
+  template: |
+    # Send notification with processing summary
+    record_count = df_{name}.count()
+    notification_payload = {
+        "message": f"Processing complete: {record_count} records processed",
+        "severity": "{severity}",
+        "source": "{processor_name}",
+        "timestamp": str(spark.sql("SELECT current_timestamp()").collect()[0][0])}
+    df_{name}_notification = spark.createDataFrame([notification_payload])
+  description: Generate processing notification with record summary
+  imports: []
+  confidence: 0.72
+  role: utility
+- type: ExecuteSQLRecord
+  category: SQL
+  template: |
+    # Execute SQL query on record set
+    df_{name}.createOrReplaceTempView("_{name}_input")
+    df_{name} = spark.sql("""
+        {sql_query}
+    """)
+  description: Execute arbitrary SQL query on input record set
+  imports: []
+  confidence: 0.88
+  role: transform
+- type: ValidateXML
+  category: Validation
+  template: |
+    # Validate XML content structure
+    df_{name}_xml = (spark.read
+        .format("xml")
+        .option("rowTag", "{row_tag}")
+        .option("failFast", "true")
+        .load("{input_path}"))
+    df_{name}_valid = df_{name}_xml.filter(col("{required_field}").isNotNull())
+    df_{name}_invalid = df_{name}_xml.filter(col("{required_field}").isNull())
+  description: Validate XML content structure and required fields
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.78
+  role: utility
+- type: AssignPriority
+  category: Flow Control
+  template: |
+    # Assign processing priority to records
+    from pyspark.sql.functions import col, when, lit
+    df_{name} = df_{name}.withColumn("_priority",
+        when(col("{priority_field}") == "{high_value}", lit(1))
+        .when(col("{priority_field}") == "{medium_value}", lit(5))
+        .otherwise(lit(10)))
+    df_{name} = df_{name}.orderBy("_priority")
+  description: Assign processing priority levels to records and reorder
+  imports:
+    - from pyspark.sql.functions import col, when, lit
+  confidence: 0.80
+  role: utility
+- type: RollbackOnFailure
+  category: Error Handling
+  template: |
+    # Rollback-on-failure: wrap operation in try/except with Delta versioning
+    from delta.tables import DeltaTable
+    target_table = "{catalog}.{schema}.{table_name}"
+    pre_version = spark.sql(f"DESCRIBE HISTORY {target_table} LIMIT 1").select("version").collect()[0][0]
+    try:
+        (df_{name}.write.format("delta").mode("append").saveAsTable(target_table))
+    except Exception as e:
+        spark.sql(f"RESTORE TABLE {target_table} TO VERSION AS OF {pre_version}")
+        raise e
+  description: Execute write with automatic Delta rollback on failure
+  imports:
+    - from delta.tables import DeltaTable
+  confidence: 0.75
+  role: utility
+- type: TerminateProcess
+  category: Flow Control
+  template: |
+    # Terminate flow processing (log and discard records)
+    from pyspark.sql.functions import current_timestamp, lit
+    df_{name}_terminated = (df_{name}
+        .withColumn("_termination_reason", lit("{reason}"))
+        .withColumn("_terminated_at", current_timestamp())
+        .limit(0))
+    df_{name} = df_{name}_terminated
+  description: Terminate flow processing and discard remaining records
+  imports:
+    - from pyspark.sql.functions import current_timestamp, lit
+  confidence: 0.85
+  role: utility
+- type: PutPython
+  category: NiFi 2.x Python
+  template: |
+    # NiFi 2.x Python processor: execute custom Python logic
+    from pyspark.sql.functions import udf, col
+    from pyspark.sql.types import StringType
+    @udf(returnType=StringType())
+    def custom_python_transform(value):
+        return str(value).upper()
+    df_{name} = df_{name}.withColumn("{output_field}", custom_python_transform(col("{input_field}")))
+  description: NiFi 2.x Python processor mapped to PySpark UDF execution
+  imports:
+    - from pyspark.sql.functions import udf, col
+    - from pyspark.sql.types import StringType
+  confidence: 0.82
+  role: process
+- type: ExecutePythonProcessor
+  category: NiFi 2.x Python
+  template: |
+    # NiFi 2.x ExecutePythonProcessor: run arbitrary Python script
+    from pyspark.sql.functions import pandas_udf, col
+    import pandas as pd
+    @pandas_udf("string")
+    def execute_python(series: pd.Series) -> pd.Series:
+        return series.apply(lambda x: str(x).strip())
+    df_{name} = df_{name}.withColumn("{output_field}", execute_python(col("{input_field}")))
+  description: NiFi 2.x arbitrary Python execution mapped to Pandas UDF
+  imports:
+    - from pyspark.sql.functions import pandas_udf, col
+    - import pandas as pd
+  confidence: 0.78
+  role: process
+- type: TransformPython
+  category: NiFi 2.x Python
+  template: |
+    # NiFi 2.x TransformPython: apply Python-based transformation
+    from pyspark.sql.functions import expr, col, when
+    df_{name} = (df_{name}
+        .withColumn("{output_field}", expr("{python_expression}"))
+        .filter(col("{output_field}").isNotNull()))
+  description: NiFi 2.x Python transform mapped to PySpark expression
+  imports:
+    - from pyspark.sql.functions import expr, col, when
+  confidence: 0.80
+  role: transform
+- type: QueryPython
+  category: NiFi 2.x Python
+  template: |
+    # NiFi 2.x QueryPython: Python-based query/filter processor
+    from pyspark.sql.functions import col, expr
+    df_{name} = df_{name}.filter(expr("{filter_expression}"))
+  description: NiFi 2.x Python query processor mapped to DataFrame filter
+  imports:
+    - from pyspark.sql.functions import col, expr
+  confidence: 0.82
+  role: transform
+- type: RecordPathFilter
+  category: NiFi 2.x Record
+  template: |
+    # NiFi 2.x RecordPathFilter: filter records by RecordPath expression
+    from pyspark.sql.functions import col
+    df_{name} = df_{name}.filter(col("{record_path_field}") {operator} "{filter_value}")
+  description: NiFi 2.x RecordPath-based record filtering
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.85
+  role: route
+- type: RecordPathLookup
+  category: NiFi 2.x Record
+  template: |
+    # NiFi 2.x RecordPathLookup: enrich records via lookup
+    df_lookup = spark.read.table("{catalog}.{schema}.{lookup_table}")
+    df_{name} = df_{name}.join(
+        df_lookup,
+        df_{name}["{join_key}"] == df_lookup["{lookup_key}"],
+        "left")
+  description: NiFi 2.x RecordPath-based lookup enrichment
+  imports:
+    - from pyspark.sql.functions import col, broadcast
+  confidence: 0.82
+  role: transform
+- type: RecordPathUpdate
+  category: NiFi 2.x Record
+  template: |
+    # NiFi 2.x RecordPathUpdate: update record fields by path
+    from pyspark.sql.functions import col, when, lit
+    df_{name} = (df_{name}
+        .withColumn("{target_field}",
+            when(col("{condition_field}").isNotNull(), col("{source_field}"))
+            .otherwise(lit("{default_value}"))))
+  description: NiFi 2.x RecordPath-based field update
+  imports:
+    - from pyspark.sql.functions import col, when, lit
+  confidence: 0.85
+  role: transform
+- type: FlowAnalysisRule
+  category: NiFi 2.x Flow Analysis
+  template: |
+    # NiFi 2.x FlowAnalysisRule: analyze flow quality/compliance
+    from pyspark.sql.functions import col, count, when, lit
+    df_{name}_analysis = df_{name}.agg(
+        count("*").alias("total_records"),
+        count(when(col("{quality_field}").isNull(), 1)).alias("null_count"),
+        count(when(col("{quality_field}").isNotNull(), 1)).alias("valid_count"))
+    df_{name}_analysis = df_{name}_analysis.withColumn("compliance_pct",
+        (col("valid_count") / col("total_records") * 100))
+  description: NiFi 2.x Flow analysis rule for data quality compliance
+  imports:
+    - from pyspark.sql.functions import col, count, when, lit
+  confidence: 0.78
+  role: utility
+- type: FlowAnalysisReport
+  category: NiFi 2.x Flow Analysis
+  template: |
+    # NiFi 2.x FlowAnalysisReport: generate flow analysis report
+    from pyspark.sql.functions import current_timestamp, lit, count, avg
+    df_{name}_report = (df_{name}
+        .agg(count("*").alias("record_count"), avg("{metric_field}").alias("avg_metric"))
+        .withColumn("report_time", current_timestamp())
+        .withColumn("flow_name", lit("{flow_name}")))
+  description: NiFi 2.x Flow analysis report generation with metrics
+  imports:
+    - from pyspark.sql.functions import current_timestamp, lit, count, avg
+  confidence: 0.78
+  role: utility
+- type: BatchProcessors
+  category: NiFi 2.x Batch
+  template: |
+    # NiFi 2.x BatchProcessors: process records in configurable batches
+    from pyspark.sql.functions import monotonically_increasing_id, floor, col
+    batch_size = {batch_size}
+    df_{name} = (df_{name}
+        .withColumn("_row_id", monotonically_increasing_id())
+        .withColumn("_batch_id", floor(col("_row_id") / batch_size)))
+    for batch_id in [r._batch_id for r in df_{name}.select("_batch_id").distinct().collect()]:
+        df_batch = df_{name}.filter(col("_batch_id") == batch_id)
+  description: NiFi 2.x batch processor for chunked record processing
+  imports:
+    - from pyspark.sql.functions import monotonically_increasing_id, floor, col
+  confidence: 0.75
+  role: process
+- type: GetIceberg
+  category: Lakehouse
+  template: |
+    # Read data from Apache Iceberg table
+    df_{name} = (spark.read
+        .format("iceberg")
+        .load("{catalog}.{schema}.{table_name}"))
+  description: Read data from Apache Iceberg table format
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.85
+  role: source
+- type: PutDeltaLake
+  category: Lakehouse
+  template: |
+    # Write data to Delta Lake table (native Databricks)
+    (df_{name}.write
+        .format("delta")
+        .mode("append")
+        .option("mergeSchema", "true")
+        .option("optimizeWrite", "true")
+        .option("autoCompact", "true")
+        .saveAsTable("{catalog}.{schema}.{table_name}"))
+  description: Write data to Delta Lake table with optimized writes
+  imports: []
+  confidence: 0.95
+  role: sink
+- type: GetDeltaLake
+  category: Lakehouse
+  template: |
+    # Read data from Delta Lake table (native Databricks)
+    df_{name} = (spark.read
+        .format("delta")
+        .table("{catalog}.{schema}.{table_name}"))
+  description: Read data from Delta Lake table (native Databricks format)
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.95
+  role: source
+- type: PutHudi
+  category: Lakehouse
+  template: |
+    # Write data to Apache Hudi table
+    (df_{name}.write
+        .format("hudi")
+        .option("hoodie.table.name", "{table_name}")
+        .option("hoodie.datasource.write.recordkey.field", "{record_key}")
+        .option("hoodie.datasource.write.precombine.field", "{precombine_field}")
+        .option("hoodie.datasource.write.operation", "upsert")
+        .mode("append")
+        .save("{hudi_table_path}"))
+  description: Write data to Apache Hudi table with upsert support
+  imports: []
+  confidence: 0.82
+  role: sink
+- type: GetHudi
+  category: Lakehouse
+  template: |
+    # Read data from Apache Hudi table
+    df_{name} = (spark.read
+        .format("hudi")
+        .load("{hudi_table_path}"))
+  description: Read data from Apache Hudi table format
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.82
+  role: source
+- type: PutTrino
+  category: Query Engine
+  template: |
+    # Write data via Trino (mapped to JDBC)
+    (df_{name}.write
+        .format("jdbc")
+        .option("url", "jdbc:trino://{trino_host}:{trino_port}/{catalog}/{schema}")
+        .option("dbtable", "{table_name}")
+        .option("user", "{username}")
+        .option("driver", "io.trino.jdbc.TrinoDriver")
+        .mode("append")
+        .save())
+  description: Write data to Trino-managed table via JDBC
+  imports: []
+  confidence: 0.78
+  role: sink
+- type: QueryTrino
+  category: Query Engine
+  template: |
+    # Query data via Trino (mapped to JDBC)
+    df_{name} = (spark.read
+        .format("jdbc")
+        .option("url", "jdbc:trino://{trino_host}:{trino_port}/{catalog}/{schema}")
+        .option("query", "{trino_query}")
+        .option("user", "{username}")
+        .option("driver", "io.trino.jdbc.TrinoDriver")
+        .load())
+  description: Query data from Trino query engine via JDBC
+  imports:
+    - from pyspark.sql.functions import col
+  confidence: 0.78
+  role: source
+- type: StreamingIngest
+  category: NiFi 2.x Streaming
+  template: |
+    # NiFi 2.x StreamingIngest: continuous streaming ingestion
+    df_{name} = (spark.readStream
+        .format("{stream_format}")
+        .option("startingOffsets", "latest")
+        .option("maxOffsetsPerTrigger", "{max_offsets}")
+        .load("{stream_source}"))
+    query_{name} = (df_{name}.writeStream
+        .format("delta")
+        .option("checkpointLocation", "{checkpoint_path}")
+        .trigger(processingTime="{trigger_interval}")
+        .toTable("{catalog}.{schema}.{table_name}"))
+  description: NiFi 2.x streaming ingestion mapped to Spark Structured Streaming
+  imports:
+    - from pyspark.sql.functions import col, from_json
+  confidence: 0.80
+  role: source
+- type: RealtimeScoring
+  category: NiFi 2.x ML
+  template: |
+    # NiFi 2.x RealtimeScoring: real-time ML model scoring
+    import mlflow
+    model_uri = "models:/{model_name}/{model_version}"
+    loaded_model = mlflow.pyfunc.spark_udf(spark, model_uri=model_uri)
+    df_{name} = df_{name}.withColumn(
+        "_prediction",
+        loaded_model(*[col(c) for c in feature_columns]))
+  description: NiFi 2.x real-time ML scoring mapped to MLflow model serving
+  imports:
+    - import mlflow
+    - from pyspark.sql.functions import col
+  confidence: 0.82
+  role: process

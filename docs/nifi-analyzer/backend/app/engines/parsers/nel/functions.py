@@ -6,11 +6,10 @@ and nel/variable-context.js.
 
 from __future__ import annotations
 
+import logging
 import re
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    pass
+logger = logging.getLogger(__name__)
 
 # ----------------------------------------------------------------
 # Variable context classification (from variable-context.js)
@@ -322,6 +321,13 @@ def apply_nel_function(base: str, call: str, mode: str) -> str:
             return f'regexp_extract({base}, "{esc_resolved}", 0)'
         return f're.search(r"{esc_resolved}", {base})'
 
+    # In function (membership test)
+    if name_lower == "in":
+        vals = ", ".join(a.strip() for a in args)
+        if mode == "col":
+            return f"{base}.isin([{vals}])"
+        return f"({base} in [{vals}])"
+
     # Encoding functions
     if name_lower == "base64encode":
         if mode == "col":
@@ -331,4 +337,5 @@ def apply_nel_function(base: str, call: str, mode: str) -> str:
         return f"unbase64({base}).cast('string')" if mode == "col" else f"base64.b64decode(str({base})).decode()"
 
     # Unknown -> comment
+    logger.warning("Unknown NEL function: %s", call)
     return f"{base}  /* NEL: {call} */"

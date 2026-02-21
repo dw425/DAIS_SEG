@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 def parse_adf(content: bytes, filename: str) -> ParseResult:
     """Parse an Azure Data Factory ARM JSON template."""
-    data = json.loads(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {filename}: {exc}") from exc
 
     processors: list[Processor] = []
     connections: list[Connection] = []
@@ -78,8 +81,6 @@ def parse_adf(content: bytes, filename: str) -> ParseResult:
                                 relationship=",".join(conditions),
                             )
                         )
-
-                _ = act_name  # track last activity for potential future use
 
         elif "linkedServices" in rtype.lower() or rtype.endswith("/linkedServices"):
             ls_name = name.split("/")[-1] if "/" in name else name

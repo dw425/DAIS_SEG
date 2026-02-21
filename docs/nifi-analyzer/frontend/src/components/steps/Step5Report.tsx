@@ -2,6 +2,7 @@ import React from 'react';
 import { usePipelineStore } from '../../store/pipeline';
 import { useUIStore } from '../../store/ui';
 import { usePipeline } from '../../hooks/usePipeline';
+import MigrationTimeline from '../viz/MigrationTimeline';
 import type { GapItem } from '../../types/pipeline';
 
 const SEVERITY_STYLES: Record<string, string> = {
@@ -104,10 +105,13 @@ export default function Step5Report() {
             </div>
           )}
 
-          {/* Timeline */}
+          {/* Migration Timeline Visualization */}
+          <MigrationTimeline />
+
+          {/* Original timeline (kept as fallback detail) */}
           {report.estimatedTimeline && report.estimatedTimeline.length > 0 && (
             <div>
-              <h3 className="text-sm font-medium text-gray-300 mb-3">Implementation Timeline</h3>
+              <h3 className="text-sm font-medium text-gray-300 mb-3">Timeline Detail</h3>
               <div className="relative">
                 {report.estimatedTimeline.map((phase, i) => (
                   <div key={i} className="flex items-start gap-4 mb-4 last:mb-0">

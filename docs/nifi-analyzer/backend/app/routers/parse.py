@@ -12,8 +12,8 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/parse", response_model=ParseResult)
-async def parse_file(file: UploadFile) -> ParseResult:
+@router.post("/parse")
+async def parse_file(file: UploadFile) -> dict:
     """Accept an ETL definition file, detect its format, and parse it."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
@@ -24,7 +24,7 @@ async def parse_file(file: UploadFile) -> ParseResult:
 
     try:
         result = parse_flow(content, file.filename)
-        return result
+        return result.model_dump(by_alias=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

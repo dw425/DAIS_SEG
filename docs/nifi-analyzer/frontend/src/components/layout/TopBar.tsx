@@ -1,11 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/ui';
 import { usePipelineStore } from '../../store/pipeline';
 import type { ETLPlatform } from '../../types/etl';
 import { CATEGORY_COLORS } from '../../types/etl';
+import AutoRunButton from '../shared/AutoRunButton';
+import PipelineStatusBadge from './PipelineStatusBadge';
+import NotificationCenter from '../shared/NotificationCenter';
+import PresenceAvatars from '../shared/PresenceAvatars';
+import ExportPDFButton from '../shared/ExportPDFButton';
+import { useTheme } from '../../hooks/useTheme';
+import { usePresence } from '../../hooks/usePresence';
+import { getPlatforms } from '../../api/client';
 
-// Inline the platforms data; in production this would come from the API
-const PLATFORMS_DATA: ETLPlatform[] = [
+// Hardcoded fallback used until the API responds (or if it fails)
+const FALLBACK_PLATFORMS: ETLPlatform[] = [
   { id: 'nifi', name: 'Apache NiFi', formats: ['.xml', '.json', '.gz', '.zip', '.nar'], category: 'dataflow', versions: ['1.x', '2.x'] },
   { id: 'ssis', name: 'SQL Server SSIS', formats: ['.dtsx', '.ispac'], category: 'etl', versions: ['2012', '2014', '2016', '2017', '2019', '2022'] },
   { id: 'informatica', name: 'Informatica PowerCenter', formats: ['.xml', '.zip'], category: 'etl', versions: ['9.x', '10.x'] },
@@ -22,11 +30,36 @@ const PLATFORMS_DATA: ETLPlatform[] = [
 export default function TopBar() {
   const sidebarMode = useUIStore((s) => s.sidebarMode);
   const setSidebarMode = useUIStore((s) => s.setSidebarMode);
+  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  const setHelpOpen = useUIStore((s) => s.setHelpOpen);
+  const setSearchOpen = useUIStore((s) => s.setSearchOpen);
   const platform = usePipelineStore((s) => s.platform);
   const setPlatform = usePipelineStore((s) => s.setPlatform);
   const [platformOpen, setPlatformOpen] = useState(false);
+  const [platformsData, setPlatformsData] = useState<ETLPlatform[]>(FALLBACK_PLATFORMS);
 
-  const currentPlatform = PLATFORMS_DATA.find((p) => p.id === platform);
+  useEffect(() => {
+    getPlatforms()
+      .then((res) => {
+        if (Array.isArray(res.platforms) && res.platforms.length > 0) {
+          setPlatformsData(res.platforms as ETLPlatform[]);
+        }
+      })
+      .catch(() => {
+        // Keep using fallback platforms
+      });
+  }, []);
+
+  const { mode: themeMode, setMode: setThemeMode } = useTheme();
+  const { users: presenceUsers, connected: presenceConnected } = usePresence();
+
+  const cycleTheme = () => {
+    const modes: Array<'light' | 'dark' | 'system'> = ['dark', 'light', 'system'];
+    const idx = modes.indexOf(themeMode);
+    setThemeMode(modes[(idx + 1) % modes.length]);
+  };
+
+  const currentPlatform = platformsData.find((p) => p.id === platform);
 
   return (
     <header className="h-14 shrink-0 bg-gray-900/80 border-b border-border backdrop-blur-sm flex items-center px-4 gap-4 z-30">
@@ -73,7 +106,7 @@ export default function TopBar() {
               >
                 Auto-detect
               </button>
-              {PLATFORMS_DATA.map((p) => (
+              {platformsData.map((p) => (
                 <button
                   key={p.id}
                   onClick={() => { setPlatform(p.id); setPlatformOpen(false); }}
@@ -93,14 +126,64 @@ export default function TopBar() {
         )}
       </div>
 
+      {/* Auto-Run Button */}
+      <AutoRunButton />
+
       {/* Spacer */}
       <div className="flex-1" />
+
+      {/* Pipeline Status Badge */}
+      <PipelineStatusBadge />
+
+      {/* Search button */}
+      <button
+        onClick={() => setSearchOpen(true)}
+        className="p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition"
+        title="Search (Ctrl+K)"
+        aria-label="Open search overlay (Ctrl+K)"
+      >
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+      </button>
+
+      {/* Notification Center */}
+      <NotificationCenter />
+
+      {/* Presence Avatars */}
+      <PresenceAvatars users={presenceUsers} connected={presenceConnected} />
+
+      {/* PDF Export */}
+      <ExportPDFButton />
+
+      {/* Theme toggle */}
+      <button
+        onClick={cycleTheme}
+        className="p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition"
+        title={`Theme: ${themeMode}`}
+        aria-label={`Current theme: ${themeMode}. Click to change.`}
+      >
+        {themeMode === 'dark' ? (
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+          </svg>
+        ) : themeMode === 'light' ? (
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+        ) : (
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+          </svg>
+        )}
+      </button>
 
       {/* Layout toggle */}
       <button
         onClick={() => setSidebarMode(!sidebarMode)}
         className="p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition"
         title={sidebarMode ? 'Switch to tab layout' : 'Switch to sidebar layout'}
+        aria-label={sidebarMode ? 'Switch to tab layout' : 'Switch to sidebar layout'}
       >
         {sidebarMode ? (
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -113,8 +196,25 @@ export default function TopBar() {
         )}
       </button>
 
+      {/* Help */}
+      <button
+        onClick={() => setHelpOpen(true)}
+        className="p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition"
+        title="Help"
+        aria-label="Open help panel"
+      >
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </button>
+
       {/* Settings */}
-      <button className="p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition">
+      <button
+        onClick={() => setSettingsOpen(true)}
+        className="p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition"
+        title="Settings"
+        aria-label="Open settings panel"
+      >
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />

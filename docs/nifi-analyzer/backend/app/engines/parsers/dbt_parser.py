@@ -38,8 +38,6 @@ def _parse_manifest(data: dict, filename: str) -> ParseResult:
 
     nodes = data.get("nodes", {})
     sources = data.get("sources", {})
-    _ = data.get("macros", {})  # reserved for future macro support
-
     # Track schemas as process groups
     schemas: set[str] = set()
 

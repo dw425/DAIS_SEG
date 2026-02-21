@@ -2,6 +2,7 @@ import React from 'react';
 import { usePipelineStore } from '../../store/pipeline';
 import { useUIStore } from '../../store/ui';
 import { useProgress } from '../../hooks/useProgress';
+import VizDashboard from '../viz/VizDashboard';
 
 function ScoreRing({ value, label, color }: { value: number; label: string; color: string }) {
   const radius = 36;
@@ -34,8 +35,22 @@ export default function SummaryPage() {
   const stepStatuses = useUIStore((s) => s.stepStatuses);
   const { percent } = useProgress();
 
-  const confidenceScore = assessment?.overallConfidence ?? 0;
-  const validationScore = validation?.overallScore ?? 0;
+  const mappedCount = assessment?.mappings.filter((m) => m.mapped).length ?? 0;
+  const totalCount = assessment?.mappings.length ?? 1;
+  const confidenceScore = totalCount > 0 ? Math.round((mappedCount / totalCount) * 100) : 0;
+  const rawValScore = validation?.overallScore ?? 0;
+  const validationScore = rawValScore <= 1 ? Math.round(rawValScore * 100) : Math.round(rawValScore);
+
+  const baseName = (fileName || 'export').replace(/\.[^.]+$/, '');
+
+  const triggerDownload = (blob: Blob, name: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const downloadAll = () => {
     const bundle = {
@@ -44,20 +59,59 @@ export default function SummaryPage() {
       parsed,
       analysis,
       assessment,
-      notebook: notebook ? { notebookName: notebook.notebookName, cellCount: notebook.cells.length } : null,
+      notebook: notebook ? { cellCount: notebook.cells.length } : null,
       report,
       finalReport,
       validation,
       valueAnalysis,
       exportedAt: new Date().toISOString(),
     };
-    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `migration_summary_${(fileName || 'export').replace(/\.[^.]+$/, '')}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    triggerDownload(
+      new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }),
+      `migration_summary_${baseName}.json`,
+    );
+  };
+
+  const downloadNotebook = () => {
+    if (!notebook) return;
+    const content = JSON.stringify({
+      nbformat: 4,
+      nbformat_minor: 5,
+      metadata: { kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' } },
+      cells: notebook.cells.map((c) => ({
+        cell_type: c.type,
+        source: c.source.split('\n'),
+        metadata: {},
+        ...(c.type === 'code' ? { outputs: [], execution_count: null } : {}),
+      })),
+    }, null, 2);
+    triggerDownload(new Blob([content], { type: 'application/json' }), `${baseName}_notebook.ipynb`);
+  };
+
+  const downloadPython = () => {
+    if (!notebook) return;
+    const pyContent = notebook.cells
+      .filter((c) => c.type === 'code')
+      .map((c) => c.source)
+      .join('\n\n# ──────────────────────────────────────\n\n');
+    triggerDownload(new Blob([pyContent], { type: 'text/plain' }), `${baseName}_notebook.py`);
+  };
+
+  const downloadReport = () => {
+    if (!report && !finalReport) return;
+    const data = { report, finalReport, exportedAt: new Date().toISOString() };
+    triggerDownload(
+      new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
+      `${baseName}_report.json`,
+    );
+  };
+
+  const downloadValidation = () => {
+    if (!validation) return;
+    triggerDownload(
+      new Blob([JSON.stringify(validation, null, 2)], { type: 'application/json' }),
+      `${baseName}_validation.json`,
+    );
   };
 
   const stepNames = ['Parse', 'Analyze', 'Assess', 'Convert', 'Report', 'Final Report', 'Validate', 'Value Analysis'];
@@ -86,6 +140,57 @@ export default function SummaryPage() {
         </button>
       </div>
 
+      {/* Download buttons */}
+      <div className="rounded-lg bg-gray-800/50 border border-border p-4">
+        <h3 className="text-sm font-medium text-gray-300 mb-3">Downloads</h3>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={downloadNotebook}
+            disabled={!notebook}
+            className="px-3 py-2 rounded-lg bg-green-600/80 text-white text-xs font-medium
+              hover:bg-green-500 disabled:opacity-30 disabled:cursor-not-allowed transition flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Notebook (.ipynb)
+          </button>
+          <button
+            onClick={downloadPython}
+            disabled={!notebook}
+            className="px-3 py-2 rounded-lg bg-blue-600/80 text-white text-xs font-medium
+              hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed transition flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+            </svg>
+            Notebook (.py)
+          </button>
+          <button
+            onClick={downloadReport}
+            disabled={!report && !finalReport}
+            className="px-3 py-2 rounded-lg bg-purple-600/80 text-white text-xs font-medium
+              hover:bg-purple-500 disabled:opacity-30 disabled:cursor-not-allowed transition flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Migration Report
+          </button>
+          <button
+            onClick={downloadValidation}
+            disabled={!validation}
+            className="px-3 py-2 rounded-lg bg-amber-600/80 text-white text-xs font-medium
+              hover:bg-amber-500 disabled:opacity-30 disabled:cursor-not-allowed transition flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Validation Report
+          </button>
+        </div>
+      </div>
+
       {/* Progress */}
       <div className="rounded-lg bg-gray-800/50 border border-border p-4">
         <div className="flex items-center justify-between mb-2">
@@ -106,6 +211,9 @@ export default function SummaryPage() {
         <ScoreRing value={validationScore} label="Validation" color={validationScore >= 90 ? '#22c55e' : validationScore >= 70 ? '#eab308' : '#ef4444'} />
         <ScoreRing value={percent} label="Completion" color="#FF4B4B" />
       </div>
+
+      {/* Visual Dashboard */}
+      <VizDashboard />
 
       {/* Step status grid */}
       <div>
@@ -138,16 +246,16 @@ export default function SummaryPage() {
         <h3 className="text-sm font-medium text-gray-300 mb-3">Key Outputs</h3>
         <div className="space-y-2">
           {analysis && (
-            <OutputRow label="Analysis" detail={`${analysis.processorCount} processors, complexity ${analysis.complexityScore}`} />
+            <OutputRow label="Analysis" detail={`${analysis.externalSystems.length} external systems, ${analysis.cycles.length} cycles`} />
           )}
           {assessment && (
-            <OutputRow label="Assessment" detail={`${assessment.supportedCount} supported, ${assessment.unsupportedCount} unsupported, ${assessment.overallConfidence}% confidence`} />
+            <OutputRow label="Assessment" detail={`${mappedCount} mapped, ${assessment.unmappedCount} unmapped`} />
           )}
           {notebook && (
-            <OutputRow label="Notebook" detail={`${notebook.notebookName} -- ${notebook.cells.length} cells`} />
+            <OutputRow label="Notebook" detail={`${notebook.cells.length} cells`} />
           )}
           {validation && (
-            <OutputRow label="Validation" detail={`Score: ${validation.overallScore}, ${validation.passed ? 'PASSED' : 'NEEDS WORK'}, ${validation.gaps.length} gaps`} />
+            <OutputRow label="Validation" detail={`Score: ${validationScore}%, ${validation.gaps.length} gaps, ${validation.errors.length} errors`} />
           )}
           {valueAnalysis && (
             <OutputRow

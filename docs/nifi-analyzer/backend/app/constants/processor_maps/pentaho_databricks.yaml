@@ -1,248 +1,486 @@
-# Pentaho Data Integration (Kettle/PDI) -> Databricks PySpark Mapping
-# Maps Pentaho transformation steps to PySpark equivalents
-
 mappings:
-  - type: "Table Input"
-    category: "JDBC Source"
-    template: |
-      df_{name} = (spark.read
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
-          .option("dbtable", "({sql}) subq")
-          .option("driver", "{driver}")
-          .option("user", dbutils.secrets.get(scope="{scope}", key="db-user"))
-          .option("password", dbutils.secrets.get(scope="{scope}", key="db-pass"))
-          .load())
-    description: "Table Input step via JDBC query"
-    imports: []
-    confidence: 0.92
-    role: "source"
+- type: Table Input
+  category: JDBC Source
+  template: "df_{name} = (spark.read\n    .format(\"jdbc\")\n    .option(\"url\", dbutils.secrets.get(scope=\"{scope}\", key=\"\
+    jdbc-url\"))\n    .option(\"dbtable\", \"({sql}) subq\")\n    .option(\"driver\", \"{driver}\")\n    .option(\"user\"\
+    , dbutils.secrets.get(scope=\"{scope}\", key=\"db-user\"))\n    .option(\"password\", dbutils.secrets.get(scope=\"{scope}\"\
+    , key=\"db-pass\"))\n    .load())\n"
+  description: Table Input step via JDBC query
+  imports: []
+  confidence: 0.92
+  role: source
+- type: CSV File Input
+  category: File Read
+  template: "df_{name} = (spark.read\n    .format(\"csv\")\n    .option(\"header\", \"true\")\n    .option(\"delimiter\",\
+    \ \"{delimiter}\")\n    .option(\"inferSchema\", \"true\")\n    .option(\"encoding\", \"{encoding}\")\n    .load(\"/Volumes/{catalog}/{schema}/landing/{filename}\"\
+    ))\n"
+  description: CSV file input from Volumes
+  imports: []
+  confidence: 0.92
+  role: source
+- type: Text File Input
+  category: File Read
+  template: "df_{name} = (spark.read\n    .format(\"csv\")\n    .option(\"header\", \"{header}\")\n    .option(\"delimiter\"\
+    , \"{separator}\")\n    .option(\"inferSchema\", \"true\")\n    .load(\"/Volumes/{catalog}/{schema}/landing/{filename}\"\
+    ))\n"
+  description: Text file input (fixed-width or delimited)
+  imports: []
+  confidence: 0.9
+  role: source
+- type: JSON Input
+  category: JSON Read
+  template: 'df_{name} = spark.read.json("/Volumes/{catalog}/{schema}/landing/{filename}")
 
-  - type: "CSV File Input"
-    category: "File Read"
-    template: |
-      df_{name} = (spark.read
-          .format("csv")
-          .option("header", "true")
-          .option("delimiter", "{delimiter}")
-          .option("inferSchema", "true")
-          .option("encoding", "{encoding}")
-          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
-    description: "CSV file input from Volumes"
-    imports: []
-    confidence: 0.92
-    role: "source"
+    '
+  description: JSON file input
+  imports: []
+  confidence: 0.92
+  role: source
+- type: XML Input
+  category: XML Read
+  template: "df_{name} = (spark.read\n    .format(\"com.databricks.spark.xml\")\n    .option(\"rowTag\", \"{row_tag}\")\n\
+    \    .load(\"/Volumes/{catalog}/{schema}/landing/{filename}\"))\n"
+  description: XML file input via spark-xml
+  imports: []
+  confidence: 0.88
+  role: source
+- type: Sort Rows
+  category: DataFrame API
+  template: "df_{name} = df_{input}.orderBy(\n    col(\"{sort_field_1}\").asc(),\n    col(\"{sort_field_2}\").desc())\n"
+  description: Sort rows by multiple columns
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.95
+  role: transform
+- type: Select Values
+  category: DataFrame Select
+  template: "df_{name} = (df_{input}\n    .select(\n        col(\"{field_1}\").alias(\"{rename_1}\"),\n        col(\"{field_2}\"\
+    ).cast(\"{type_2}\").alias(\"{rename_2}\"))\n    .drop(\"{remove_field}\"))\n"
+  description: Select, rename, retype, and remove fields
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.92
+  role: transform
+- type: Filter Rows
+  category: DataFrame Filter
+  template: 'df_{name} = df_{input}.filter("{condition}")
 
-  - type: "Text File Input"
-    category: "File Read"
-    template: |
-      df_{name} = (spark.read
-          .format("csv")
-          .option("header", "{header}")
-          .option("delimiter", "{separator}")
-          .option("inferSchema", "true")
-          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
-    description: "Text file input (fixed-width or delimited)"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    '
+  description: Filter rows by condition
+  imports: []
+  confidence: 0.95
+  role: route
+- type: Calculator
+  category: DataFrame API
+  template: "df_{name} = (df_{input}\n    .withColumn(\"{result_field}\", expr(\"{calculation}\")))\n"
+  description: Calculator step via withColumn + expr
+  imports:
+  - from pyspark.sql.functions import expr
+  confidence: 0.9
+  role: transform
+- type: String Operations
+  category: DataFrame API
+  template: "df_{name} = (df_{input}\n    .withColumn(\"{field}\", trim(col(\"{field}\")))\n    .withColumn(\"{field}\", upper(col(\"\
+    {field}\")))\n    .withColumn(\"{field}\", regexp_replace(col(\"{field}\"), \"{pattern}\", \"{replacement}\")))\n"
+  description: String operations via PySpark string functions
+  imports:
+  - from pyspark.sql.functions import trim, upper, lower, regexp_replace, col
+  confidence: 0.92
+  role: transform
+- type: Join Rows
+  category: DataFrame Join
+  template: "df_{name} = df_{input_1}.join(\n    df_{input_2},\n    on=df_{input_1}[\"{key_1}\"] == df_{input_2}[\"{key_2}\"\
+    ],\n    how=\"{join_type}\")\n"
+  description: Join rows from two streams
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: Merge Join
+  category: DataFrame Join
+  template: "df_{name} = df_{input_1}.join(\n    df_{input_2},\n    on=\"{join_key}\",\n    how=\"{join_type}\")\n"
+  description: Sorted merge join
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: Group By
+  category: DataFrame API
+  template: "df_{name} = (df_{input}\n    .groupBy(\"{group_field}\")\n    .agg(\n        count(\"*\").alias(\"count\"),\n\
+    \        sum(\"{agg_field}\").alias(\"sum_{agg_field}\"),\n        avg(\"{agg_field}\").alias(\"avg_{agg_field}\")))\n"
+  description: Group by with aggregate functions
+  imports:
+  - from pyspark.sql.functions import count, sum, avg
+  confidence: 0.92
+  role: transform
+- type: Unique Rows
+  category: DataFrame API
+  template: 'df_{name} = df_{input}.dropDuplicates(["{key_field}"])
 
-  - type: "JSON Input"
-    category: "JSON Read"
-    template: |
-      df_{name} = spark.read.json("/Volumes/{catalog}/{schema}/landing/{filename}")
-    description: "JSON file input"
-    imports: []
-    confidence: 0.92
-    role: "source"
+    '
+  description: Remove duplicate rows
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: Table Output
+  category: Delta Write
+  template: "(df_{input}.write\n    .format(\"delta\")\n    .mode(\"{truncate_table}\")\n    .saveAsTable(\"{catalog}.{schema}.{target_table}\"\
+    ))\n"
+  description: Table output to Delta Lake
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: Insert / Update
+  category: Delta MERGE
+  template: "from delta.tables import DeltaTable\n_target = DeltaTable.forName(spark, \"{catalog}.{schema}.{table}\")\n_target.alias(\"\
+    t\").merge(\n    df_{input}.alias(\"s\"),\n    \"t.{key_field} = s.{key_field}\"\n).whenMatchedUpdateAll(\n).whenNotMatchedInsertAll(\n\
+    ).execute()\n"
+  description: Insert/Update via Delta MERGE upsert
+  imports:
+  - from delta.tables import DeltaTable
+  confidence: 0.92
+  role: sink
+- type: Text File Output
+  category: File Write
+  template: "(df_{input}.write\n    .format(\"csv\")\n    .option(\"header\", \"{header}\")\n    .option(\"delimiter\", \"\
+    {separator}\")\n    .mode(\"overwrite\")\n    .save(\"/Volumes/{catalog}/{schema}/output/{filename}\"))\n"
+  description: Text file output to Volumes
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: Switch / Case
+  category: DataFrame Filter
+  template: "df_{name}_case1 = df_{input}.filter(\"{condition_1}\")\ndf_{name}_case2 = df_{input}.filter(\"{condition_2}\"\
+    )\ndf_{name}_default = df_{input}.filter(\n    \"NOT ({condition_1}) AND NOT ({condition_2})\")\n"
+  description: Switch/Case via multiple DataFrame filters
+  imports: []
+  confidence: 0.9
+  role: route
+- type: Add Sequence
+  category: DataFrame API
+  template: "from pyspark.sql.functions import monotonically_increasing_id\ndf_{name} = df_{input}.withColumn(\"{valuename}\"\
+    ,\n    monotonically_increasing_id() + {start_at})\n"
+  description: Add sequence number via monotonically_increasing_id
+  imports:
+  - from pyspark.sql.functions import monotonically_increasing_id
+  confidence: 0.9
+  role: transform
+- type: Row Denormaliser
+  category: DataFrame Pivot
+  template: "df_{name} = (df_{input}\n    .groupBy(\"{group_field}\")\n    .pivot(\"{key_field}\")\n    .agg(first(\"{value_field}\"\
+    )))\n"
+  description: Row denormalizer via pivot
+  imports:
+  - from pyspark.sql.functions import first
+  confidence: 0.88
+  role: transform
+- type: Stream Lookup
+  category: Broadcast Join
+  template: "from pyspark.sql.functions import broadcast\ndf_{name} = df_{input}.join(\n    broadcast(df_{lookup}),\n    on='{join_key}',\n\
+    \    how='left')\n"
+  description: Stream Lookup as broadcast hash join
+  imports:
+  - from pyspark.sql.functions import broadcast
+  confidence: 0.92
+  role: transform
+- type: Database Join
+  category: JDBC Join
+  template: "df_{lookup} = (spark.read\n    .format('jdbc')\n    .option('url', '{jdbc_url}')\n    .option('dbtable', '({sql})\
+    \ t')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='db-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}',\
+    \ key='db-pass'))\n    .load())\ndf_{name} = df_{input}.join(df_{lookup}, on='{join_key}', how='left')\n"
+  description: Database Join as JDBC read + DataFrame join
+  imports: []
+  confidence: 0.88
+  role: transform
+- type: Row Normaliser
+  category: Unpivot
+  template: "# Pentaho Row Normaliser -> Spark stack/unpivot\ndf_{name} = spark.sql(\"\"\"\n    SELECT {id_cols},\n      \
+    \     stack({n_cols}, {stack_expressions}) AS (field_name, value)\n    FROM {{df_{input}.createOrReplaceTempView('_norm_input');\
+    \ '_norm_input'}}\n\"\"\")\n"
+  description: Row Normaliser as Spark SQL stack unpivot
+  imports: []
+  confidence: 0.85
+  role: transform
+- type: Row Flattener
+  category: Collect to Row
+  template: "from pyspark.sql.functions import collect_list, first\ndf_{name} = (df_{input}\n    .groupBy('{group_key}')\n\
+    \    .agg(*[collect_list('{col}').alias('{col}_list') for col in [{flatten_cols}]]))\n"
+  description: Row Flattener as collect_list aggregation
+  imports:
+  - from pyspark.sql.functions import collect_list, first
+  confidence: 0.82
+  role: transform
+- type: Regex Evaluation
+  category: Regex Extract
+  template: "from pyspark.sql.functions import regexp_extract, col\ndf_{name} = df_{input}.withColumn(\n    '{output_col}',\n\
+    \    regexp_extract(col('{input_col}'), r'{pattern}', {group}))\n"
+  description: Regex Evaluation as regexp_extract
+  imports:
+  - from pyspark.sql.functions import regexp_extract, col
+  confidence: 0.92
+  role: transform
+- type: Replace in String
+  category: String Replace
+  template: "from pyspark.sql.functions import regexp_replace, col\ndf_{name} = df_{input}.withColumn(\n    '{column}',\n\
+    \    regexp_replace(col('{column}'), r'{pattern}', '{replacement}'))\n"
+  description: Replace in String as regexp_replace
+  imports:
+  - from pyspark.sql.functions import regexp_replace, col
+  confidence: 0.95
+  role: transform
+- type: Split Field
+  category: String Split
+  template: "from pyspark.sql.functions import split, col\n_parts = split(col('{input_col}'), '{delimiter}')\ndf_{name} =\
+    \ df_{input}\nfor _i, _col_name in enumerate([{output_cols}]):\n    df_{name} = df_{name}.withColumn(_col_name, _parts[_i])\n"
+  description: Split Field as split + array indexing
+  imports:
+  - from pyspark.sql.functions import split, col
+  confidence: 0.92
+  role: transform
+- type: Concat Fields
+  category: String Concat
+  template: "from pyspark.sql.functions import concat_ws, col\ndf_{name} = df_{input}.withColumn(\n    '{output_col}',\n \
+    \   concat_ws('{separator}', *[col(c) for c in [{input_cols}]]))\n"
+  description: Concat Fields as concat_ws
+  imports:
+  - from pyspark.sql.functions import concat_ws, col
+  confidence: 0.95
+  role: transform
+- type: Set Field Value
+  category: Column Set
+  template: "from pyspark.sql.functions import when, col, lit\ndf_{name} = df_{input}.withColumn(\n    '{field}',\n    when({condition},\
+    \ {true_value}).otherwise(col('{field}')))\n"
+  description: Set Field Value as conditional withColumn
+  imports:
+  - from pyspark.sql.functions import when, col, lit
+  confidence: 0.9
+  role: transform
+- type: Get Variables
+  category: Widget Read
+  template: '# Pentaho Get Variables -> Databricks widgets
 
-  - type: "XML Input"
-    category: "XML Read"
-    template: |
-      df_{name} = (spark.read
-          .format("com.databricks.spark.xml")
-          .option("rowTag", "{row_tag}")
-          .load("/Volumes/{catalog}/{schema}/landing/{filename}"))
-    description: "XML file input via spark-xml"
-    imports: []
-    confidence: 0.88
-    role: "source"
+    _{var_name} = dbutils.widgets.get(''{var_name}'')
 
-  - type: "Sort Rows"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.orderBy(
-          col("{sort_field_1}").asc(),
-          col("{sort_field_2}").desc())
-    description: "Sort rows by multiple columns"
-    imports: ["from pyspark.sql.functions import col"]
-    confidence: 0.95
-    role: "transform"
+    print(f''[VAR] {var_name} = {{_{var_name}}}'')
 
-  - type: "Select Values"
-    category: "DataFrame Select"
-    template: |
-      df_{name} = (df_{input}
-          .select(
-              col("{field_1}").alias("{rename_1}"),
-              col("{field_2}").cast("{type_2}").alias("{rename_2}"))
-          .drop("{remove_field}"))
-    description: "Select, rename, retype, and remove fields"
-    imports: ["from pyspark.sql.functions import col"]
-    confidence: 0.92
-    role: "transform"
+    '
+  description: Get Variables as Databricks widget parameters
+  imports: []
+  confidence: 0.9
+  role: utility
+- type: Set Variables
+  category: Widget Set
+  template: '# Pentaho Set Variables -> Databricks widgets
 
-  - type: "Filter Rows"
-    category: "DataFrame Filter"
-    template: |
-      df_{name} = df_{input}.filter("{condition}")
-    description: "Filter rows by condition"
-    imports: []
-    confidence: 0.95
-    role: "route"
+    dbutils.widgets.text(''{var_name}'', str({value}))
 
-  - type: "Calculator"
-    category: "DataFrame API"
-    template: |
-      df_{name} = (df_{input}
-          .withColumn("{result_field}", expr("{calculation}")))
-    description: "Calculator step via withColumn + expr"
-    imports: ["from pyspark.sql.functions import expr"]
-    confidence: 0.90
-    role: "transform"
+    print(f''[VAR] Set {var_name}'')
 
-  - type: "String Operations"
-    category: "DataFrame API"
-    template: |
-      df_{name} = (df_{input}
-          .withColumn("{field}", trim(col("{field}")))
-          .withColumn("{field}", upper(col("{field}")))
-          .withColumn("{field}", regexp_replace(col("{field}"), "{pattern}", "{replacement}")))
-    description: "String operations via PySpark string functions"
-    imports: ["from pyspark.sql.functions import trim, upper, lower, regexp_replace, col"]
-    confidence: 0.92
-    role: "transform"
+    '
+  description: Set Variables as Databricks widget parameters
+  imports: []
+  confidence: 0.9
+  role: utility
+- type: Copy Rows
+  category: DataFrame Copy
+  template: 'df_{name} = df_{input}.alias(''{name}'')
 
-  - type: "Join Rows"
-    category: "DataFrame Join"
-    template: |
-      df_{name} = df_{input_1}.join(
-          df_{input_2},
-          on=df_{input_1}["{key_1}"] == df_{input_2}["{key_2}"],
-          how="{join_type}")
-    description: "Join rows from two streams"
-    imports: []
-    confidence: 0.92
-    role: "transform"
+    print(f''[COPY] {{df_{name}.count()}} rows'')
 
-  - type: "Merge Join"
-    category: "DataFrame Join"
-    template: |
-      df_{name} = df_{input_1}.join(
-          df_{input_2},
-          on="{join_key}",
-          how="{join_type}")
-    description: "Sorted merge join"
-    imports: []
-    confidence: 0.92
-    role: "transform"
+    '
+  description: Copy Rows as DataFrame alias
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: Block Until Complete
+  category: Synchronization
+  template: '# Pentaho Block Until Complete -> sequential execution
 
-  - type: "Group By"
-    category: "DataFrame API"
-    template: |
-      df_{name} = (df_{input}
-          .groupBy("{group_field}")
-          .agg(
-              count("*").alias("count"),
-              sum("{agg_field}").alias("sum_{agg_field}"),
-              avg("{agg_field}").alias("avg_{agg_field}")))
-    description: "Group by with aggregate functions"
-    imports: ["from pyspark.sql.functions import count, sum, avg"]
-    confidence: 0.92
-    role: "transform"
+    # In Databricks notebooks, cells execute sequentially by default
 
-  - type: "Unique Rows"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.dropDuplicates(["{key_field}"])
-    description: "Remove duplicate rows"
-    imports: []
-    confidence: 0.95
-    role: "transform"
+    print(''[BLOCK] Previous steps complete, proceeding'')
 
-  - type: "Table Output"
-    category: "Delta Write"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("{truncate_table}")
-          .saveAsTable("{catalog}.{schema}.{target_table}"))
-    description: "Table output to Delta Lake"
-    imports: []
-    confidence: 0.92
-    role: "sink"
+    '
+  description: Block Until Complete handled by sequential notebook cells
+  imports: []
+  confidence: 0.92
+  role: utility
+- type: Dummy
+  category: No-op
+  template: '# Pentaho Dummy step -> no-op pass-through
 
-  - type: "Insert / Update"
-    category: "Delta MERGE"
-    template: |
-      from delta.tables import DeltaTable
-      _target = DeltaTable.forName(spark, "{catalog}.{schema}.{table}")
-      _target.alias("t").merge(
-          df_{input}.alias("s"),
-          "t.{key_field} = s.{key_field}"
-      ).whenMatchedUpdateAll(
-      ).whenNotMatchedInsertAll(
-      ).execute()
-    description: "Insert/Update via Delta MERGE upsert"
-    imports: ["from delta.tables import DeltaTable"]
-    confidence: 0.92
-    role: "sink"
+    df_{name} = df_{input}  # pass-through
 
-  - type: "Text File Output"
-    category: "File Write"
-    template: |
-      (df_{input}.write
-          .format("csv")
-          .option("header", "{header}")
-          .option("delimiter", "{separator}")
-          .mode("overwrite")
-          .save("/Volumes/{catalog}/{schema}/output/{filename}"))
-    description: "Text file output to Volumes"
-    imports: []
-    confidence: 0.92
-    role: "sink"
+    '
+  description: Dummy step as pass-through (no operation)
+  imports: []
+  confidence: 0.95
+  role: utility
+- type: Abort
+  category: Error
+  template: '# Pentaho Abort step -> raise exception
 
-  - type: "Switch / Case"
-    category: "DataFrame Filter"
-    template: |
-      df_{name}_case1 = df_{input}.filter("{condition_1}")
-      df_{name}_case2 = df_{input}.filter("{condition_2}")
-      df_{name}_default = df_{input}.filter(
-          "NOT ({condition_1}) AND NOT ({condition_2})")
-    description: "Switch/Case via multiple DataFrame filters"
-    imports: []
-    confidence: 0.90
-    role: "route"
+    raise Exception(''[ABORT] Pipeline aborted: {message}'')
 
-  - type: "Add Sequence"
-    category: "DataFrame API"
-    template: |
-      from pyspark.sql.functions import monotonically_increasing_id
-      df_{name} = df_{input}.withColumn("{valuename}",
-          monotonically_increasing_id() + {start_at})
-    description: "Add sequence number via monotonically_increasing_id"
-    imports: ["from pyspark.sql.functions import monotonically_increasing_id"]
-    confidence: 0.90
-    role: "transform"
+    '
+  description: Abort step as Python exception raise
+  imports: []
+  confidence: 0.95
+  role: utility
+- type: Write to Log
+  category: Logging
+  template: "print(f'[LOG] {log_message}')\nif df_{input} is not None:\n    print(f'[LOG] Row count: {{df_{input}.count()}}')\n\
+    \    df_{input}.show({num_rows}, truncate=False)\n"
+  description: Write to Log as print + df.show
+  imports: []
+  confidence: 0.92
+  role: utility
+- type: Mail
+  category: Email
+  template: "import smtplib\nfrom email.mime.text import MIMEText\n_msg = MIMEText('{body}')\n_msg['Subject'] = '{subject}'\n\
+    _msg['To'] = '{to}'\n_smtp = smtplib.SMTP('{smtp_server}', {smtp_port})\n_smtp.starttls()\n_smtp.login(dbutils.secrets.get(scope='{scope}',\
+    \ key='email-user'),\n            dbutils.secrets.get(scope='{scope}', key='email-pass'))\n_smtp.send_message(_msg)\n\
+    _smtp.quit()\nprint('[MAIL] Sent')\n"
+  description: Mail step as smtplib email send
+  imports:
+  - import smtplib
+  - from email.mime.text import MIMEText
+  confidence: 0.85
+  role: utility
+- type: HTTP Client
+  category: HTTP Request
+  template: "import requests\n_response = requests.request(\n    method='{method}',\n    url='{url}',\n    headers={headers},\n\
+    \    timeout=60)\n_response.raise_for_status()\ndf_{name} = spark.createDataFrame([_response.json()])\n"
+  description: HTTP Client as requests call with DataFrame result
+  imports:
+  - import requests
+  confidence: 0.85
+  role: source
+- type: REST Client
+  category: REST API
+  template: "import requests\n_response = requests.request(\n    method='{method}',\n    url='{url}',\n    headers={headers},\n\
+    \    json={body},\n    timeout=60)\n_response.raise_for_status()\ndf_{name} = spark.read.json(spark.sparkContext.parallelize([_response.text]))\n"
+  description: REST Client as requests call with JSON parse
+  imports:
+  - import requests
+  confidence: 0.85
+  role: source
+- type: JSON Output
+  category: JSON Write
+  template: 'df_{input}.write.format(''json'').mode(''overwrite'').save(''/Volumes/{catalog}/{schema}/output/{filename}'')
 
-  - type: "Row Denormaliser"
-    category: "DataFrame Pivot"
-    template: |
-      df_{name} = (df_{input}
-          .groupBy("{group_field}")
-          .pivot("{key_field}")
-          .agg(first("{value_field}")))
-    description: "Row denormalizer via pivot"
-    imports: ["from pyspark.sql.functions import first"]
-    confidence: 0.88
-    role: "transform"
+    print(''[JSON] Written'')
+
+    '
+  description: JSON Output as Spark JSON file write
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: Excel Input
+  category: Excel Read
+  template: '# Pentaho Excel Input -> spark-excel or pandas
+
+    import pandas as pd
+
+    _pdf = pd.read_excel(''/Volumes/{catalog}/{schema}/landing/{filename}'', sheet_name=''{sheet}'')
+
+    df_{name} = spark.createDataFrame(_pdf)
+
+    '
+  description: Excel Input via pandas read_excel
+  imports:
+  - import pandas as pd
+  confidence: 0.85
+  role: source
+- type: Excel Output
+  category: Excel Write
+  template: '# Pentaho Excel Output -> pandas to_excel
+
+    import pandas as pd
+
+    _pdf = df_{input}.toPandas()
+
+    _pdf.to_excel(''/Volumes/{catalog}/{schema}/output/{filename}'', index=False, sheet_name=''{sheet}'')
+
+    print(''[EXCEL] Written'')
+
+    '
+  description: Excel Output via pandas to_excel
+  imports:
+  - import pandas as pd
+  confidence: 0.85
+  role: sink
+- type: Value Mapper
+  category: Mapping
+  template: "from pyspark.sql.functions import when, col, lit\n_mapping = {mapping_dict}\ndf_{name} = df_{input}\n_expr =\
+    \ col('{source_col}')\nfor _k, _v in _mapping.items():\n    _expr = when(col('{source_col}') == _k, lit(_v)).otherwise(_expr)\
+    \ if _k != list(_mapping.keys())[0] else when(col('{source_col}') == _k, lit(_v))\ndf_{name} = df_{name}.withColumn('{target_col}',\
+    \ _expr)\n"
+  description: Value Mapper as chained when().otherwise() expressions
+  imports:
+  - from pyspark.sql.functions import when, col, lit
+  confidence: 0.85
+  role: transform
+- type: Number Range
+  category: Bucketing
+  template: "from pyspark.sql.functions import when, col, lit\ndf_{name} = df_{input}.withColumn('{output_col}',\n    when(col('{input_col}')\
+    \ < {threshold_1}, lit('{label_1}'))\n    .when(col('{input_col}') < {threshold_2}, lit('{label_2}'))\n    .otherwise(lit('{label_default}')))\n"
+  description: Number Range as when/otherwise bucketing
+  imports:
+  - from pyspark.sql.functions import when, col, lit
+  confidence: 0.9
+  role: transform
+- type: If Field Value Is Null
+  category: Null Check
+  template: "from pyspark.sql.functions import when, col, lit, isnull\ndf_{name} = df_{input}.withColumn('{field}',\n    when(isnull(col('{field}')),\
+    \ lit({default_value})).otherwise(col('{field}')))\n"
+  description: Null check as when(isnull) coalesce
+  imports:
+  - from pyspark.sql.functions import when, col, lit, isnull
+  confidence: 0.95
+  role: transform
+- type: Detect Empty Stream
+  category: Empty Check
+  template: "if df_{input}.count() == 0:\n    print('[EMPTY] No rows detected, skipping downstream')\n    dbutils.notebook.exit('empty_stream')\n\
+    else:\n    print(f'[STREAM] {{df_{input}.count()}} rows')\n"
+  description: Detect Empty Stream as count check
+  imports: []
+  confidence: 0.92
+  role: route
+- type: Prioritize Streams
+  category: Union Priority
+  template: "# Pentaho Prioritize Streams -> union with priority\ndf_{name} = df_{primary}\nif df_{primary}.count() == 0:\n\
+    \    df_{name} = df_{secondary}\nprint(f'[PRIORITY] Using {{\"primary\" if df_{name} is df_{primary} else \"secondary\"\
+    }} stream')\n"
+  description: Prioritize Streams as conditional union fallback
+  imports: []
+  confidence: 0.82
+  role: route
+- type: Append Streams
+  category: Union
+  template: 'df_{name} = df_{stream1}.unionByName(df_{stream2}, allowMissingColumns=True)
+
+    print(f''[APPEND] {{df_{name}.count()}} total rows'')
+
+    '
+  description: Append Streams as unionByName
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: Fuzzy Match
+  category: Approximate Join
+  template: "from pyspark.sql.functions import levenshtein, col\ndf_{name} = df_{input1}.crossJoin(df_{input2}).filter(\n\
+    \    levenshtein(col('{col1}'), col('{col2}')) <= {threshold})\n"
+  description: Fuzzy Match as Levenshtein distance filter
+  imports:
+  - from pyspark.sql.functions import levenshtein, col
+  confidence: 0.8
+  role: transform
+- type: Closure
+  category: Graph Traversal
+  template: "# Pentaho Closure -> recursive CTE or iterative join\ndf_{name} = spark.sql(\"\"\"\n    WITH RECURSIVE closure\
+    \ AS (\n        SELECT {parent_col}, {child_col}, 1 AS depth FROM {table} WHERE {root_condition}\n        UNION ALL\n\
+    \        SELECT c.{parent_col}, t.{child_col}, c.depth + 1\n        FROM closure c JOIN {table} t ON c.{child_col} = t.{parent_col}\n\
+    \        WHERE c.depth < {max_depth}\n    )\n    SELECT * FROM closure\n\"\"\")\n"
+  description: Closure as recursive CTE graph traversal
+  imports: []
+  confidence: 0.78
+  role: transform

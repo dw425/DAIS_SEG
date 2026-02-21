@@ -221,3 +221,507 @@ mappings:
     imports: []
     confidence: 0.90
     role: "utility"
+
+  # ── ADDITIONAL ADF ACTIVITIES & DATA FLOW TRANSFORMS ──
+  - type: "Copy Activity SQL Source"
+    category: "JDBC Source"
+    template: |
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="sql-jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
+          .option("user", dbutils.secrets.get(scope="{scope}", key="sql-user"))
+          .option("password", dbutils.secrets.get(scope="{scope}", key="sql-pass"))
+          .load())
+    description: "Copy Activity (SQL Source) mapped to JDBC read"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Copy Activity Blob Source"
+    category: "Cloud Source"
+    template: |
+      df_{name} = (spark.read
+          .format("{file_format}")
+          .option("header", "true")
+          .load("wasbs://{container}@{account}.blob.core.windows.net/{path}"))
+    description: "Copy Activity (Blob Source) via wasbs:// path"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "Copy Activity ADLS Source"
+    category: "Cloud Source"
+    template: |
+      df_{name} = (spark.read
+          .format("{file_format}")
+          .option("header", "true")
+          .load("abfss://{container}@{account}.dfs.core.windows.net/{path}"))
+    description: "Copy Activity (ADLS Gen2 Source) via abfss:// path"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Copy Activity Cosmos Source"
+    category: "NoSQL Source"
+    template: |
+      df_{name} = (spark.read
+          .format("cosmos.oltp")
+          .option("spark.cosmos.accountEndpoint", dbutils.secrets.get(scope="{scope}", key="cosmos-endpoint"))
+          .option("spark.cosmos.accountKey", dbutils.secrets.get(scope="{scope}", key="cosmos-key"))
+          .option("spark.cosmos.database", "{database}")
+          .option("spark.cosmos.container", "{container}")
+          .load())
+    description: "Copy Activity (Cosmos Source) via spark-cosmos connector"
+    imports: []
+    confidence: 0.85
+    role: "source"
+
+  - type: "Copy Activity HTTP Source"
+    category: "HTTP Source"
+    template: |
+      import requests
+      response = requests.get("{url}", headers={headers})
+      import json
+      data = response.json()
+      df_{name} = spark.createDataFrame(data if isinstance(data, list) else [data])
+    description: "Copy Activity (HTTP Source) via requests library"
+    imports: ["import requests", "import json"]
+    confidence: 0.72
+    role: "source"
+
+  - type: "Mapping Data Flow Source"
+    category: "Spark Read"
+    template: |
+      df_{name} = (spark.read
+          .format("{source_format}")
+          .option("header", "true")
+          .load("{source_path}"))
+    description: "Mapping Data Flow Source via spark.read"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "Mapping Data Flow Sink"
+    category: "Delta Sink"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("{write_mode}")
+          .option("mergeSchema", "true")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Mapping Data Flow Sink to Delta table"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "Mapping Data Flow Filter"
+    category: "DataFrame Filter"
+    template: |
+      df_{name} = df_{input}.filter("{filter_expression}")
+    description: "Data Flow Filter via DataFrame.filter()"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Mapping Data Flow Join"
+    category: "DataFrame Join"
+    template: |
+      df_{name} = df_{left}.join(df_{right}, col("{left_key}") == col("{right_key}"), "{join_type}")
+    description: "Data Flow Join via DataFrame.join()"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Mapping Data Flow Union"
+    category: "DataFrame Union"
+    template: |
+      df_{name} = df_{input_1}.unionByName(df_{input_2}, allowMissingColumns=True)
+    description: "Data Flow Union via unionByName with schema flexibility"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Mapping Data Flow Aggregate"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import sum, avg, count, min, max
+      df_{name} = (df_{input}
+          .groupBy({group_by_cols})
+          .agg({aggregate_expressions}))
+    description: "Data Flow Aggregate via groupBy/agg"
+    imports: ["from pyspark.sql.functions import sum, avg, count, min, max"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Mapping Data Flow Pivot"
+    category: "DataFrame Pivot"
+    template: |
+      from pyspark.sql.functions import sum
+      df_{name} = (df_{input}
+          .groupBy({group_cols})
+          .pivot("{pivot_col}")
+          .agg(sum("{value_col}")))
+    description: "Data Flow Pivot via groupBy/pivot/agg"
+    imports: ["from pyspark.sql.functions import sum"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Mapping Data Flow Unpivot"
+    category: "DataFrame Unpivot"
+    template: |
+      from pyspark.sql.functions import expr
+      df_{name} = df_{input}.selectExpr(
+          *{id_cols},
+          "stack({n}, {stack_args}) as ({key_col}, {value_col})"
+      )
+    description: "Data Flow Unpivot via stack() expression"
+    imports: ["from pyspark.sql.functions import expr"]
+    confidence: 0.82
+    role: "transform"
+
+  - type: "Mapping Data Flow Window"
+    category: "DataFrame Window"
+    template: |
+      from pyspark.sql import Window
+      from pyspark.sql.functions import row_number, rank, sum, col
+      w = Window.partitionBy({partition_cols}).orderBy({order_cols})
+      df_{name} = df_{input}.withColumn("{window_col}", {window_func}.over(w))
+    description: "Data Flow Window via PySpark Window functions"
+    imports: ["from pyspark.sql import Window", "from pyspark.sql.functions import row_number, rank, sum, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Mapping Data Flow Flatten"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import explode, col
+      df_{name} = df_{input}.withColumn("{flat_col}", explode(col("{array_col}"))).select("*", "{flat_col}.*")
+    description: "Data Flow Flatten via explode for nested arrays/structs"
+    imports: ["from pyspark.sql.functions import explode, col"]
+    confidence: 0.85
+    role: "transform"
+
+  - type: "Mapping Data Flow Parse"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import from_json, col
+      from pyspark.sql.types import {schema_type}
+      df_{name} = df_{input}.withColumn("{parsed_col}", from_json(col("{string_col}"), {schema}))
+    description: "Data Flow Parse (JSON/XML string to struct) via from_json"
+    imports: ["from pyspark.sql.functions import from_json, col"]
+    confidence: 0.85
+    role: "transform"
+
+  - type: "Mapping Data Flow Stringify"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import to_json, col
+      df_{name} = df_{input}.withColumn("{string_col}", to_json(col("{struct_col}")))
+    description: "Data Flow Stringify (struct to JSON string) via to_json"
+    imports: ["from pyspark.sql.functions import to_json, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Mapping Data Flow Sort"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import col, asc, desc
+      df_{name} = df_{input}.orderBy({sort_expressions})
+    description: "Data Flow Sort via orderBy()"
+    imports: ["from pyspark.sql.functions import col, asc, desc"]
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Mapping Data Flow Exists"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{left}.join(df_{right}.select("{key}").distinct(), "{key}", "left_semi")
+    description: "Data Flow Exists via left semi join"
+    imports: []
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Mapping Data Flow Conditional Split"
+    category: "DataFrame API"
+    template: |
+      conditions = {conditions}
+      splits = {}
+      for name, cond in conditions.items():
+          splits[name] = df_{input}.filter(cond)
+      splits["default"] = df_{input}.filter(
+          " AND ".join([f"NOT ({c})" for c in conditions.values()])
+      )
+    description: "Data Flow Conditional Split via multiple filter conditions"
+    imports: []
+    confidence: 0.85
+    role: "transform"
+
+  - type: "Mapping Data Flow Derived Column"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import expr
+      df_{name} = df_{input}.withColumn("{new_col}", expr("{expression}"))
+    description: "Data Flow Derived Column via withColumn + expr"
+    imports: ["from pyspark.sql.functions import expr"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Mapping Data Flow Select"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.select({selected_columns})
+    description: "Data Flow Select (column projection/rename) via select()"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Mapping Data Flow Lookup"
+    category: "DataFrame Join"
+    template: |
+      df_{name} = df_{input}.join(
+          df_{lookup}.hint("broadcast"),
+          col("{input_key}") == col("{lookup_key}"),
+          "left"
+      )
+    description: "Data Flow Lookup via broadcast join"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Mapping Data Flow Alter Row"
+    category: "Delta Merge"
+    template: |
+      from delta.tables import DeltaTable
+      from pyspark.sql.functions import col, when, lit
+      df_tagged = df_{input}.withColumn("_action",
+          when({insert_condition}, lit("insert"))
+          .when({update_condition}, lit("update"))
+          .when({delete_condition}, lit("delete"))
+          .otherwise(lit("upsert")))
+      target = DeltaTable.forName(spark, "{catalog}.{schema}.{table}")
+      target.alias("t").merge(df_tagged.alias("s"), "t.{key} = s.{key}") \
+          .whenMatchedUpdate(condition="s._action = 'update'", set={update_set}) \
+          .whenMatchedDelete(condition="s._action = 'delete'") \
+          .whenNotMatchedInsert(condition="s._action = 'insert'", values={insert_values}) \
+          .execute()
+    description: "Data Flow Alter Row via Delta MERGE with row-level policies"
+    imports: ["from delta.tables import DeltaTable", "from pyspark.sql.functions import col, when, lit"]
+    confidence: 0.85
+    role: "sink"
+
+  - type: "Mapping Data Flow Rank"
+    category: "DataFrame Window"
+    template: |
+      from pyspark.sql import Window
+      from pyspark.sql.functions import dense_rank, col
+      w = Window.partitionBy({partition_cols}).orderBy({order_cols})
+      df_{name} = df_{input}.withColumn("_rank", dense_rank().over(w))
+    description: "Data Flow Rank via dense_rank window function"
+    imports: ["from pyspark.sql import Window", "from pyspark.sql.functions import dense_rank, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Mapping Data Flow Surrogate Key"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import monotonically_increasing_id
+      df_{name} = df_{input}.withColumn("{key_col}", monotonically_increasing_id() + {start_value})
+    description: "Data Flow Surrogate Key via monotonically_increasing_id()"
+    imports: ["from pyspark.sql.functions import monotonically_increasing_id"]
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Linked Service SQL Server"
+    category: "JDBC Connection"
+    template: |
+      # Linked Service SQL Server — connection via JDBC with Secrets
+      sql_url = dbutils.secrets.get(scope="{scope}", key="sqlserver-jdbc-url")
+      sql_props = {
+          "user": dbutils.secrets.get(scope="{scope}", key="sqlserver-user"),
+          "password": dbutils.secrets.get(scope="{scope}", key="sqlserver-pass"),
+          "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+      }
+      df_{name} = spark.read.jdbc(url=sql_url, table="{table}", properties=sql_props)
+    description: "SQL Server Linked Service mapped to JDBC with Secrets"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "Linked Service Blob Storage"
+    category: "Cloud Connection"
+    template: |
+      # Linked Service Blob Storage — direct access via wasbs://
+      # Credential configured via cluster Spark conf or Unity Catalog external location
+      df_{name} = spark.read.format("{format}").load("wasbs://{container}@{account}.blob.core.windows.net/{path}")
+    description: "Blob Storage Linked Service mapped to wasbs:// read"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "Linked Service Azure Key Vault"
+    category: "Secret Management"
+    template: |
+      # Azure Key Vault Linked Service — use Databricks Secret Scopes
+      secret_value = dbutils.secrets.get(scope="{scope}", key="{secret_name}")
+    description: "Key Vault Linked Service mapped to Databricks Secret Scopes"
+    imports: []
+    confidence: 0.92
+    role: "process"
+
+  - type: "Linked Service Databricks"
+    category: "Compute Connection"
+    template: |
+      # Linked Service Databricks — native; no mapping needed
+      # Databricks is the execution platform
+      print("Native Databricks context — no linked service mapping required")
+    description: "Databricks Linked Service is native (no-op)"
+    imports: []
+    confidence: 0.98
+    role: "process"
+
+  - type: "Linked Service Cosmos DB"
+    category: "NoSQL Connection"
+    template: |
+      cosmos_config = {
+          "spark.cosmos.accountEndpoint": dbutils.secrets.get(scope="{scope}", key="cosmos-endpoint"),
+          "spark.cosmos.accountKey": dbutils.secrets.get(scope="{scope}", key="cosmos-key"),
+          "spark.cosmos.database": "{database}",
+          "spark.cosmos.container": "{container}"
+      }
+      df_{name} = spark.read.format("cosmos.oltp").options(**cosmos_config).load()
+    description: "Cosmos DB Linked Service via spark-cosmos connector with Secrets"
+    imports: []
+    confidence: 0.85
+    role: "source"
+
+  - type: "Pipeline Variable"
+    category: "Workflow Variable"
+    template: |
+      # Pipeline Variable — use Python variable or widget
+      {variable_name} = dbutils.widgets.get("{widget_name}") if dbutils.widgets else "{default_value}"
+    description: "Pipeline Variable mapped to dbutils.widgets or Python variable"
+    imports: []
+    confidence: 0.85
+    role: "process"
+
+  - type: "Pipeline Parameter"
+    category: "Workflow Parameter"
+    template: |
+      # Pipeline Parameter — use dbutils.widgets for parameterization
+      dbutils.widgets.text("{param_name}", "{default_value}")
+      {param_name} = dbutils.widgets.get("{param_name}")
+    description: "Pipeline Parameter mapped to dbutils.widgets.text()"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "Tumbling Window Trigger"
+    category: "Scheduling"
+    template: |
+      # Tumbling Window Trigger — use Databricks Jobs scheduled trigger
+      # Configure via Jobs API with schedule: {"quartz_cron_expression": "{cron}", "timezone_id": "{tz}"}
+      print("Configure tumbling window via Databricks Jobs cron schedule")
+    description: "Tumbling Window Trigger mapped to Databricks Jobs cron schedule"
+    imports: []
+    confidence: 0.82
+    role: "process"
+
+  - type: "Schedule Trigger"
+    category: "Scheduling"
+    template: |
+      # Schedule Trigger — use Databricks Jobs scheduled trigger
+      # Configure via Jobs UI or API
+      print("Configure schedule trigger via Databricks Jobs")
+    description: "Schedule Trigger mapped to Databricks Jobs scheduling"
+    imports: []
+    confidence: 0.85
+    role: "process"
+
+  - type: "Event Trigger"
+    category: "Event Processing"
+    template: |
+      # Event Trigger — use file-arrival trigger or Auto Loader
+      df_{name} = (spark.readStream
+          .format("cloudFiles")
+          .option("cloudFiles.format", "{format}")
+          .option("cloudFiles.schemaLocation", "{schema_path}")
+          .load("{event_source_path}"))
+    description: "Event Trigger mapped to Auto Loader file-arrival trigger"
+    imports: []
+    confidence: 0.85
+    role: "source"
+
+  - type: "Custom Activity"
+    category: "Custom Process"
+    template: |
+      # Custom Activity — run custom code in notebook
+      result = dbutils.notebook.run("{notebook_path}", {timeout}, {parameters})
+    description: "Custom Activity mapped to dbutils.notebook.run()"
+    imports: []
+    confidence: 0.82
+    role: "process"
+
+  - type: "Azure Function Activity"
+    category: "Serverless Call"
+    template: |
+      import requests
+      response = requests.post(
+          "{function_url}",
+          json={payload},
+          headers={"x-functions-key": dbutils.secrets.get(scope="{scope}", key="func-key")}
+      )
+      result = response.json()
+    description: "Azure Function Activity via HTTP POST with function key"
+    imports: ["import requests"]
+    confidence: 0.78
+    role: "process"
+
+  - type: "Azure ML Activity"
+    category: "ML Pipeline"
+    template: |
+      # Azure ML Activity — use MLflow in Databricks
+      import mlflow
+      model = mlflow.pyfunc.load_model("models:/{model_name}/{stage}")
+      df_{name} = spark.createDataFrame(model.predict(df_{input}.toPandas()))
+    description: "Azure ML Activity mapped to MLflow model inference"
+    imports: ["import mlflow"]
+    confidence: 0.75
+    role: "transform"
+
+  - type: "Until Activity"
+    category: "Loop Control"
+    template: |
+      # Until Activity — loop until condition is met
+      while True:
+          result = spark.sql("{check_query}").collect()[0][0]
+          if result {operator} {threshold}:
+              break
+          import time
+          time.sleep({interval_seconds})
+    description: "Until Activity mapped to while-loop with condition check"
+    imports: ["import time"]
+    confidence: 0.78
+    role: "process"
+
+  - type: "Filter Activity"
+    category: "Workflow Control"
+    template: |
+      # Filter Activity — filter items in ForEach context
+      items = {input_items}
+      filtered_items = [item for item in items if {filter_condition}]
+    description: "Filter Activity mapped to Python list comprehension"
+    imports: []
+    confidence: 0.82
+    role: "process"
+
+  - type: "Execute Data Flow Activity"
+    category: "Pipeline Orchestration"
+    template: |
+      # Execute Data Flow Activity — run a PySpark transformation pipeline
+      result = dbutils.notebook.run("{data_flow_notebook}", {timeout}, {parameters})
+    description: "Execute Data Flow Activity mapped to notebook execution"
+    imports: []
+    confidence: 0.85
+    role: "process"

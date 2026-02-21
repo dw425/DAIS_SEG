@@ -2,25 +2,21 @@ import React from 'react';
 import { usePipelineStore } from '../../store/pipeline';
 import { useUIStore } from '../../store/ui';
 import { usePipeline } from '../../hooks/usePipeline';
-import type { ValidationScore, ValidationGap } from '../../types/pipeline';
+import type { ValidationScore } from '../../types/pipeline';
 
-const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
-const SEVERITY_STYLES: Record<string, string> = {
-  critical: 'bg-red-500/20 text-red-400',
-  high: 'bg-orange-500/20 text-orange-400',
-  medium: 'bg-amber-500/20 text-amber-400',
-  low: 'bg-green-500/20 text-green-400',
-};
+function toPct(score: number): number {
+  return score <= 1 ? score * 100 : score;
+}
 
-function scoreColor(score: number, max: number): string {
-  const pct = max > 0 ? (score / max) * 100 : 0;
+function scoreColor(score: number): string {
+  const pct = toPct(score);
   if (pct >= 90) return 'text-green-400';
   if (pct >= 70) return 'text-amber-400';
   return 'text-red-400';
 }
 
-function barColor(score: number, max: number): string {
-  const pct = max > 0 ? (score / max) * 100 : 0;
+function barColor(score: number): string {
+  const pct = toPct(score);
   if (pct >= 90) return 'bg-green-500';
   if (pct >= 70) return 'bg-amber-500';
   return 'bg-red-500';
@@ -34,10 +30,6 @@ export default function Step7Validate() {
 
   const canRun = notebook && status !== 'running';
 
-  const sortedGaps = validation?.gaps
-    ? [...validation.gaps].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity])
-    : [];
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -48,7 +40,7 @@ export default function Step7Validate() {
             Validate
           </h2>
           <p className="mt-1 text-sm text-gray-400">
-            Validation scores, severity-ranked gaps, and remediation suggestions.
+            Validation scores, gaps, and errors.
           </p>
         </div>
         <button
@@ -75,19 +67,25 @@ export default function Step7Validate() {
           {/* Overall score */}
           <div className="flex items-center gap-6 rounded-lg bg-gray-800/50 border border-border p-6">
             <div className="text-center">
-              <p className={`text-4xl font-bold tabular-nums ${validation.overallScore >= 90 ? 'text-green-400' : validation.overallScore >= 70 ? 'text-amber-400' : 'text-red-400'}`}>
-                {validation.overallScore}
+              <p className={`text-4xl font-bold tabular-nums ${scoreColor(validation.overallScore)}`}>
+                {toPct(validation.overallScore).toFixed(0)}
               </p>
               <p className="text-xs text-gray-500 mt-1">Overall Score</p>
             </div>
             <div className="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all ${validation.overallScore >= 90 ? 'bg-green-500' : validation.overallScore >= 70 ? 'bg-amber-500' : 'bg-red-500'}`}
-                style={{ width: `${validation.overallScore}%` }}
+                className={`h-full rounded-full transition-all ${barColor(validation.overallScore)}`}
+                style={{ width: `${toPct(validation.overallScore)}%` }}
               />
             </div>
-            <span className={`px-3 py-1 rounded-lg text-sm font-medium ${validation.passed ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-              {validation.passed ? 'PASSED' : 'NEEDS WORK'}
+            <span className={`px-3 py-1 rounded-lg text-sm font-medium ${
+              toPct(validation.overallScore) >= 85
+                ? 'bg-green-500/20 text-green-400'
+                : toPct(validation.overallScore) >= 60
+                  ? 'bg-amber-500/20 text-amber-400'
+                  : 'bg-red-500/20 text-red-400'
+            }`}>
+              {toPct(validation.overallScore) >= 85 ? 'READY' : toPct(validation.overallScore) >= 60 ? 'NEEDS WORK' : 'NOT READY'}
             </span>
           </div>
 
@@ -99,15 +97,15 @@ export default function Step7Validate() {
                 {validation.scores.map((s: ValidationScore, i: number) => (
                   <div key={i} className="rounded-lg bg-gray-800/30 border border-border p-3">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm text-gray-200">{s.category}</span>
-                      <span className={`text-sm font-medium tabular-nums ${scoreColor(s.score, s.maxScore)}`}>
-                        {s.score}/{s.maxScore}
+                      <span className="text-sm text-gray-200">{s.dimension}</span>
+                      <span className={`text-sm font-medium tabular-nums ${scoreColor(s.score)}`}>
+                        {toPct(s.score).toFixed(0)}%
                       </span>
                     </div>
                     <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-all ${barColor(s.score, s.maxScore)}`}
-                        style={{ width: `${s.maxScore > 0 ? (s.score / s.maxScore) * 100 : 0}%` }}
+                        className={`h-full rounded-full transition-all ${barColor(s.score)}`}
+                        style={{ width: `${toPct(s.score)}%` }}
                       />
                     </div>
                     {s.details && <p className="text-xs text-gray-500 mt-1.5">{s.details}</p>}
@@ -118,26 +116,48 @@ export default function Step7Validate() {
           )}
 
           {/* Gaps */}
-          {sortedGaps.length > 0 && (
+          {validation.gaps && validation.gaps.length > 0 && (
             <div>
               <h3 className="text-sm font-medium text-gray-300 mb-3">
-                Validation Gaps ({sortedGaps.length})
+                Validation Gaps ({validation.gaps.length})
               </h3>
               <div className="space-y-2">
-                {sortedGaps.map((gap: ValidationGap, i: number) => (
-                  <div key={i} className="rounded-lg border border-border bg-gray-800/30 p-4">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm font-medium text-gray-200">{gap.processor}</span>
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${SEVERITY_STYLES[gap.severity]}`}>
-                        {gap.severity}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-400">{gap.message}</p>
-                    {gap.remediation && (
-                      <div className="mt-2 pl-3 border-l-2 border-teal-500/30">
-                        <p className="text-xs text-teal-300/70">Remediation: {gap.remediation}</p>
+                {validation.gaps.map((gap, i: number) => {
+                  const gapType = String(gap.type ?? 'unknown');
+                  const gapMessage = String(gap.message ?? '');
+                  const gapName = gap.name ? String(gap.name) : null;
+                  const gapSource = gap.source ? String(gap.source) : null;
+                  const gapDest = gap.destination ? String(gap.destination) : null;
+                  const isMissing = gapType === 'missing_processor';
+                  return (
+                    <div key={i} className={`rounded-lg border p-4 ${isMissing ? 'border-amber-500/30 bg-amber-500/5' : 'border-border bg-gray-800/30'}`}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${isMissing ? 'bg-amber-500/20 text-amber-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                          {gapType.replace(/_/g, ' ')}
+                        </span>
+                        {gapName && <span className="text-sm font-medium text-gray-200">{gapName}</span>}
+                        {gapSource && gapDest && (
+                          <span className="text-xs text-gray-400 font-mono">{gapSource} &rarr; {gapDest}</span>
+                        )}
                       </div>
-                    )}
+                      {gapMessage && <p className="text-sm text-gray-400 mt-1">{gapMessage}</p>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Errors */}
+          {validation.errors && validation.errors.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-300 mb-3">
+                Errors ({validation.errors.length})
+              </h3>
+              <div className="space-y-2">
+                {validation.errors.map((err, i: number) => (
+                  <div key={i} className="rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+                    <p className="text-sm text-red-400">{err}</p>
                   </div>
                 ))}
               </div>

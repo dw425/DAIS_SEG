@@ -81,7 +81,7 @@ def detect_external_systems(processors: list[Processor]) -> list[dict]:
 
         # Scan properties for JDBC URLs
         for _k, v in p.properties.items():
-            if not v:
+            if not v or not isinstance(v, str):
                 continue
             m = _JDBC_RE.search(v)
             if m:

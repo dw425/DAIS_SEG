@@ -7,6 +7,21 @@
   --green: #21C354;
   --amber: #EAB308;
   --red: #EF4444;
+  --bg-primary: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface2: #f1f5f9;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --border-color: #e2e8f0;
+}
+
+.dark {
+  --bg-primary: #030712;
+  --bg-surface: #1a1a2e;
+  --bg-surface2: #16213e;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --border-color: #2a2a4a;
 }
 
 body {
@@ -21,3 +36,22 @@ body {
 
 /* Code blocks */
 pre, code { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+/* Skip link */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Focus visible for keyboard navigation */
+*:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}

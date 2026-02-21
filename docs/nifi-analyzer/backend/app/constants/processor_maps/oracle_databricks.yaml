@@ -1,170 +1,369 @@
-# Oracle Data Integrator (ODI) -> Databricks PySpark Mapping
-# Maps ODI components and Oracle-specific constructs to PySpark equivalents
-
 mappings:
-  - type: "ODI Interface"
-    category: "Spark Pipeline"
-    template: |
-      # ODI Interface -> Source-Transform-Target pipeline
-      df_source = (spark.read
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="oracle-jdbc-url"))
-          .option("dbtable", "{source_table}")
-          .option("driver", "oracle.jdbc.OracleDriver")
-          .option("user", dbutils.secrets.get(scope="{scope}", key="oracle-user"))
-          .option("password", dbutils.secrets.get(scope="{scope}", key="oracle-pass"))
-          .load())
-      df_transformed = df_source.selectExpr({select_expressions})
-      (df_transformed.write
-          .format("delta")
-          .mode("{loading_type}")
-          .saveAsTable("{catalog}.{schema}.{target_table}"))
-    description: "ODI Interface as JDBC source -> transform -> Delta target"
-    imports: []
-    confidence: 0.90
-    role: "process"
+- type: ODI Interface
+  category: Spark Pipeline
+  template: "# ODI Interface -> Source-Transform-Target pipeline\ndf_source = (spark.read\n    .format(\"jdbc\")\n    .option(\"\
+    url\", dbutils.secrets.get(scope=\"{scope}\", key=\"oracle-jdbc-url\"))\n    .option(\"dbtable\", \"{source_table}\")\n\
+    \    .option(\"driver\", \"oracle.jdbc.OracleDriver\")\n    .option(\"user\", dbutils.secrets.get(scope=\"{scope}\", key=\"\
+    oracle-user\"))\n    .option(\"password\", dbutils.secrets.get(scope=\"{scope}\", key=\"oracle-pass\"))\n    .load())\n\
+    df_transformed = df_source.selectExpr({select_expressions})\n(df_transformed.write\n    .format(\"delta\")\n    .mode(\"\
+    {loading_type}\")\n    .saveAsTable(\"{catalog}.{schema}.{target_table}\"))\n"
+  description: ODI Interface as JDBC source -> transform -> Delta target
+  imports: []
+  confidence: 0.9
+  role: process
+- type: ODI Package
+  category: Databricks Workflow
+  template: '# ODI Package -> Databricks multi-task workflow
 
-  - type: "ODI Package"
-    category: "Databricks Workflow"
-    template: |
-      # ODI Package -> Databricks multi-task workflow
-      _results = []
-      _results.append(dbutils.notebook.run("{step_1_notebook}", 3600))
-      _results.append(dbutils.notebook.run("{step_2_notebook}", 3600))
-      _results.append(dbutils.notebook.run("{step_3_notebook}", 3600))
-      print(f"[PACKAGE] All steps completed: {_results}")
-    description: "ODI Package as sequential notebook orchestration"
-    imports: []
-    confidence: 0.88
-    role: "process"
+    _results = []
 
-  - type: "ODI Procedure"
-    category: "Spark SQL"
-    template: |
-      # ODI Procedure with source/target SQL commands
-      spark.sql("""
-      {source_command}
-      """)
-      spark.sql("""
-      {target_command}
-      """)
-    description: "ODI Procedure as Spark SQL execution"
-    imports: []
-    confidence: 0.85
-    role: "process"
+    _results.append(dbutils.notebook.run("{step_1_notebook}", 3600))
 
-  - type: "ODI Variable"
-    category: "Databricks Widget"
-    template: |
-      dbutils.widgets.text("{variable_name}", "{default_value}")
-      _{variable_name} = dbutils.widgets.get("{variable_name}")
-      print(f"[VAR] {variable_name} = {_{variable_name}}")
-    description: "ODI Variable as Databricks widget parameter"
-    imports: []
-    confidence: 0.90
-    role: "utility"
+    _results.append(dbutils.notebook.run("{step_2_notebook}", 3600))
 
-  - type: "Source Table (Oracle)"
-    category: "JDBC Source"
-    template: |
-      df_{name} = (spark.read
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="oracle-jdbc-url"))
-          .option("dbtable", "{schema}.{table}")
-          .option("driver", "oracle.jdbc.OracleDriver")
-          .option("user", dbutils.secrets.get(scope="{scope}", key="oracle-user"))
-          .option("password", dbutils.secrets.get(scope="{scope}", key="oracle-pass"))
-          .option("fetchsize", 10000)
-          .option("partitionColumn", "{partition_col}")
-          .option("lowerBound", "{lower}")
-          .option("upperBound", "{upper}")
-          .option("numPartitions", "{num_partitions}")
-          .load())
-    description: "Oracle source table via JDBC with parallel partitioned read"
-    imports: []
-    confidence: 0.92
-    role: "source"
+    _results.append(dbutils.notebook.run("{step_3_notebook}", 3600))
 
-  - type: "Target Table (Oracle to Delta)"
-    category: "Delta Write"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("append")
-          .option("overwriteSchema", "true")
-          .saveAsTable("{catalog}.{schema}.{table}"))
-    description: "Oracle target replaced by Delta Lake table"
-    imports: []
-    confidence: 0.92
-    role: "sink"
+    print(f"[PACKAGE] All steps completed: {_results}")
 
-  - type: "SQL Transformation"
-    category: "Spark SQL"
-    template: |
-      df_{input}.createOrReplaceTempView("tmp_{name}")
-      df_{name} = spark.sql("""
-      {sql_statement}
-      """)
-    description: "SQL transformation via temp view + spark.sql"
-    imports: []
-    confidence: 0.92
-    role: "transform"
+    '
+  description: ODI Package as sequential notebook orchestration
+  imports: []
+  confidence: 0.88
+  role: process
+- type: ODI Procedure
+  category: Spark SQL
+  template: '# ODI Procedure with source/target SQL commands
 
-  - type: "PL/SQL Block"
-    category: "Python Function"
-    template: |
-      # Oracle PL/SQL block ported to Python
-      def _plsql_{name}():
-          # Port PL/SQL logic: cursors -> DataFrames, exceptions -> try/except
-          df = spark.sql("{select_sql}")
-          # Process rows
-          for row in df.collect():
-              # Row-level logic
-              pass
-          return True
+    spark.sql("""
 
-      _plsql_{name}()
-    description: "PL/SQL block ported to Python function"
-    imports: []
-    confidence: 0.75
-    role: "process"
+    {source_command}
 
-  - type: "Oracle Sequence"
-    category: "DataFrame API"
-    template: |
-      from pyspark.sql.functions import monotonically_increasing_id
-      df_{name} = df_{input}.withColumn("{seq_name}",
-          monotonically_increasing_id() + {start_with})
-    description: "Oracle SEQUENCE replaced by monotonically_increasing_id"
-    imports: ["from pyspark.sql.functions import monotonically_increasing_id"]
-    confidence: 0.88
-    role: "transform"
+    """)
 
-  - type: "Oracle Materialized View"
-    category: "Delta Table"
-    template: |
-      # Oracle MV -> Delta table with scheduled refresh
-      spark.sql("""
-          CREATE OR REPLACE TABLE {catalog}.{schema}.{mv_name} AS
-          {query}
-      """)
-      # Schedule periodic refresh via Databricks Job
-    description: "Oracle Materialized View as Delta table with refresh"
-    imports: []
-    confidence: 0.88
-    role: "transform"
+    spark.sql("""
 
-  - type: "DBLink Query"
-    category: "JDBC Source"
-    template: |
-      # Oracle DBLink -> direct JDBC read from remote database
-      df_{name} = (spark.read
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="remote-oracle-url"))
-          .option("dbtable", "{remote_table}")
-          .option("driver", "oracle.jdbc.OracleDriver")
-          .load())
-    description: "Oracle DBLink replaced by direct JDBC to remote database"
-    imports: []
-    confidence: 0.88
-    role: "source"
+    {target_command}
+
+    """)
+
+    '
+  description: ODI Procedure as Spark SQL execution
+  imports: []
+  confidence: 0.85
+  role: process
+- type: ODI Variable
+  category: Databricks Widget
+  template: 'dbutils.widgets.text("{variable_name}", "{default_value}")
+
+    _{variable_name} = dbutils.widgets.get("{variable_name}")
+
+    print(f"[VAR] {variable_name} = {_{variable_name}}")
+
+    '
+  description: ODI Variable as Databricks widget parameter
+  imports: []
+  confidence: 0.9
+  role: utility
+- type: Source Table (Oracle)
+  category: JDBC Source
+  template: "df_{name} = (spark.read\n    .format(\"jdbc\")\n    .option(\"url\", dbutils.secrets.get(scope=\"{scope}\", key=\"\
+    oracle-jdbc-url\"))\n    .option(\"dbtable\", \"{schema}.{table}\")\n    .option(\"driver\", \"oracle.jdbc.OracleDriver\"\
+    )\n    .option(\"user\", dbutils.secrets.get(scope=\"{scope}\", key=\"oracle-user\"))\n    .option(\"password\", dbutils.secrets.get(scope=\"\
+    {scope}\", key=\"oracle-pass\"))\n    .option(\"fetchsize\", 10000)\n    .option(\"partitionColumn\", \"{partition_col}\"\
+    )\n    .option(\"lowerBound\", \"{lower}\")\n    .option(\"upperBound\", \"{upper}\")\n    .option(\"numPartitions\",\
+    \ \"{num_partitions}\")\n    .load())\n"
+  description: Oracle source table via JDBC with parallel partitioned read
+  imports: []
+  confidence: 0.92
+  role: source
+- type: Target Table (Oracle to Delta)
+  category: Delta Write
+  template: "(df_{input}.write\n    .format(\"delta\")\n    .mode(\"append\")\n    .option(\"overwriteSchema\", \"true\")\n\
+    \    .saveAsTable(\"{catalog}.{schema}.{table}\"))\n"
+  description: Oracle target replaced by Delta Lake table
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: SQL Transformation
+  category: Spark SQL
+  template: 'df_{input}.createOrReplaceTempView("tmp_{name}")
+
+    df_{name} = spark.sql("""
+
+    {sql_statement}
+
+    """)
+
+    '
+  description: SQL transformation via temp view + spark.sql
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: PL/SQL Block
+  category: Python Function
+  template: "# Oracle PL/SQL block ported to Python\ndef _plsql_{name}():\n    # Port PL/SQL logic: cursors -> DataFrames,\
+    \ exceptions -> try/except\n    df = spark.sql(\"{select_sql}\")\n    # Process rows\n    for row in df.collect():\n \
+    \       # Row-level logic\n        pass\n    return True\n\n_plsql_{name}()\n"
+  description: PL/SQL block ported to Python function
+  imports: []
+  confidence: 0.75
+  role: process
+- type: Oracle Sequence
+  category: DataFrame API
+  template: "from pyspark.sql.functions import monotonically_increasing_id\ndf_{name} = df_{input}.withColumn(\"{seq_name}\"\
+    ,\n    monotonically_increasing_id() + {start_with})\n"
+  description: Oracle SEQUENCE replaced by monotonically_increasing_id
+  imports:
+  - from pyspark.sql.functions import monotonically_increasing_id
+  confidence: 0.88
+  role: transform
+- type: Oracle Materialized View
+  category: Delta Table
+  template: "# Oracle MV -> Delta table with scheduled refresh\nspark.sql(\"\"\"\n    CREATE OR REPLACE TABLE {catalog}.{schema}.{mv_name}\
+    \ AS\n    {query}\n\"\"\")\n# Schedule periodic refresh via Databricks Job\n"
+  description: Oracle Materialized View as Delta table with refresh
+  imports: []
+  confidence: 0.88
+  role: transform
+- type: DBLink Query
+  category: JDBC Source
+  template: "# Oracle DBLink -> direct JDBC read from remote database\ndf_{name} = (spark.read\n    .format(\"jdbc\")\n  \
+    \  .option(\"url\", dbutils.secrets.get(scope=\"{scope}\", key=\"remote-oracle-url\"))\n    .option(\"dbtable\", \"{remote_table}\"\
+    )\n    .option(\"driver\", \"oracle.jdbc.OracleDriver\")\n    .load())\n"
+  description: Oracle DBLink replaced by direct JDBC to remote database
+  imports: []
+  confidence: 0.88
+  role: source
+- type: Source Qualifier
+  category: JDBC Source
+  template: "# ODI Source Qualifier -> JDBC read with filter\ndf_{name} = (spark.read\n    .format('jdbc')\n    .option('url',\
+    \ '{jdbc_url}')\n    .option('dbtable', '({source_sql}) t')\n    .option('user', dbutils.secrets.get(scope='{scope}',\
+    \ key='oracle-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}', key='oracle-pass'))\n    .load())\n"
+  description: Source Qualifier as JDBC read with pushdown SQL
+  imports: []
+  confidence: 0.9
+  role: source
+- type: Target
+  category: Delta Write
+  template: 'df_{input}.write.format(''delta'').mode(''{mode}'').saveAsTable(''{catalog}.{schema}.{table}'')
+
+    print(f''[TARGET] Written to {catalog}.{schema}.{table}'')
+
+    '
+  description: ODI Target as Delta table write
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: Expression
+  category: Column Transform
+  template: "from pyspark.sql.functions import expr, col\ndf_{name} = df_{input}\nfor _col_name, _expression in {expressions}.items():\n\
+    \    df_{name} = df_{name}.withColumn(_col_name, expr(_expression))\n"
+  description: Expression transformation as withColumn + expr
+  imports:
+  - from pyspark.sql.functions import expr, col
+  confidence: 0.9
+  role: transform
+- type: Joiner
+  category: DataFrame Join
+  template: "df_{name} = df_{master}.join(\n    df_{detail},\n    on={join_condition},\n    how='{join_type}')\n"
+  description: Joiner as DataFrame join
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: Filter
+  category: DataFrame Filter
+  template: 'df_{name} = df_{input}.filter("{filter_condition}")
+
+    '
+  description: Filter as DataFrame filter
+  imports: []
+  confidence: 0.95
+  role: route
+- type: Aggregator
+  category: GroupBy Agg
+  template: "from pyspark.sql.functions import sum, count, avg, min, max\ndf_{name} = (df_{input}\n    .groupBy({group_by_cols})\n\
+    \    .agg({agg_expressions}))\n"
+  description: Aggregator as groupBy + agg
+  imports:
+  - from pyspark.sql.functions import sum, count, avg, min, max
+  confidence: 0.92
+  role: transform
+- type: Sorter
+  category: OrderBy
+  template: 'from pyspark.sql.functions import col
+
+    df_{name} = df_{input}.orderBy({order_expressions})
+
+    '
+  description: Sorter as DataFrame orderBy
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.95
+  role: transform
+- type: Rank
+  category: Window Rank
+  template: 'from pyspark.sql.window import Window
+
+    from pyspark.sql.functions import row_number, col
+
+    _window = Window.partitionBy({partition_cols}).orderBy({order_cols})
+
+    df_{name} = df_{input}.withColumn(''rank'', row_number().over(_window))
+
+    '
+  description: Rank as window row_number
+  imports:
+  - from pyspark.sql.window import Window
+  - from pyspark.sql.functions import row_number, col
+  confidence: 0.92
+  role: transform
+- type: Sequence Generator
+  category: Identity Column
+  template: 'from pyspark.sql.functions import monotonically_increasing_id
+
+    df_{name} = df_{input}.withColumn(''{seq_col}'', monotonically_increasing_id() + {start_value})
+
+    '
+  description: Sequence Generator as monotonically_increasing_id
+  imports:
+  - from pyspark.sql.functions import monotonically_increasing_id
+  confidence: 0.9
+  role: transform
+- type: Lookup
+  category: Broadcast Join
+  template: "from pyspark.sql.functions import broadcast\ndf_{name} = df_{input}.join(\n    broadcast(df_{lookup}),\n    on='{lookup_key}',\n\
+    \    how='left')\n"
+  description: Lookup as broadcast hash join
+  imports:
+  - from pyspark.sql.functions import broadcast
+  confidence: 0.92
+  role: transform
+- type: Update Strategy
+  category: Delta MERGE
+  template: "from delta.tables import DeltaTable\n_target = DeltaTable.forName(spark, '{catalog}.{schema}.{target_table}')\n\
+    _target.alias('t').merge(\n    df_{input}.alias('s'),\n    't.{key} = s.{key}'\n).whenMatchedUpdateAll(\n).whenNotMatchedInsertAll(\n\
+    ).execute()\n"
+  description: Update Strategy as Delta MERGE upsert
+  imports:
+  - from delta.tables import DeltaTable
+  confidence: 0.9
+  role: transform
+- type: Router
+  category: Conditional Split
+  template: "# Router -> multiple filtered DataFrames\n_routes = {}\nfor _group, _condition in {route_conditions}.items():\n\
+    \    _routes[_group] = df_{input}.filter(_condition)\ndf_default = df_{input}.filter('NOT ({all_conditions})')\nprint(f'[ROUTER]\
+    \ {{len(_routes)}} routes + default')\n"
+  description: Router as conditional DataFrame filter splits
+  imports: []
+  confidence: 0.88
+  role: route
+- type: Union
+  category: Union
+  template: 'df_{name} = df_{input1}.unionByName(df_{input2}, allowMissingColumns=True)
+
+    '
+  description: Union as DataFrame unionByName
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: Stored Procedure
+  category: JDBC Call
+  template: "# ODI Stored Procedure -> JDBC call or Python function\nimport jaydebeapi\n_conn = jaydebeapi.connect(\n    'oracle.jdbc.OracleDriver',\n\
+    \    '{jdbc_url}',\n    [dbutils.secrets.get(scope='{scope}', key='oracle-user'),\n     dbutils.secrets.get(scope='{scope}',\
+    \ key='oracle-pass')])\n_cursor = _conn.cursor()\n_cursor.execute('CALL {procedure_name}({params})')\n_conn.close()\n"
+  description: Stored Procedure call via JDBC
+  imports:
+  - import jaydebeapi
+  confidence: 0.82
+  role: process
+- type: File
+  category: File Read
+  template: "df_{name} = (spark.read\n    .format('{format}')\n    .option('header', '{has_header}')\n    .option('delimiter',\
+    \ '{delimiter}')\n    .load('/Volumes/{catalog}/{schema}/landing/{filename}'))\n"
+  description: File source as Spark file reader
+  imports: []
+  confidence: 0.92
+  role: source
+- type: Web Service
+  category: HTTP Client
+  template: "import requests\n_response = requests.request(\n    method='{method}', url='{wsdl_url}',\n    headers={{'Content-Type':\
+    \ 'text/xml'}},\n    data='{soap_body}', timeout=60)\n_response.raise_for_status()\ndf_{name} = spark.read.format('xml').option('rowTag',\
+    \ '{row_tag}').load(\n    spark.sparkContext.parallelize([_response.text]))\n"
+  description: Web Service SOAP call via requests
+  imports:
+  - import requests
+  confidence: 0.78
+  role: source
+- type: Java
+  category: Python Function
+  template: "# ODI Java step -> Python function\ndef {name}_java_port({params}):\n    \"\"\"Ported from Java transformation\"\
+    \"\"\n    {body}\n    return result\n\n_result = {name}_java_port({args})\n"
+  description: Java transformation ported to Python function
+  imports: []
+  confidence: 0.78
+  role: process
+- type: FTP
+  category: File Transfer
+  template: "from ftplib import FTP\n_ftp = FTP('{host}')\n_ftp.login(\n    user=dbutils.secrets.get(scope='{scope}', key='ftp-user'),\n\
+    \    passwd=dbutils.secrets.get(scope='{scope}', key='ftp-pass'))\nwith open('/tmp/{filename}', 'wb') as f:\n    _ftp.retrbinary(f'RETR\
+    \ {remote_path}', f.write)\n_ftp.quit()\ndbutils.fs.cp('file:///tmp/{filename}', '/Volumes/{catalog}/{schema}/landing/{filename}')\n"
+  description: FTP download via ftplib + copy to Volumes
+  imports:
+  - from ftplib import FTP
+  confidence: 0.82
+  role: source
+- type: IKM Oracle Insert
+  category: JDBC Write
+  template: "(df_{input}.write\n    .format('jdbc')\n    .option('url', '{jdbc_url}')\n    .option('dbtable', '{target_table}')\n\
+    \    .option('user', dbutils.secrets.get(scope='{scope}', key='oracle-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}',\
+    \ key='oracle-pass'))\n    .mode('append')\n    .save())\n"
+  description: IKM Oracle Insert as JDBC append write
+  imports: []
+  confidence: 0.88
+  role: sink
+- type: IKM Oracle Merge
+  category: Delta MERGE
+  template: "# IKM Oracle Merge -> Delta MERGE (data already in Databricks)\nfrom delta.tables import DeltaTable\n_target\
+    \ = DeltaTable.forName(spark, '{catalog}.{schema}.{target_table}')\n_target.alias('t').merge(\n    df_{input}.alias('s'),\n\
+    \    't.{key} = s.{key}'\n).whenMatchedUpdateAll(\n).whenNotMatchedInsertAll(\n).execute()\n"
+  description: IKM Oracle Merge as Delta MERGE upsert
+  imports:
+  - from delta.tables import DeltaTable
+  confidence: 0.88
+  role: transform
+- type: LKM SQL to Oracle
+  category: JDBC Read
+  template: "# LKM SQL to Oracle -> read from source via JDBC\ndf_{name} = (spark.read\n    .format('jdbc')\n    .option('url',\
+    \ '{source_jdbc_url}')\n    .option('dbtable', '({sql}) t')\n    .option('user', dbutils.secrets.get(scope='{scope}',\
+    \ key='source-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}', key='source-pass'))\n    .load())\n"
+  description: LKM SQL to Oracle as JDBC source read
+  imports: []
+  confidence: 0.85
+  role: source
+- type: LKM File to Oracle
+  category: File Read
+  template: "# LKM File to Oracle -> read from file, write to Delta\ndf_{name} = (spark.read\n    .format('{format}')\n  \
+    \  .option('header', 'true')\n    .load('/Volumes/{catalog}/{schema}/landing/{filename}'))\ndf_{name}.write.format('delta').mode('append').saveAsTable('{catalog}.{schema}.{target_table}')\n"
+  description: LKM File to Oracle as file read + Delta write
+  imports: []
+  confidence: 0.85
+  role: source
+- type: CKM Oracle
+  category: Data Quality
+  template: "# CKM Oracle (Check Knowledge Module) -> data quality assertions\n_violations = spark.sql(\"\"\"\n    SELECT\
+    \ count(*) FROM {catalog}.{schema}.{table}\n    WHERE NOT ({constraint_condition})\n\"\"\").first()[0]\nif _violations\
+    \ > 0:\n    print(f'[CKM] {{_violations}} constraint violations found')\n    # Log violations\n    spark.sql(f\"INSERT\
+    \ INTO {catalog}.{schema}._ckm_errors SELECT *, current_timestamp() FROM {catalog}.{schema}.{table} WHERE NOT ({constraint_condition})\"\
+    )\n"
+  description: CKM Oracle as SQL constraint validation
+  imports: []
+  confidence: 0.82
+  role: test
+- type: XKM Oracle
+  category: Extended Transform
+  template: "# XKM Oracle -> extended transformation as Python function\ndef {name}_xkm({params}):\n    \"\"\"Ported from\
+    \ ODI XKM\"\"\"\n    {body}\n    return result\n\ndf_{name} = {name}_xkm(df_{input})\n"
+  description: XKM Oracle extended transform as Python function
+  imports: []
+  confidence: 0.78
+  role: transform

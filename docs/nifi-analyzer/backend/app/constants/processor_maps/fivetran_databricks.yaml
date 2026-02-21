@@ -1,95 +1,228 @@
-# Fivetran -> Databricks PySpark Mapping
-# Maps Fivetran connector patterns to Databricks equivalents
-
 mappings:
-  - type: "Database Connector"
-    category: "JDBC Source"
-    template: |
-      df_{name} = (spark.read
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
-          .option("dbtable", "{table}")
-          .option("driver", "{driver}")
-          .load())
-    description: "Fivetran DB connector replaced by JDBC read"
-    imports: []
-    confidence: 0.90
-    role: "source"
+- type: Database Connector
+  category: JDBC Source
+  template: "df_{name} = (spark.read\n    .format(\"jdbc\")\n    .option(\"url\", dbutils.secrets.get(scope=\"{scope}\", key=\"\
+    jdbc-url\"))\n    .option(\"dbtable\", \"{table}\")\n    .option(\"driver\", \"{driver}\")\n    .load())\n"
+  description: Fivetran DB connector replaced by JDBC read
+  imports: []
+  confidence: 0.9
+  role: source
+- type: SaaS Connector
+  category: REST API
+  template: 'import requests
 
-  - type: "SaaS Connector"
-    category: "REST API"
-    template: |
-      import requests
-      _headers = {"Authorization": f"Bearer {{dbutils.secrets.get(scope='{scope}', key='api-token')}}"}
-      _response = requests.get("{api_endpoint}", headers=_headers, timeout=60)
-      _response.raise_for_status()
-      df_{name} = spark.createDataFrame(_response.json()["{data_key}"])
-    description: "Fivetran SaaS connector replaced by REST API call"
-    imports: ["import requests"]
-    confidence: 0.85
-    role: "source"
+    _headers = {"Authorization": f"Bearer {{dbutils.secrets.get(scope=''{scope}'', key=''api-token'')}}"}
 
-  - type: "File Connector (S3)"
-    category: "Auto Loader"
-    template: |
-      df_{name} = (spark.readStream
-          .format("cloudFiles")
-          .option("cloudFiles.format", "{format}")
-          .option("cloudFiles.schemaLocation", "/Volumes/{catalog}/{schema}/checkpoints/{name}")
-          .load("s3://{bucket}/{prefix}"))
-    description: "Fivetran S3 connector replaced by Auto Loader"
-    imports: []
-    confidence: 0.92
-    role: "source"
+    _response = requests.get("{api_endpoint}", headers=_headers, timeout=60)
 
-  - type: "Destination Sync"
-    category: "Delta MERGE"
-    template: |
-      from delta.tables import DeltaTable
-      if spark.catalog.tableExists("{catalog}.{schema}.{table}"):
-          _target = DeltaTable.forName(spark, "{catalog}.{schema}.{table}")
-          _target.alias("t").merge(
-              df_{input}.alias("s"),
-              "t.{primary_key} = s.{primary_key}"
-          ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
-      else:
-          df_{input}.write.format("delta").saveAsTable("{catalog}.{schema}.{table}")
-    description: "Fivetran destination sync via Delta MERGE upsert"
-    imports: ["from delta.tables import DeltaTable"]
-    confidence: 0.90
-    role: "sink"
+    _response.raise_for_status()
 
-  - type: "CDC Replication"
-    category: "Delta CDF"
-    template: |
-      spark.sql("ALTER TABLE {catalog}.{schema}.{table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
-      df_{name} = (spark.readStream
-          .format("delta")
-          .option("readChangeFeed", "true")
-          .table("{catalog}.{schema}.{table}"))
-    description: "Fivetran CDC replaced by Delta Change Data Feed"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    df_{name} = spark.createDataFrame(_response.json()["{data_key}"])
 
-  - type: "Webhook Connector"
-    category: "Model Serving"
-    template: |
-      # Fivetran Webhook -> Databricks Model Serving endpoint
-      df_{name} = spark.readStream.format("delta").table("{name}_incoming")
-    description: "Fivetran webhook replaced by Model Serving + Delta"
-    imports: []
-    confidence: 0.85
-    role: "source"
+    '
+  description: Fivetran SaaS connector replaced by REST API call
+  imports:
+  - import requests
+  confidence: 0.85
+  role: source
+- type: File Connector (S3)
+  category: Auto Loader
+  template: "df_{name} = (spark.readStream\n    .format(\"cloudFiles\")\n    .option(\"cloudFiles.format\", \"{format}\")\n\
+    \    .option(\"cloudFiles.schemaLocation\", \"/Volumes/{catalog}/{schema}/checkpoints/{name}\")\n    .load(\"s3://{bucket}/{prefix}\"\
+    ))\n"
+  description: Fivetran S3 connector replaced by Auto Loader
+  imports: []
+  confidence: 0.92
+  role: source
+- type: Destination Sync
+  category: Delta MERGE
+  template: "from delta.tables import DeltaTable\nif spark.catalog.tableExists(\"{catalog}.{schema}.{table}\"):\n    _target\
+    \ = DeltaTable.forName(spark, \"{catalog}.{schema}.{table}\")\n    _target.alias(\"t\").merge(\n        df_{input}.alias(\"\
+    s\"),\n        \"t.{primary_key} = s.{primary_key}\"\n    ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()\n\
+    else:\n    df_{input}.write.format(\"delta\").saveAsTable(\"{catalog}.{schema}.{table}\")\n"
+  description: Fivetran destination sync via Delta MERGE upsert
+  imports:
+  - from delta.tables import DeltaTable
+  confidence: 0.9
+  role: sink
+- type: CDC Replication
+  category: Delta CDF
+  template: "spark.sql(\"ALTER TABLE {catalog}.{schema}.{table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)\")\n\
+    df_{name} = (spark.readStream\n    .format(\"delta\")\n    .option(\"readChangeFeed\", \"true\")\n    .table(\"{catalog}.{schema}.{table}\"\
+    ))\n"
+  description: Fivetran CDC replaced by Delta Change Data Feed
+  imports: []
+  confidence: 0.9
+  role: source
+- type: Webhook Connector
+  category: Model Serving
+  template: '# Fivetran Webhook -> Databricks Model Serving endpoint
 
-  - type: "Transformation (dbt)"
-    category: "Spark SQL"
-    template: |
-      spark.sql("""
-          CREATE OR REPLACE TABLE {catalog}.{schema}.{model_name} AS
-          {select_sql}
-      """)
-    description: "Fivetran dbt transformation as Spark SQL CTAS"
-    imports: []
-    confidence: 0.92
-    role: "transform"
+    df_{name} = spark.readStream.format("delta").table("{name}_incoming")
+
+    '
+  description: Fivetran webhook replaced by Model Serving + Delta
+  imports: []
+  confidence: 0.85
+  role: source
+- type: Transformation (dbt)
+  category: Spark SQL
+  template: "spark.sql(\"\"\"\n    CREATE OR REPLACE TABLE {catalog}.{schema}.{model_name} AS\n    {select_sql}\n\"\"\")\n"
+  description: Fivetran dbt transformation as Spark SQL CTAS
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: connector_salesforce
+  category: API Source
+  template: "%pip install simple_salesforce\nfrom simple_salesforce import Salesforce\nsf = Salesforce(\n    username=dbutils.secrets.get(scope='{scope}',\
+    \ key='sf-user'),\n    password=dbutils.secrets.get(scope='{scope}', key='sf-pass'),\n    security_token=dbutils.secrets.get(scope='{scope}',\
+    \ key='sf-token'))\n_records = sf.query_all(\"{soql}\")\ndf_{name} = spark.createDataFrame(_records['records'])\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Fivetran Salesforce connector via simple_salesforce
+  imports:
+  - from simple_salesforce import Salesforce
+  confidence: 0.82
+  role: source
+- type: connector_hubspot
+  category: API Source
+  template: "import requests\n_token = dbutils.secrets.get(scope='{scope}', key='hubspot-token')\n_response = requests.get(\n\
+    \    'https://api.hubapi.com/crm/v3/objects/{object_type}',\n    headers={{'Authorization': f'Bearer {{_token}}'}}, timeout=60)\n\
+    df_{name} = spark.createDataFrame(_response.json()['results'])\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Fivetran HubSpot connector via API
+  imports:
+  - import requests
+  confidence: 0.8
+  role: source
+- type: connector_stripe
+  category: API Source
+  template: 'import requests
+
+    _key = dbutils.secrets.get(scope=''{scope}'', key=''stripe-key'')
+
+    _response = requests.get(''https://api.stripe.com/v1/{resource}'', auth=(_key, ''''), timeout=60)
+
+    df_{name} = spark.createDataFrame(_response.json()[''data''])
+
+    df_{name}.write.format(''delta'').mode(''overwrite'').saveAsTable(''{catalog}.{schema}.{table}'')
+
+    '
+  description: Fivetran Stripe connector via API
+  imports:
+  - import requests
+  confidence: 0.8
+  role: source
+- type: connector_shopify
+  category: API Source
+  template: "import requests\n_token = dbutils.secrets.get(scope='{scope}', key='shopify-token')\n_response = requests.get(\n\
+    \    'https://{shop}.myshopify.com/admin/api/2024-01/{resource}.json',\n    headers={{'X-Shopify-Access-Token': _token}},\
+    \ timeout=60)\ndf_{name} = spark.createDataFrame(_response.json()['{resource}'])\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Fivetran Shopify connector via API
+  imports:
+  - import requests
+  confidence: 0.8
+  role: source
+- type: connector_zendesk
+  category: API Source
+  template: "import requests\n_auth = (dbutils.secrets.get(scope='{scope}', key='zendesk-email') + '/token',\n         dbutils.secrets.get(scope='{scope}',\
+    \ key='zendesk-token'))\n_response = requests.get('https://{subdomain}.zendesk.com/api/v2/{resource}.json', auth=_auth,\
+    \ timeout=60)\ndf_{name} = spark.createDataFrame(_response.json()['{resource}'])\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Fivetran Zendesk connector via API
+  imports:
+  - import requests
+  confidence: 0.8
+  role: source
+- type: connector_jira
+  category: API Source
+  template: "import requests\n_auth = (dbutils.secrets.get(scope='{scope}', key='jira-email'),\n         dbutils.secrets.get(scope='{scope}',\
+    \ key='jira-token'))\n_response = requests.get('https://{domain}.atlassian.net/rest/api/3/search', auth=_auth, timeout=60)\n\
+    df_{name} = spark.createDataFrame(_response.json()['issues'])\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Fivetran Jira connector via API
+  imports:
+  - import requests
+  confidence: 0.8
+  role: source
+- type: connector_google_analytics
+  category: API Source
+  template: "# Fivetran GA4 connector -> google-analytics-data API\n%pip install google-analytics-data\nfrom google.analytics.data_v1beta\
+    \ import BetaAnalyticsDataClient\n_client = BetaAnalyticsDataClient()\n_request = {{'property': 'properties/{property_id}',\
+    \ 'date_ranges': [{{'start_date': '{start_date}', 'end_date': '{end_date}'}}],\n    'dimensions': [{dimensions}], 'metrics':\
+    \ [{metrics}]}}\n_response = _client.run_report(_request)\ndf_{name} = spark.createDataFrame([dict(zip([d.name for d in\
+    \ _response.dimension_headers] + [m.name for m in _response.metric_headers], [dv.value for dv in row.dimension_values]\
+    \ + [mv.value for mv in row.metric_values])) for row in _response.rows])\n"
+  description: Fivetran GA4 connector via google-analytics-data API
+  imports: []
+  confidence: 0.75
+  role: source
+- type: connector_facebook_ads
+  category: API Source
+  template: "import requests\n_token = dbutils.secrets.get(scope='{scope}', key='facebook-token')\n_response = requests.get(\n\
+    \    f'https://graph.facebook.com/v18.0/act_{{act_id}}/insights',\n    params={{'access_token': _token, 'fields': '{fields}',\
+    \ 'date_preset': '{date_preset}'}},\n    timeout=60)\ndf_{name} = spark.createDataFrame(_response.json()['data'])\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Fivetran Facebook Ads connector via Graph API
+  imports:
+  - import requests
+  confidence: 0.78
+  role: source
+- type: connector_google_ads
+  category: API Source
+  template: '# Fivetran Google Ads -> Google Ads API
+
+    %pip install google-ads
+
+    from google.ads.googleads.client import GoogleAdsClient
+
+    _client = GoogleAdsClient.load_from_dict({config})
+
+    _ga_service = _client.get_service(''GoogleAdsService'')
+
+    _query = ''{gaql_query}''
+
+    _response = _ga_service.search(customer_id=''{customer_id}'', query=_query)
+
+    _rows = [{{f.name: getattr(row, f.name, None) for f in row.DESCRIPTOR.fields}} for row in _response]
+
+    df_{name} = spark.createDataFrame(_rows)
+
+    '
+  description: Fivetran Google Ads connector via API
+  imports: []
+  confidence: 0.75
+  role: source
+- type: connector_linkedin_ads
+  category: API Source
+  template: "import requests\n_token = dbutils.secrets.get(scope='{scope}', key='linkedin-token')\n_response = requests.get(\n\
+    \    'https://api.linkedin.com/v2/adAnalyticsV2',\n    headers={{'Authorization': f'Bearer {{_token}}'}},\n    params={{'q':\
+    \ 'analytics', 'dateRange.start.year': '{year}'}},\n    timeout=60)\ndf_{name} = spark.createDataFrame(_response.json()['elements'])\n"
+  description: Fivetran LinkedIn Ads connector via API
+  imports:
+  - import requests
+  confidence: 0.78
+  role: source
+- type: connector_netsuite
+  category: JDBC Source
+  template: "df_{name} = (spark.read\n    .format('jdbc')\n    .option('url', 'jdbc:ns://{account_id}.suitetalk.api.netsuite.com:{port}')\n\
+    \    .option('dbtable', '{table}')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='ns-user'))\n    .option('password',\
+    \ dbutils.secrets.get(scope='{scope}', key='ns-pass'))\n    .load())\n"
+  description: Fivetran NetSuite connector via JDBC
+  imports: []
+  confidence: 0.78
+  role: source
+- type: connector_workday
+  category: API Source
+  template: "import requests\n_response = requests.get(\n    'https://wd2-impl-services1.workday.com/ccx/service/{tenant}/{api}/{version}',\n\
+    \    auth=(dbutils.secrets.get(scope='{scope}', key='wd-user'),\n          dbutils.secrets.get(scope='{scope}', key='wd-pass')),\n\
+    \    timeout=60)\ndf_{name} = spark.read.format('xml').option('rowTag', '{row_tag}').load(\n    spark.sparkContext.parallelize([_response.text]))\n"
+  description: Fivetran Workday connector via SOAP/REST API
+  imports:
+  - import requests
+  confidence: 0.75
+  role: source
+- type: transformation_dbt
+  category: dbt CLI
+  template: "import subprocess\n_result = subprocess.run(\n    ['dbt', 'run', '--project-dir', '{project_dir}', '--target',\
+    \ 'databricks'],\n    capture_output=True, text=True, timeout=3600)\nprint(_result.stdout)\nif _result.returncode != 0:\n\
+    \    raise Exception(f'dbt failed: {_result.stderr[:500]}')\n"
+  description: Fivetran dbt transformation as CLI execution
+  imports:
+  - import subprocess
+  confidence: 0.82
+  role: process

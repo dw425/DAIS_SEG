@@ -4,9 +4,12 @@ Ported from validators/line-validator.js.
 """
 
 import ast
+import logging
 import re
 
 from app.models.pipeline import NotebookResult
+
+logger = logging.getLogger(__name__)
 
 _ANTIPATTERNS = [
     (re.compile(r"while\s+True.*sleep", re.DOTALL), "Polling loop detected -- use trigger() instead"),
@@ -23,6 +26,9 @@ def validate_lines(notebook: NotebookResult) -> tuple[float, list[str]]:
     Returns:
         (score, errors) where score is 0-1 quality ratio.
     """
+    if not notebook or not notebook.cells:
+        return 1.0, []
+
     errors: list[str] = []
     total_cells = 0
     clean_cells = 0
@@ -50,4 +56,5 @@ def validate_lines(notebook: NotebookResult) -> tuple[float, list[str]]:
             clean_cells += 1
 
     score = clean_cells / max(total_cells, 1)
+    logger.info("Line validation: %d/%d cells clean (score=%.2f), %d errors", clean_cells, total_cells, score, len(errors))
     return score, errors

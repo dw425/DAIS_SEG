@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 def parse_matillion(content: bytes, filename: str) -> ParseResult:
     """Parse a Matillion JSON export."""
-    data = json.loads(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {filename}: {exc}") from exc
     processors: list[Processor] = []
     connections: list[Connection] = []
     process_groups: list[ProcessGroup] = []

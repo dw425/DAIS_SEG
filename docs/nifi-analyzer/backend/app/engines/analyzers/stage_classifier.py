@@ -3,9 +3,12 @@
 Ported from stage-classifier.js.
 """
 
+import logging
 import re
 
 from app.models.processor import Processor
+
+logger = logging.getLogger(__name__)
 
 _SOURCE_RE = re.compile(r"^(Get|List|Consume|Listen|Fetch|Query|Scan|Select|Generate)", re.I)
 _SINK_RE = re.compile(r"^(Put|Publish|Send|Post|Insert|Write)", re.I)
@@ -58,6 +61,7 @@ def classify_stages(processors: list[Processor]) -> list[dict]:
         stage_id = _classify_type(p.type)
         buckets.setdefault(stage_id, []).append(p.name)
 
+    logger.info("Stage distribution: %s", {k: len(v) for k, v in buckets.items()})
     result: list[dict] = []
     for stage_def in STAGE_DEFS:
         procs = buckets.get(stage_def["id"])

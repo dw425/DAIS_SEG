@@ -9,6 +9,8 @@ import type {
   ValidationResult,
   ValueAnalysis,
 } from '../types/pipeline';
+import type { FullROIReport } from '../types/roi';
+import { useUIStore } from './ui';
 
 export interface PipelineState {
   platform: string | null;
@@ -20,6 +22,7 @@ export interface PipelineState {
   finalReport: FinalReport | null;
   validation: ValidationResult | null;
   valueAnalysis: ValueAnalysis | null;
+  roiReport: FullROIReport | null;
   fileName: string | null;
   fileSize: number;
 
@@ -33,6 +36,7 @@ export interface PipelineState {
   setFinalReport: (finalReport: FinalReport | null) => void;
   setValidation: (validation: ValidationResult | null) => void;
   setValueAnalysis: (valueAnalysis: ValueAnalysis | null) => void;
+  setROIReport: (roiReport: FullROIReport | null) => void;
   setFile: (name: string, size: number) => void;
   resetAll: () => void;
 }
@@ -47,6 +51,7 @@ const initialState = {
   finalReport: null,
   validation: null,
   valueAnalysis: null,
+  roiReport: null,
   fileName: null,
   fileSize: 0,
 };
@@ -63,6 +68,12 @@ export const usePipelineStore = create<PipelineState>((set) => ({
   setFinalReport: (finalReport) => set({ finalReport }),
   setValidation: (validation) => set({ validation }),
   setValueAnalysis: (valueAnalysis) => set({ valueAnalysis }),
+  setROIReport: (roiReport) => set({ roiReport }),
   setFile: (name, size) => set({ fileName: name, fileSize: size }),
-  resetAll: () => set(initialState),
+  resetAll: () => {
+    set(initialState);
+    // Cascade reset: also clear UI step statuses and progress so stale
+    // "done" badges and progress bar don't persist after a full reset.
+    useUIStore.getState().resetUI();
+  },
 }));

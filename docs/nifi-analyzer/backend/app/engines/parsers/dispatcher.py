@@ -30,6 +30,10 @@ _EXT_MAP: dict[str, str] = {
 
 def parse_flow(content: bytes, filename: str) -> ParseResult:
     """Detect file format and dispatch to the correct parser."""
+    if not content:
+        raise ValueError("Empty file content")
+    if not filename:
+        raise ValueError("Filename is required")
     ext = Path(filename).suffix.lower()
     handler_key = _EXT_MAP.get(ext)
 
@@ -139,7 +143,7 @@ def _detect_python(content: bytes, filename: str) -> str:
         return "dagster"
     if "SparkSession" in text or "spark.read" in text or "spark.sql" in text:
         return "spark"
-    # Fallback to airflow if it has task-like patterns
+    # Fallback to spark if it has function-like patterns
     if "def " in text:
         return "spark"
     raise UnsupportedFormatError("Could not identify Python file type")

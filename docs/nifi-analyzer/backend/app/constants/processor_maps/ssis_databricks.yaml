@@ -438,3 +438,584 @@ mappings:
     imports: []
     confidence: 0.90
     role: "utility"
+
+  # ── ADDITIONAL DATA FLOW TRANSFORMS ──
+  - type: "Fuzzy Grouping"
+    category: "DataFrame API"
+    template: |
+      # Fuzzy Grouping — deduplication via similarity matching
+      from pyspark.ml.feature import BucketedRandomProjectionLSH, Tokenizer, HashingTF
+      tokenizer = Tokenizer(inputCol="{match_col}", outputCol="tokens")
+      df_tokens = tokenizer.transform(df_{input})
+      hashingTF = HashingTF(inputCol="tokens", outputCol="features", numFeatures=256)
+      df_hashed = hashingTF.transform(df_tokens)
+      lsh = BucketedRandomProjectionLSH(inputCol="features", outputCol="hashes", bucketLength=2.0)
+      model = lsh.fit(df_hashed)
+      df_{name} = model.approxSimilarityJoin(df_hashed, df_hashed, {threshold}, distCol="dist")
+    description: "Fuzzy Grouping via LSH-based approximate similarity join"
+    imports: ["from pyspark.ml.feature import BucketedRandomProjectionLSH, Tokenizer, HashingTF"]
+    confidence: 0.72
+    role: "transform"
+
+  - type: "Percentage Sampling"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.sample(withReplacement=False, fraction={percentage}/100.0, seed={seed})
+    description: "Percentage Sampling via DataFrame.sample()"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Row Sampling"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.orderBy(rand()).limit({row_count})
+    description: "Row Sampling via random ordering and limit"
+    imports: ["from pyspark.sql.functions import rand"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "Term Extraction"
+    category: "DataFrame API"
+    template: |
+      from pyspark.ml.feature import Tokenizer, StopWordsRemover, CountVectorizer
+      tokenizer = Tokenizer(inputCol="{input_col}", outputCol="raw_tokens")
+      remover = StopWordsRemover(inputCol="raw_tokens", outputCol="filtered_tokens")
+      df_tokens = remover.transform(tokenizer.transform(df_{input}))
+      df_{name} = (df_tokens
+          .withColumn("term", explode(col("filtered_tokens")))
+          .groupBy("term").agg(count("*").alias("frequency"))
+          .orderBy(desc("frequency")))
+    description: "Term Extraction via tokenization, stop-word removal, and frequency counting"
+    imports: ["from pyspark.sql.functions import explode, col, count, desc", "from pyspark.ml.feature import Tokenizer, StopWordsRemover"]
+    confidence: 0.78
+    role: "transform"
+
+  - type: "Term Lookup"
+    category: "DataFrame API"
+    template: |
+      df_terms = spark.table("{catalog}.{schema}.{term_table}")
+      df_{name} = df_{input}.join(df_terms, col("{input_col}").contains(col("term")), "left")
+    description: "Term Lookup via join against a reference term table"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.78
+    role: "transform"
+
+  - type: "Export Column"
+    category: "File Write"
+    template: |
+      # Export Column — write column content (e.g. BLOB) to files
+      df_{input}.select("{blob_col}").write.format("binaryFile").mode("overwrite").save("{output_path}")
+    description: "Export Column content to external files"
+    imports: []
+    confidence: 0.70
+    role: "sink"
+
+  - type: "Import Column"
+    category: "File Read"
+    template: |
+      df_{name} = (spark.read
+          .format("binaryFile")
+          .load("{file_path}"))
+      df_{name} = df_{name}.withColumn("{target_col}", col("content"))
+    description: "Import Column — read binary/file content into a DataFrame column"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.70
+    role: "source"
+
+  - type: "Data Mining Query"
+    category: "ML Pipeline"
+    template: |
+      # Data Mining Query — run prediction via MLflow model
+      import mlflow
+      model = mlflow.pyfunc.load_model("models:/{model_name}/{stage}")
+      df_{name} = model.predict(df_{input}.toPandas())
+    description: "Data Mining Query mapped to MLflow model prediction"
+    imports: ["import mlflow"]
+    confidence: 0.68
+    role: "transform"
+
+  - type: "FTP Task"
+    category: "File Transfer"
+    template: |
+      # FTP Task — use dbutils.fs or cloud storage instead
+      dbutils.fs.cp("{ftp_source_path}", "{dbfs_target_path}")
+    description: "FTP Task mapped to dbutils.fs.cp or cloud-native file transfer"
+    imports: []
+    confidence: 0.70
+    role: "process"
+
+  - type: "Web Service Task"
+    category: "HTTP Request"
+    template: |
+      import requests
+      response = requests.get("{wsdl_url}", headers={headers})
+      # Parse the response
+      import json
+      data = response.json()
+      df_{name} = spark.createDataFrame([data])
+    description: "Web Service Task mapped to HTTP requests library call"
+    imports: ["import requests", "import json"]
+    confidence: 0.72
+    role: "source"
+
+  - type: "XML Task"
+    category: "XML Processing"
+    template: |
+      df_{name} = (spark.read
+          .format("xml")
+          .option("rowTag", "{row_tag}")
+          .load("{xml_path}"))
+    description: "XML Task mapped to spark-xml reader"
+    imports: []
+    confidence: 0.85
+    role: "process"
+
+  - type: "Transfer Database Task"
+    category: "Database Migration"
+    template: |
+      # Transfer Database Task — read from source, write to Unity Catalog
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="source-jdbc-url"))
+          .option("dbtable", "{source_table}")
+          .load())
+      df_{name}.write.format("delta").mode("overwrite").saveAsTable("{catalog}.{schema}.{target_table}")
+    description: "Transfer Database Task via JDBC read and Delta write"
+    imports: []
+    confidence: 0.82
+    role: "process"
+
+  - type: "Transfer Jobs Task"
+    category: "Workflow Migration"
+    template: |
+      # Transfer Jobs Task — recreate as Databricks Workflow
+      # Use Databricks Jobs API to programmatically create jobs
+      from databricks.sdk import WorkspaceClient
+      w = WorkspaceClient()
+      # job_config = {...}
+      # w.jobs.create(**job_config)
+    description: "Transfer Jobs Task mapped to Databricks Jobs API"
+    imports: ["from databricks.sdk import WorkspaceClient"]
+    confidence: 0.60
+    role: "process"
+
+  - type: "Transfer Logins Task"
+    category: "Security Migration"
+    template: |
+      # Transfer Logins Task — use Unity Catalog identity federation
+      # Logins are managed via SCIM/Identity Provider in Databricks
+      # No direct PySpark equivalent; handled by admin configuration
+      print("Transfer Logins: Configure identity provider via Databricks Account Console")
+    description: "Transfer Logins mapped to Databricks identity federation (manual)"
+    imports: []
+    confidence: 0.50
+    role: "process"
+
+  - type: "Transfer SQL Server Objects Task"
+    category: "Schema Migration"
+    template: |
+      # Transfer SQL Server Objects — migrate tables, views, stored procs
+      tables = spark.read.format("jdbc").option("url", "{jdbc_url}").option("dbtable", "INFORMATION_SCHEMA.TABLES").load()
+      for row in tables.collect():
+          tbl = row["TABLE_NAME"]
+          df_t = spark.read.format("jdbc").option("url", "{jdbc_url}").option("dbtable", tbl).load()
+          df_t.write.format("delta").mode("overwrite").saveAsTable(f"{{catalog}}.{{schema}}.{tbl}")
+    description: "Transfer SQL Server Objects via JDBC schema introspection and Delta write"
+    imports: []
+    confidence: 0.68
+    role: "process"
+
+  - type: "WMI Data Reader"
+    category: "System Query"
+    template: |
+      # WMI Data Reader — no direct Spark equivalent
+      # Use subprocess or REST API to query system metrics
+      import subprocess
+      # WARNING: wmic is Windows-only; will not work on Databricks clusters
+      result = subprocess.run(["wmic", "{wmi_query}"], capture_output=True, text=True)
+      rows = [line.split() for line in result.stdout.strip().split("\n")]
+      df_{name} = spark.createDataFrame(rows[1:], schema=rows[0])
+    description: "WMI Data Reader mapped to subprocess call (Windows-specific)"
+    imports: ["import subprocess"]
+    confidence: 0.45
+    role: "source"
+
+  - type: "WMI Event Watcher"
+    category: "Event Monitoring"
+    template: |
+      # WMI Event Watcher — use Databricks Jobs trigger or Delta Live Tables expectations
+      # No direct PySpark equivalent; use event-driven triggers
+      print("WMI Event Watcher: Use Databricks file-arrival or scheduled triggers")
+    description: "WMI Event Watcher mapped to Databricks trigger-based scheduling"
+    imports: []
+    confidence: 0.40
+    role: "process"
+
+  - type: "CDC Control Task"
+    category: "Change Data Capture"
+    template: |
+      # CDC Control Task — use Delta Change Data Feed
+      spark.sql("ALTER TABLE {catalog}.{schema}.{table} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+      df_{name} = (spark.read
+          .format("delta")
+          .option("readChangeFeed", "true")
+          .option("startingVersion", {start_version})
+          .table("{catalog}.{schema}.{table}"))
+    description: "CDC Control Task mapped to Delta Change Data Feed"
+    imports: []
+    confidence: 0.88
+    role: "process"
+
+  - type: "CDC Source"
+    category: "Change Data Capture"
+    template: |
+      df_{name} = (spark.readStream
+          .format("delta")
+          .option("readChangeFeed", "true")
+          .option("startingVersion", {start_version})
+          .table("{catalog}.{schema}.{table}"))
+    description: "CDC Source via Delta Change Data Feed streaming read"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "ODBC Destination"
+    category: "JDBC Sink"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="odbc-jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "{driver}")
+          .mode("{write_mode}")
+          .save())
+    description: "ODBC Destination mapped to JDBC write"
+    imports: []
+    confidence: 0.85
+    role: "sink"
+
+  - type: "SQL Server Destination"
+    category: "JDBC Sink"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="sqlserver-jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
+          .mode("{write_mode}")
+          .save())
+    description: "SQL Server Destination via JDBC bulk write"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "Analysis Services Processing"
+    category: "OLAP Processing"
+    template: |
+      # Analysis Services Processing — no direct Spark equivalent
+      # Use Databricks SQL Warehouse for OLAP-style aggregations
+      df_{name} = spark.sql("""
+          SELECT {dimensions}, {measures}
+          FROM {catalog}.{schema}.{fact_table}
+          GROUP BY {dimensions}
+      """)
+    description: "Analysis Services Processing mapped to Databricks SQL aggregation"
+    imports: []
+    confidence: 0.55
+    role: "process"
+
+  - type: "DataReader Destination"
+    category: "DataFrame Collect"
+    template: |
+      # DataReader Destination — makes data available to another component
+      df_{name}_results = df_{input}.collect()
+    description: "DataReader Destination mapped to DataFrame collect()"
+    imports: []
+    confidence: 0.75
+    role: "sink"
+
+  - type: "Recordset Destination"
+    category: "DataFrame Cache"
+    template: |
+      # Recordset Destination — store result set in memory
+      df_{input}.cache()
+      df_{input}.createOrReplaceTempView("{view_name}")
+    description: "Recordset Destination mapped to cache + temp view"
+    imports: []
+    confidence: 0.80
+    role: "sink"
+
+  - type: "For Loop Container"
+    category: "Loop Control"
+    template: |
+      # For Loop Container — iterate with index
+      for {iterator} in range({start}, {end}, {step}):
+          df_iter = spark.sql(f"SELECT * FROM {{catalog}}.{{schema}}.{{table}} WHERE {partition_col} = {{{iterator}}}")
+          # Process each iteration
+          df_iter.write.format("delta").mode("append").saveAsTable("{catalog}.{schema}.{output_table}")
+    description: "For Loop Container mapped to Python for-range loop"
+    imports: []
+    confidence: 0.82
+    role: "process"
+
+  - type: "Audit"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import current_timestamp, lit, input_file_name
+      df_{name} = (df_{input}
+          .withColumn("_audit_timestamp", current_timestamp())
+          .withColumn("_audit_package", lit("{package_name}"))
+          .withColumn("_audit_task", lit("{task_name}"))
+          .withColumn("_audit_source", input_file_name()))
+    description: "Audit transform adding execution metadata columns"
+    imports: ["from pyspark.sql.functions import current_timestamp, lit, input_file_name"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Cache Transform"
+    category: "DataFrame Cache"
+    template: |
+      df_{name} = df_{input}.cache()
+      df_{name}.count()  # materialize cache
+    description: "Cache Transform mapped to DataFrame.cache() with materialization"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "Balanced Data Distributor"
+    category: "DataFrame Repartition"
+    template: |
+      df_{name} = df_{input}.repartition({num_partitions})
+    description: "Balanced Data Distributor via repartition for parallel processing"
+    imports: []
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Term Extraction Destination"
+    category: "Delta Sink"
+    template: |
+      df_{input}.write.format("delta").mode("{write_mode}").saveAsTable("{catalog}.{schema}.{term_table}")
+    description: "Term Extraction Destination to Delta table"
+    imports: []
+    confidence: 0.85
+    role: "sink"
+
+  - type: "Dimension Processing"
+    category: "SCD Processing"
+    template: |
+      # Dimension Processing — process dimension updates
+      from delta.tables import DeltaTable
+      dim = DeltaTable.forName(spark, "{catalog}.{schema}.{dim_table}")
+      dim.alias("target").merge(
+          df_{input}.alias("source"),
+          "target.{business_key} = source.{business_key}"
+      ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+    description: "Dimension Processing via Delta MERGE for SCD management"
+    imports: ["from delta.tables import DeltaTable"]
+    confidence: 0.82
+    role: "process"
+
+  - type: "Partition Processing"
+    category: "Delta Table Management"
+    template: |
+      # Partition Processing — manage table partitions
+      spark.sql("ALTER TABLE {catalog}.{schema}.{table} ADD IF NOT EXISTS PARTITION ({partition_col}='{partition_value}')")
+    description: "Partition Processing via Spark SQL ALTER TABLE"
+    imports: []
+    confidence: 0.72
+    role: "process"
+
+  - type: "Raw File Destination"
+    category: "Delta Sink"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("{write_mode}")
+          .save("{raw_path}"))
+    description: "Raw File Destination mapped to Delta write for staging"
+    imports: []
+    confidence: 0.88
+    role: "sink"
+
+  - type: "Excel Destination"
+    category: "File Sink"
+    template: |
+      # Excel Destination — write via pandas
+      df_{input}.toPandas().to_excel("{output_path}", index=False, sheet_name="{sheet_name}")
+    description: "Excel Destination via toPandas and openpyxl"
+    imports: []
+    confidence: 0.78
+    role: "sink"
+
+  - type: "ADO NET Destination"
+    category: "JDBC Sink"
+    template: |
+      (df_{input}.write
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="ado-jdbc-url"))
+          .option("dbtable", "{table}")
+          .option("driver", "{driver}")
+          .mode("{write_mode}")
+          .save())
+    description: "ADO NET Destination mapped to JDBC write"
+    imports: []
+    confidence: 0.88
+    role: "sink"
+
+  - type: "Merge"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{left}.union(df_{right}).orderBy("{sort_col}")
+    description: "Merge (sorted union) mapped to union + orderBy"
+    imports: []
+    confidence: 0.82
+    role: "transform"
+
+  - type: "Conditional Merge"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import when, lit
+      df_{name} = df_{input}.withColumn("_merge_flag",
+          when(col("{condition_col}") == "{condition_val}", lit("path_a"))
+          .otherwise(lit("path_b")))
+    description: "Conditional Merge via when/otherwise flagging"
+    imports: ["from pyspark.sql.functions import when, lit, col"]
+    confidence: 0.75
+    role: "transform"
+
+  - type: "Execute Package Task"
+    category: "Workflow Orchestration"
+    template: |
+      # Execute Package Task — invoke another Databricks Job
+      from databricks.sdk import WorkspaceClient
+      w = WorkspaceClient()
+      run = w.jobs.run_now(job_id={child_job_id})
+      run.result()  # Wait for completion
+    description: "Execute Package Task mapped to Databricks Jobs run_now()"
+    imports: ["from databricks.sdk import WorkspaceClient"]
+    confidence: 0.80
+    role: "process"
+
+  - type: "Bulk Insert Task"
+    category: "Delta Sink"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("append")
+          .option("mergeSchema", "true")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "Bulk Insert Task mapped to Delta append write"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "Data Profiling Task"
+    category: "Data Quality"
+    template: |
+      # Data Profiling Task — compute column statistics
+      df_{name} = df_{input}.describe()
+      df_null_counts = df_{input}.select([count(when(col(c).isNull(), c)).alias(c) for c in df_{input}.columns])
+    description: "Data Profiling Task via describe() and null analysis"
+    imports: ["from pyspark.sql.functions import count, when, col"]
+    confidence: 0.85
+    role: "transform"
+
+  - type: "Checksum Column"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import md5, concat_ws
+      df_{name} = df_{input}.withColumn("_checksum", md5(concat_ws("||", *[col(c) for c in {columns}])))
+    description: "Checksum Column via MD5 hash of concatenated columns"
+    imports: ["from pyspark.sql.functions import md5, concat_ws, col"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "Error Output"
+    category: "Error Handling"
+    template: |
+      # Error Output — capture rows that fail validation
+      df_{name}_valid = df_{input}.filter("{validation_expr}")
+      df_{name}_error = df_{input}.filter(f"NOT ({validation_expr})")
+      df_{name}_error.write.format("delta").mode("append").saveAsTable("{catalog}.{schema}.{error_table}")
+    description: "Error Output mapped to filter-based row routing and error table"
+    imports: []
+    confidence: 0.82
+    role: "transform"
+
+  - type: "Script Component Source"
+    category: "Custom Source"
+    template: |
+      # Script Component Source — custom data generation
+      from pyspark.sql.types import StructType, StructField, StringType
+      schema = StructType([StructField("{col}", StringType(), True)])
+      data = [{custom_data}]
+      df_{name} = spark.createDataFrame(data, schema)
+    description: "Script Component Source mapped to programmatic DataFrame creation"
+    imports: ["from pyspark.sql.types import StructType, StructField, StringType"]
+    confidence: 0.75
+    role: "source"
+
+  - type: "Script Component Transform"
+    category: "Custom Transform"
+    template: |
+      # Script Component Transform — custom row-level logic
+      from pyspark.sql.functions import udf
+      from pyspark.sql.types import StringType
+      @udf(StringType())
+      def custom_transform(val):
+          # Custom transformation logic
+          return val
+      df_{name} = df_{input}.withColumn("{output_col}", custom_transform(col("{input_col}")))
+    description: "Script Component Transform mapped to PySpark UDF"
+    imports: ["from pyspark.sql.functions import udf, col", "from pyspark.sql.types import StringType"]
+    confidence: 0.75
+    role: "transform"
+
+  - type: "Script Component Destination"
+    category: "Custom Sink"
+    template: |
+      # Script Component Destination — custom write logic
+      df_{input}.foreach(lambda row: custom_write_function(row))
+    description: "Script Component Destination mapped to DataFrame.foreach()"
+    imports: []
+    confidence: 0.68
+    role: "sink"
+
+  - type: "CDC Splitter"
+    category: "Change Data Capture"
+    template: |
+      from pyspark.sql.functions import col
+      df_inserts = df_{input}.filter(col("_change_type") == "insert")
+      df_updates = df_{input}.filter(col("_change_type").isin("update_preimage", "update_postimage"))
+      df_deletes = df_{input}.filter(col("_change_type") == "delete")
+    description: "CDC Splitter via Delta CDF _change_type column filtering"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "OLE DB Source Variable"
+    category: "JDBC Source"
+    template: |
+      query = f"{sql_expression}"
+      df_{name} = (spark.read
+          .format("jdbc")
+          .option("url", dbutils.secrets.get(scope="{scope}", key="sqlserver-jdbc-url"))
+          .option("query", query)
+          .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
+          .load())
+    description: "OLE DB Source with variable SQL expression via JDBC query option"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "Percent Sampling Row Count"
+    category: "DataFrame API"
+    template: |
+      total = df_{input}.count()
+      sample_size = int(total * {percentage} / 100.0)
+      df_{name} = df_{input}.orderBy(rand()).limit(sample_size)
+    description: "Percentage-based row count sampling"
+    imports: ["from pyspark.sql.functions import rand"]
+    confidence: 0.88
+    role: "transform"

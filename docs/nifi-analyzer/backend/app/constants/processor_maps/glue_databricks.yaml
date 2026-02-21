@@ -208,3 +208,349 @@ mappings:
     imports: []
     confidence: 0.88
     role: "utility"
+
+  # ── ADDITIONAL AWS GLUE COMPONENTS ──
+  - type: "DynamicFrame.fromCatalog"
+    category: "Spark Table Read"
+    template: |
+      df_{name} = spark.table("{catalog}.{schema}.{table}")
+    description: "DynamicFrame.fromCatalog mapped to spark.table() with Unity Catalog"
+    imports: []
+    confidence: 0.95
+    role: "source"
+
+  - type: "DynamicFrame.fromOptions"
+    category: "Spark Read"
+    template: |
+      df_{name} = (spark.read
+          .format("{format}")
+          .option("header", "true")
+          .load("{path}"))
+    description: "DynamicFrame.fromOptions mapped to spark.read with format"
+    imports: []
+    confidence: 0.92
+    role: "source"
+
+  - type: "RenameField"
+    category: "DataFrame API"
+    template: |
+      df_{name} = df_{input}.withColumnRenamed("{old_name}", "{new_name}")
+    description: "RenameField mapped to withColumnRenamed()"
+    imports: []
+    confidence: 0.95
+    role: "transform"
+
+  - type: "Spigot"
+    category: "Debug/Sample"
+    template: |
+      # Spigot — sample data for debugging
+      df_{name}_sample = df_{input}.limit({sample_size})
+      df_{name}_sample.write.format("json").mode("overwrite").save("{debug_output_path}")
+      df_{name} = df_{input}  # pass through
+    description: "Spigot debug sampling via limit and JSON write"
+    imports: []
+    confidence: 0.85
+    role: "transform"
+
+  - type: "Unbox"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import from_json, col
+      from pyspark.sql.types import {schema_type}
+      df_{name} = df_{input}.withColumn("{col_name}", from_json(col("{col_name}"), {schema}))
+    description: "Unbox (parse stringified JSON/struct) via from_json()"
+    imports: ["from pyspark.sql.functions import from_json, col"]
+    confidence: 0.85
+    role: "transform"
+
+  - type: "GlueContext.write_dynamic_frame"
+    category: "Delta Sink"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("{write_mode}")
+          .option("mergeSchema", "true")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "write_dynamic_frame mapped to Delta saveAsTable"
+    imports: []
+    confidence: 0.92
+    role: "sink"
+
+  - type: "GlueCrawler"
+    category: "Schema Discovery"
+    template: |
+      # GlueCrawler — use Unity Catalog for schema discovery
+      # Crawl is implicit with Auto Loader schema evolution
+      df_{name} = (spark.readStream
+          .format("cloudFiles")
+          .option("cloudFiles.format", "{format}")
+          .option("cloudFiles.schemaLocation", "{schema_path}")
+          .option("cloudFiles.inferColumnTypes", "true")
+          .load("{source_path}"))
+    description: "GlueCrawler mapped to Auto Loader with schema inference"
+    imports: []
+    confidence: 0.88
+    role: "source"
+
+  - type: "GlueClassifier"
+    category: "Schema Inference"
+    template: |
+      # GlueClassifier — format detection via spark.read with inferSchema
+      df_{name} = (spark.read
+          .format("{format}")
+          .option("inferSchema", "true")
+          .option("header", "true")
+          .load("{path}"))
+      # Schema is auto-inferred
+      df_{name}.printSchema()
+    description: "GlueClassifier mapped to Spark schema inference"
+    imports: []
+    confidence: 0.82
+    role: "source"
+
+  - type: "GlueConnection"
+    category: "JDBC Connection"
+    template: |
+      # GlueConnection — use Databricks Secrets for connection credentials
+      jdbc_url = dbutils.secrets.get(scope="{scope}", key="jdbc-url")
+      jdbc_props = {
+          "user": dbutils.secrets.get(scope="{scope}", key="db-user"),
+          "password": dbutils.secrets.get(scope="{scope}", key="db-pass"),
+          "driver": "{driver}"
+      }
+      df_{name} = spark.read.jdbc(url=jdbc_url, table="{table}", properties=jdbc_props)
+    description: "GlueConnection mapped to Databricks JDBC with Secrets"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "GlueJob"
+    category: "Workflow Orchestration"
+    template: |
+      # GlueJob — mapped to Databricks Job
+      from databricks.sdk import WorkspaceClient
+      w = WorkspaceClient()
+      run = w.jobs.run_now(job_id={job_id})
+      run.result()  # Wait for completion
+    description: "GlueJob mapped to Databricks Jobs API"
+    imports: ["from databricks.sdk import WorkspaceClient"]
+    confidence: 0.85
+    role: "process"
+
+  - type: "GlueTrigger"
+    category: "Workflow Trigger"
+    template: |
+      # GlueTrigger — use Databricks Job triggers
+      # Schedule, file-arrival, or dependent triggers configured in Job settings
+      # No PySpark code needed; configure via Databricks Jobs UI or API
+      print("Configure trigger via Databricks Jobs schedule or file-arrival trigger")
+    description: "GlueTrigger mapped to Databricks Jobs trigger configuration"
+    imports: []
+    confidence: 0.75
+    role: "process"
+
+  - type: "GlueWorkflow"
+    category: "Workflow Orchestration"
+    template: |
+      # GlueWorkflow — use Databricks multi-task Job
+      from databricks.sdk import WorkspaceClient
+      w = WorkspaceClient()
+      # Multi-task job orchestrates the full workflow
+      run = w.jobs.run_now(job_id={workflow_job_id})
+      run.result()
+    description: "GlueWorkflow mapped to Databricks multi-task Job"
+    imports: ["from databricks.sdk import WorkspaceClient"]
+    confidence: 0.82
+    role: "process"
+
+  - type: "GlueDataBrew"
+    category: "Data Preparation"
+    template: |
+      # GlueDataBrew — data preparation mapped to PySpark transforms
+      df_{name} = (df_{input}
+          .na.fill({fill_values})
+          .withColumn("{new_col}", expr("{recipe_expression}"))
+          .filter("{filter_condition}"))
+    description: "GlueDataBrew recipe mapped to PySpark transformation chain"
+    imports: ["from pyspark.sql.functions import expr"]
+    confidence: 0.72
+    role: "transform"
+
+  - type: "FindMatches"
+    category: "Data Quality"
+    template: |
+      # FindMatches ML transform — fuzzy deduplication
+      from pyspark.sql.functions import soundex, levenshtein, col
+      from pyspark.sql import Window
+      from pyspark.sql.functions import row_number
+      # Approximate match via Soundex + Levenshtein
+      df_self = df_{input}.alias("a").crossJoin(df_{input}.alias("b"))
+      df_matches = df_self.filter(
+          (col("a.{id_col}") < col("b.{id_col}")) &
+          (levenshtein(col("a.{match_col}"), col("b.{match_col}")) <= {threshold})
+      )
+      df_{name} = df_matches
+    description: "FindMatches ML transform via Levenshtein fuzzy matching"
+    imports: ["from pyspark.sql.functions import levenshtein, col"]
+    confidence: 0.68
+    role: "transform"
+
+  - type: "FillMissingValues"
+    category: "Data Quality"
+    template: |
+      # FillMissingValues — impute nulls
+      from pyspark.ml.feature import Imputer
+      imputer = Imputer(inputCols={input_cols}, outputCols={output_cols}).setStrategy("{strategy}")
+      df_{name} = imputer.fit(df_{input}).transform(df_{input})
+    description: "FillMissingValues via ML Imputer (mean/median/mode)"
+    imports: ["from pyspark.ml.feature import Imputer"]
+    confidence: 0.82
+    role: "transform"
+
+  - type: "GluePartitionIndex"
+    category: "Table Optimization"
+    template: |
+      # GluePartitionIndex — optimize table with Z-ORDER
+      spark.sql("OPTIMIZE {catalog}.{schema}.{table} ZORDER BY ({index_cols})")
+    description: "GluePartitionIndex mapped to Delta OPTIMIZE ZORDER"
+    imports: []
+    confidence: 0.85
+    role: "process"
+
+  - type: "GlueBookmarkManager"
+    category: "Incremental Processing"
+    template: |
+      # GlueBookmarkManager — track incremental processing state
+      # Use Delta table watermark or Auto Loader checkpoint
+      df_{name} = (spark.readStream
+          .format("cloudFiles")
+          .option("cloudFiles.format", "{format}")
+          .option("cloudFiles.schemaLocation", "{schema_path}")
+          .load("{source_path}"))
+      # Checkpoint tracks processed files automatically
+      (df_{name}.writeStream
+          .format("delta")
+          .option("checkpointLocation", "{checkpoint_path}")
+          .trigger(availableNow=True)
+          .toTable("{catalog}.{schema}.{table}"))
+    description: "GlueBookmarkManager mapped to Auto Loader checkpoint-based tracking"
+    imports: []
+    confidence: 0.88
+    role: "process"
+
+  - type: "PushDownPredicate"
+    category: "Query Optimization"
+    template: |
+      # PushDownPredicate — filter at source via predicate pushdown
+      df_{name} = (spark.read
+          .format("{format}")
+          .option("header", "true")
+          .load("{path}")
+          .filter("{predicate}"))
+      # Spark auto-pushes predicates to supported sources
+    description: "PushDownPredicate via Spark native predicate pushdown"
+    imports: []
+    confidence: 0.92
+    role: "transform"
+
+  - type: "GlueStreamingETL"
+    category: "Streaming"
+    template: |
+      df_{name} = (spark.readStream
+          .format("{source_format}")
+          .option("kafka.bootstrap.servers", "{bootstrap_servers}")
+          .option("subscribe", "{topic}")
+          .option("startingOffsets", "latest")
+          .load())
+      (df_{name}.writeStream
+          .format("delta")
+          .option("checkpointLocation", "{checkpoint_path}")
+          .outputMode("append")
+          .toTable("{catalog}.{schema}.{table}"))
+    description: "Glue Streaming ETL mapped to Spark Structured Streaming"
+    imports: []
+    confidence: 0.90
+    role: "process"
+
+  - type: "S3GluePartitionTransform"
+    category: "Table Partitioning"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .partitionBy({partition_columns})
+          .mode("{write_mode}")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "S3 partition transform mapped to Delta partitionBy"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "GlueSchemaRegistry"
+    category: "Schema Management"
+    template: |
+      # GlueSchemaRegistry — use Unity Catalog for schema management
+      # Schema is managed automatically by Delta format
+      spark.sql("DESCRIBE TABLE EXTENDED {catalog}.{schema}.{table}")
+      # Schema evolution is controlled via mergeSchema option
+    description: "GlueSchemaRegistry mapped to Unity Catalog schema management"
+    imports: []
+    confidence: 0.85
+    role: "process"
+
+  - type: "Map"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import col
+      mapping_pairs = {mapping_pairs}
+      df_{name} = df_{input}
+      for source_col, target_col, target_type in mapping_pairs:
+          df_{name} = df_{name}.withColumn(target_col, col(source_col).cast(target_type))
+    description: "Glue Map transform via withColumn and cast"
+    imports: ["from pyspark.sql.functions import col"]
+    confidence: 0.88
+    role: "transform"
+
+  - type: "FlatMap"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import explode, col
+      df_{name} = df_{input}.withColumn("{array_col}", explode(col("{array_col}")))
+    description: "Glue FlatMap via explode for array expansion"
+    imports: ["from pyspark.sql.functions import explode, col"]
+    confidence: 0.90
+    role: "transform"
+
+  - type: "GlueContext.getSink"
+    category: "Delta Sink"
+    template: |
+      (df_{input}.write
+          .format("delta")
+          .mode("{write_mode}")
+          .saveAsTable("{catalog}.{schema}.{table}"))
+    description: "GlueContext.getSink mapped to Delta saveAsTable"
+    imports: []
+    confidence: 0.90
+    role: "sink"
+
+  - type: "GlueContext.getSource"
+    category: "Spark Read"
+    template: |
+      df_{name} = (spark.read
+          .format("{format}")
+          .load("{path}"))
+    description: "GlueContext.getSource mapped to spark.read"
+    imports: []
+    confidence: 0.90
+    role: "source"
+
+  - type: "GlueContext.add_ingestion_time_columns"
+    category: "DataFrame API"
+    template: |
+      from pyspark.sql.functions import current_timestamp, lit
+      df_{name} = (df_{input}
+          .withColumn("_ingest_timestamp", current_timestamp())
+          .withColumn("_ingest_source", lit("{source_name}")))
+    description: "Add ingestion time metadata columns"
+    imports: ["from pyspark.sql.functions import current_timestamp, lit"]
+    confidence: 0.90
+    role: "transform"

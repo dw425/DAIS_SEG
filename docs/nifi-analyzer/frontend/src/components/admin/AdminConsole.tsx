@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import LogViewer from './LogViewer';
 import CodeValidator from './CodeValidator';
 import JsonExplorer from '../shared/JsonExplorer';
+import AutoRunButton from '../shared/AutoRunButton';
 import { usePipelineStore } from '../../store/pipeline';
 import { useUIStore } from '../../store/ui';
 
-type Tab = 'logs' | 'state' | 'validator';
+type Tab = 'logs' | 'state' | 'validator' | 'autorun';
 
 export default function AdminConsole() {
   const [activeTab, setActiveTab] = useState<Tab>('logs');
@@ -39,6 +40,7 @@ export default function AdminConsole() {
     { id: 'logs', label: 'Log Viewer' },
     { id: 'state', label: 'State Inspector' },
     { id: 'validator', label: 'Code Validator' },
+    { id: 'autorun', label: 'Auto-Run' },
   ];
 
   return (
@@ -92,6 +94,16 @@ export default function AdminConsole() {
       )}
 
       {activeTab === 'validator' && <CodeValidator />}
+
+      {activeTab === 'autorun' && (
+        <div className="space-y-4">
+          <h3 className="text-sm font-medium text-gray-300">Auto-Run Pipeline</h3>
+          <p className="text-xs text-gray-500">
+            Select a file to automatically run all 8 pipeline steps sequentially.
+          </p>
+          <AutoRunButton />
+        </div>
+      )}
     </div>
   );
 }

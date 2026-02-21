@@ -1,0 +1,126 @@
+{
+  "app": {
+    "title": "ETL Migration Platform",
+    "version": "v5.0.0"
+  },
+  "nav": {
+    "parse": "Parse Flow",
+    "analyze": "Analyze",
+    "assess": "Assess & Map",
+    "convert": "Convert",
+    "report": "Migration Report",
+    "finalReport": "Final Report",
+    "validate": "Validate",
+    "valueAnalysis": "Value Analysis",
+    "summary": "Summary",
+    "admin": "Admin",
+    "dashboard": "Dashboard",
+    "history": "Run History",
+    "compare": "Compare Flows",
+    "versions": "Version History"
+  },
+  "steps": {
+    "step1": {
+      "title": "Parse Flow Definition",
+      "description": "Upload and parse your ETL flow definition file"
+    },
+    "step2": {
+      "title": "Analyze Flow",
+      "description": "Deep analysis of flow structure, dependencies, and patterns"
+    },
+    "step3": {
+      "title": "Assess & Map",
+      "description": "Map source processors to Databricks equivalents"
+    },
+    "step4": {
+      "title": "Convert to Notebooks",
+      "description": "Generate Databricks notebook code"
+    },
+    "step5": {
+      "title": "Migration Report",
+      "description": "Gap analysis, risk matrix, and timeline"
+    },
+    "step6": {
+      "title": "Final Report",
+      "description": "Executive summary and comprehensive report"
+    },
+    "step7": {
+      "title": "Validate",
+      "description": "Validate generated code quality"
+    },
+    "step8": {
+      "title": "Value Analysis",
+      "description": "ROI estimation and optimization recommendations"
+    }
+  },
+  "buttons": {
+    "upload": "Upload File",
+    "run": "Run",
+    "autoRun": "Auto-Run All",
+    "export": "Export",
+    "exportPdf": "Export PDF",
+    "reset": "Reset",
+    "next": "Next Step",
+    "previous": "Previous",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "close": "Close",
+    "search": "Search",
+    "settings": "Settings",
+    "help": "Help",
+    "compare": "Compare",
+    "saveVersion": "Save Version",
+    "viewDiff": "View Diff"
+  },
+  "labels": {
+    "platform": "Platform",
+    "autoDetect": "Auto-detect platform",
+    "processors": "Processors",
+    "connections": "Connections",
+    "processGroups": "Process Groups",
+    "confidence": "Confidence",
+    "status": "Status",
+    "duration": "Duration",
+    "fileName": "File Name",
+    "noData": "No data available",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "warning": "Warning",
+    "info": "Info"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "presence": {
+    "online": "Online",
+    "users": "Users"
+  },
+  "comments": {
+    "addComment": "Add a comment...",
+    "reply": "Reply",
+    "delete": "Delete",
+    "noComments": "No comments yet"
+  },
+  "history": {
+    "title": "Run History",
+    "noRuns": "No runs recorded yet",
+    "viewDetail": "View Details"
+  },
+  "dashboard": {
+    "title": "Portfolio Dashboard",
+    "totalRuns": "Total Runs",
+    "successRate": "Success Rate",
+    "avgDuration": "Avg Duration",
+    "totalProcessors": "Total Processors"
+  },
+  "versioning": {
+    "title": "Version History",
+    "saveSnapshot": "Save Snapshot",
+    "compareDiff": "Compare Versions",
+    "noVersions": "No versions saved yet"
+  }
+}

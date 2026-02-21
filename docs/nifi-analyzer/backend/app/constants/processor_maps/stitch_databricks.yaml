@@ -1,84 +1,149 @@
-# Stitch -> Databricks PySpark Mapping
-# Maps Stitch data pipeline patterns to Databricks equivalents
-
 mappings:
-  - type: "Database Integration"
-    category: "JDBC Source"
-    template: |
-      df_{name} = (spark.read
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
-          .option("dbtable", "{table}")
-          .option("driver", "{driver}")
-          .load())
-    description: "Stitch DB integration replaced by JDBC read"
-    imports: []
-    confidence: 0.92
-    role: "source"
+- type: Database Integration
+  category: JDBC Source
+  template: "df_{name} = (spark.read\n    .format(\"jdbc\")\n    .option(\"url\", dbutils.secrets.get(scope=\"{scope}\", key=\"\
+    jdbc-url\"))\n    .option(\"dbtable\", \"{table}\")\n    .option(\"driver\", \"{driver}\")\n    .load())\n"
+  description: Stitch DB integration replaced by JDBC read
+  imports: []
+  confidence: 0.92
+  role: source
+- type: SaaS Integration
+  category: REST API
+  template: "import requests\n_token = dbutils.secrets.get(scope=\"{scope}\", key=\"api-token\")\n_data = []\n_url = \"{api_base_url}\"\
+    \nwhile _url:\n    _resp = requests.get(_url, headers={\"Authorization\": f\"Bearer {{_token}}\"}, timeout=60)\n    _resp.raise_for_status()\n\
+    \    _json = _resp.json()\n    _data.extend(_json.get(\"{data_key}\", []))\n    _url = _json.get(\"next\", None)\ndf_{name}\
+    \ = spark.createDataFrame(_data)\n"
+  description: Stitch SaaS integration replaced by paginated REST API
+  imports:
+  - import requests
+  confidence: 0.85
+  role: source
+- type: Replication (Full Table)
+  category: Delta Overwrite
+  template: "(df_{input}.write\n    .format(\"delta\")\n    .mode(\"overwrite\")\n    .option(\"overwriteSchema\", \"true\"\
+    )\n    .saveAsTable(\"{catalog}.{schema}.{table}\"))\n"
+  description: Full table replication via Delta overwrite
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: Replication (Incremental)
+  category: Delta MERGE
+  template: "from delta.tables import DeltaTable\n_target = DeltaTable.forName(spark, \"{catalog}.{schema}.{table}\")\n_target.alias(\"\
+    t\").merge(\n    df_{input}.alias(\"s\"),\n    \"t.{replication_key} = s.{replication_key}\"\n).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()\n"
+  description: Incremental replication via Delta MERGE
+  imports:
+  - from delta.tables import DeltaTable
+  confidence: 0.9
+  role: sink
+- type: Webhook Source
+  category: Model Serving
+  template: 'df_{name} = spark.readStream.format("delta").table("{name}_incoming")
 
-  - type: "SaaS Integration"
-    category: "REST API"
-    template: |
-      import requests
-      _token = dbutils.secrets.get(scope="{scope}", key="api-token")
-      _data = []
-      _url = "{api_base_url}"
-      while _url:
-          _resp = requests.get(_url, headers={"Authorization": f"Bearer {{_token}}"}, timeout=60)
-          _resp.raise_for_status()
-          _json = _resp.json()
-          _data.extend(_json.get("{data_key}", []))
-          _url = _json.get("next", None)
-      df_{name} = spark.createDataFrame(_data)
-    description: "Stitch SaaS integration replaced by paginated REST API"
-    imports: ["import requests"]
-    confidence: 0.85
-    role: "source"
+    '
+  description: Stitch webhook replaced by Model Serving + Delta
+  imports: []
+  confidence: 0.85
+  role: source
+- type: Transformation (SQL)
+  category: Spark SQL
+  template: "spark.sql(\"\"\"\n    CREATE OR REPLACE TABLE {catalog}.{schema}.{output_table} AS\n    {sql}\n\"\"\")\n"
+  description: Stitch SQL transformation as Spark SQL CTAS
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: integration_salesforce
+  category: API Source
+  template: "%pip install simple_salesforce\nfrom simple_salesforce import Salesforce\nsf = Salesforce(\n    username=dbutils.secrets.get(scope='{scope}',\
+    \ key='sf-user'),\n    password=dbutils.secrets.get(scope='{scope}', key='sf-pass'),\n    security_token=dbutils.secrets.get(scope='{scope}',\
+    \ key='sf-token'))\n_records = sf.query_all(\"{soql}\")\ndf_{name} = spark.createDataFrame(_records['records'])\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Stitch Salesforce integration via simple_salesforce
+  imports:
+  - from simple_salesforce import Salesforce
+  confidence: 0.82
+  role: source
+- type: integration_hubspot
+  category: API Source
+  template: "import requests\n_token = dbutils.secrets.get(scope='{scope}', key='hubspot-token')\n_response = requests.get(\n\
+    \    'https://api.hubapi.com/crm/v3/objects/{object_type}',\n    headers={{'Authorization': f'Bearer {{_token}}'}}, timeout=60)\n\
+    df_{name} = spark.createDataFrame(_response.json()['results'])\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Stitch HubSpot integration via API
+  imports:
+  - import requests
+  confidence: 0.8
+  role: source
+- type: integration_stripe
+  category: API Source
+  template: 'import requests
 
-  - type: "Replication (Full Table)"
-    category: "Delta Overwrite"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("overwrite")
-          .option("overwriteSchema", "true")
-          .saveAsTable("{catalog}.{schema}.{table}"))
-    description: "Full table replication via Delta overwrite"
-    imports: []
-    confidence: 0.92
-    role: "sink"
+    _key = dbutils.secrets.get(scope=''{scope}'', key=''stripe-key'')
 
-  - type: "Replication (Incremental)"
-    category: "Delta MERGE"
-    template: |
-      from delta.tables import DeltaTable
-      _target = DeltaTable.forName(spark, "{catalog}.{schema}.{table}")
-      _target.alias("t").merge(
-          df_{input}.alias("s"),
-          "t.{replication_key} = s.{replication_key}"
-      ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
-    description: "Incremental replication via Delta MERGE"
-    imports: ["from delta.tables import DeltaTable"]
-    confidence: 0.90
-    role: "sink"
+    _response = requests.get(''https://api.stripe.com/v1/{resource}'', auth=(_key, ''''), timeout=60)
 
-  - type: "Webhook Source"
-    category: "Model Serving"
-    template: |
-      df_{name} = spark.readStream.format("delta").table("{name}_incoming")
-    description: "Stitch webhook replaced by Model Serving + Delta"
-    imports: []
-    confidence: 0.85
-    role: "source"
+    df_{name} = spark.createDataFrame(_response.json()[''data''])
 
-  - type: "Transformation (SQL)"
-    category: "Spark SQL"
-    template: |
-      spark.sql("""
-          CREATE OR REPLACE TABLE {catalog}.{schema}.{output_table} AS
-          {sql}
-      """)
-    description: "Stitch SQL transformation as Spark SQL CTAS"
-    imports: []
-    confidence: 0.92
-    role: "transform"
+    df_{name}.write.format(''delta'').mode(''overwrite'').saveAsTable(''{catalog}.{schema}.{table}'')
+
+    '
+  description: Stitch Stripe integration via API
+  imports:
+  - import requests
+  confidence: 0.8
+  role: source
+- type: integration_zendesk
+  category: API Source
+  template: "import requests\n_auth = (dbutils.secrets.get(scope='{scope}', key='zendesk-email') + '/token',\n         dbutils.secrets.get(scope='{scope}',\
+    \ key='zendesk-token'))\n_response = requests.get('https://{subdomain}.zendesk.com/api/v2/{resource}.json', auth=_auth,\
+    \ timeout=60)\ndf_{name} = spark.createDataFrame(_response.json()['{resource}'])\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Stitch Zendesk integration via API
+  imports:
+  - import requests
+  confidence: 0.8
+  role: source
+- type: integration_jira
+  category: API Source
+  template: "import requests\n_auth = (dbutils.secrets.get(scope='{scope}', key='jira-email'),\n         dbutils.secrets.get(scope='{scope}',\
+    \ key='jira-token'))\n_response = requests.get('https://{domain}.atlassian.net/rest/api/3/search', auth=_auth, timeout=60)\n\
+    df_{name} = spark.createDataFrame(_response.json()['issues'])\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Stitch Jira integration via API
+  imports:
+  - import requests
+  confidence: 0.8
+  role: source
+- type: integration_mongodb
+  category: MongoDB Source
+  template: "df_{name} = (spark.read\n    .format('mongo')\n    .option('uri', dbutils.secrets.get(scope='{scope}', key='mongo-uri'))\n\
+    \    .option('database', '{database}')\n    .option('collection', '{collection}')\n    .load())\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Stitch MongoDB integration via spark-mongo
+  imports: []
+  confidence: 0.85
+  role: source
+- type: integration_mysql
+  category: JDBC Source
+  template: "df_{name} = (spark.read\n    .format('jdbc')\n    .option('url', 'jdbc:mysql://{host}:{port}/{database}')\n \
+    \   .option('dbtable', '{table}')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='mysql-user'))\n    .option('password',\
+    \ dbutils.secrets.get(scope='{scope}', key='mysql-pass'))\n    .load())\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Stitch MySQL integration via JDBC
+  imports: []
+  confidence: 0.92
+  role: source
+- type: integration_postgres
+  category: JDBC Source
+  template: "df_{name} = (spark.read\n    .format('jdbc')\n    .option('url', 'jdbc:postgresql://{host}:{port}/{database}')\n\
+    \    .option('dbtable', '{table}')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='pg-user'))\n    .option('password',\
+    \ dbutils.secrets.get(scope='{scope}', key='pg-pass'))\n    .load())\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Stitch PostgreSQL integration via JDBC
+  imports: []
+  confidence: 0.92
+  role: source
+- type: integration_google_analytics
+  category: API Source
+  template: "%pip install google-analytics-data\nfrom google.analytics.data_v1beta import BetaAnalyticsDataClient\n_client\
+    \ = BetaAnalyticsDataClient()\n_request = {{'property': 'properties/{property_id}', 'date_ranges': [{{'start_date': '{start_date}',\
+    \ 'end_date': '{end_date}'}}],\n    'dimensions': [{dimensions}], 'metrics': [{metrics}]}}\n_response = _client.run_report(_request)\n\
+    _rows = [dict(zip([d.name for d in _response.dimension_headers] + [m.name for m in _response.metric_headers], [dv.value\
+    \ for dv in row.dimension_values] + [mv.value for mv in row.metric_values])) for row in _response.rows]\ndf_{name} = spark.createDataFrame(_rows)\n\
+    df_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: Stitch Google Analytics integration via API
+  imports: []
+  confidence: 0.75
+  role: source

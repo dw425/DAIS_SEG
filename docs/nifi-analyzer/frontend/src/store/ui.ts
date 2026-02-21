@@ -10,6 +10,14 @@ export interface ErrorEntry {
   stack?: string;
 }
 
+export interface ErrorModalData {
+  step: number;
+  stepName: string;
+  message: string;
+  status?: number;
+  stack?: string;
+}
+
 export interface UIState {
   activeStep: number;             // 0-9: steps 1-8 + summary + admin
   stepStatuses: StepStatus[];
@@ -17,6 +25,11 @@ export interface UIState {
   errors: ErrorEntry[];
   progress: number;               // 0-100
   toasts: ToastEntry[];
+  searchOpen: boolean;
+  settingsOpen: boolean;
+  helpOpen: boolean;
+  pipelineRunning: boolean;       // true while runAll is executing
+  errorModal: ErrorModalData | null;  // non-null = show error modal
 
   // Actions
   setActiveStep: (step: number) => void;
@@ -28,6 +41,11 @@ export interface UIState {
   setProgress: (progress: number) => void;
   addToast: (toast: Omit<ToastEntry, 'id' | 'timestamp'>) => void;
   removeToast: (id: string) => void;
+  setSearchOpen: (open: boolean) => void;
+  setSettingsOpen: (open: boolean) => void;
+  setHelpOpen: (open: boolean) => void;
+  setPipelineRunning: (running: boolean) => void;
+  setErrorModal: (data: ErrorModalData | null) => void;
   resetUI: () => void;
 }
 
@@ -50,6 +68,11 @@ export const useUIStore = create<UIState>((set) => ({
   errors: [],
   progress: 0,
   toasts: [],
+  searchOpen: false,
+  settingsOpen: false,
+  helpOpen: false,
+  pipelineRunning: false,
+  errorModal: null,
 
   setActiveStep: (step) => set({ activeStep: step }),
 
@@ -90,6 +113,12 @@ export const useUIStore = create<UIState>((set) => ({
       toasts: state.toasts.filter((t) => t.id !== id),
     })),
 
+  setSearchOpen: (open) => set({ searchOpen: open }),
+  setSettingsOpen: (open) => set({ settingsOpen: open }),
+  setHelpOpen: (open) => set({ helpOpen: open }),
+  setPipelineRunning: (running) => set({ pipelineRunning: running }),
+  setErrorModal: (data) => set({ errorModal: data }),
+
   resetUI: () =>
     set({
       activeStep: 0,
@@ -97,5 +126,10 @@ export const useUIStore = create<UIState>((set) => ({
       errors: [],
       progress: 0,
       toasts: [],
+      searchOpen: false,
+      settingsOpen: false,
+      helpOpen: false,
+      pipelineRunning: false,
+      errorModal: null,
     }),
 }));

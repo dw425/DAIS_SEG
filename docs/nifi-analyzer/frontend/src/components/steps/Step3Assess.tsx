@@ -2,18 +2,20 @@ import React, { useState } from 'react';
 import { usePipelineStore } from '../../store/pipeline';
 import { useUIStore } from '../../store/ui';
 import { usePipeline } from '../../hooks/usePipeline';
+import TierDiagram from '../shared/TierDiagram';
+import RiskHeatmap from '../viz/RiskHeatmap';
 import type { MappingEntry } from '../../types/pipeline';
 
-const RISK_STYLES = {
-  low: 'bg-green-500/20 text-green-400',
-  medium: 'bg-amber-500/20 text-amber-400',
-  high: 'bg-red-500/20 text-red-400',
-};
-
 function confidenceColor(c: number): string {
-  if (c >= 90) return 'text-green-400';
-  if (c >= 70) return 'text-amber-400';
+  const pct = c <= 1 ? c * 100 : c;
+  if (pct >= 90) return 'text-green-400';
+  if (pct >= 70) return 'text-amber-400';
   return 'text-red-400';
+}
+
+function fmtConfidence(c: number): string {
+  const pct = c <= 1 ? c * 100 : c;
+  return `${pct.toFixed(0)}%`;
 }
 
 export default function Step3Assess() {
@@ -22,17 +24,21 @@ export default function Step3Assess() {
   const assessment = usePipelineStore((s) => s.assessment);
   const status = useUIStore((s) => s.stepStatuses[2]);
   const { runAssess } = usePipeline();
-  const [filter, setFilter] = useState<'all' | 'low' | 'medium' | 'high'>('all');
+  const [filter, setFilter] = useState<'all' | 'mapped' | 'unmapped'>('all');
   const [searchTerm, setSearchTerm] = useState('');
 
   const canRun = parsed && analysis && status !== 'running';
 
   const filteredMappings = (assessment?.mappings || []).filter((m: MappingEntry) => {
-    if (filter !== 'all' && m.risk !== filter) return false;
-    if (searchTerm && !m.processorName.toLowerCase().includes(searchTerm.toLowerCase()) &&
-      !m.processorType.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    if (filter === 'mapped' && !m.mapped) return false;
+    if (filter === 'unmapped' && m.mapped) return false;
+    if (searchTerm && !m.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
+      !m.type.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
+
+  const mappedCount = assessment?.mappings.filter((m) => m.mapped).length ?? 0;
+  const totalCount = assessment?.mappings.length ?? 0;
 
   return (
     <div className="space-y-6">
@@ -44,7 +50,7 @@ export default function Step3Assess() {
             Assess & Map
           </h2>
           <p className="mt-1 text-sm text-gray-400">
-            Map each processor to its Databricks equivalent with confidence scoring and risk assessment.
+            Map each processor to its Databricks equivalent with confidence scoring.
           </p>
         </div>
         <button
@@ -69,13 +75,24 @@ export default function Step3Assess() {
       ) : assessment && status === 'done' ? (
         <div className="space-y-4">
           {/* Summary cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            <SummaryCard label="Overall Confidence" value={`${assessment.overallConfidence}%`} color={confidenceColor(assessment.overallConfidence)} />
-            <SummaryCard label="Overall Risk" value={assessment.overallRisk} color={RISK_STYLES[assessment.overallRisk]?.split(' ')[1] || 'text-gray-400'} />
-            <SummaryCard label="Supported" value={String(assessment.supportedCount)} color="text-green-400" />
-            <SummaryCard label="Partial" value={String(assessment.partialCount)} color="text-amber-400" />
-            <SummaryCard label="Unsupported" value={String(assessment.unsupportedCount)} color="text-red-400" />
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <SummaryCard label="Total" value={String(totalCount)} color="text-gray-400" />
+            <SummaryCard label="Mapped" value={String(mappedCount)} color="text-green-400" />
+            <SummaryCard label="Unmapped" value={String(assessment.unmappedCount)} color="text-red-400" />
+            <SummaryCard label="Packages" value={String(assessment.packages.length)} color="text-blue-400" />
           </div>
+
+          {/* Tier Diagram with category enrichment */}
+          {parsed && parsed.processors.length > 0 && (
+            <TierDiagram
+              processors={parsed.processors}
+              connections={parsed.connections}
+              mappings={assessment.mappings}
+            />
+          )}
+
+          {/* Risk Heatmap */}
+          <RiskHeatmap />
 
           {/* Filters */}
           <div className="flex items-center gap-3 flex-wrap">
@@ -87,14 +104,14 @@ export default function Step3Assess() {
               className="px-3 py-1.5 rounded-lg bg-gray-800 border border-border text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-gray-600 w-56"
             />
             <div className="flex gap-1">
-              {(['all', 'low', 'medium', 'high'] as const).map((f) => (
+              {(['all', 'mapped', 'unmapped'] as const).map((f) => (
                 <button
                   key={f}
                   onClick={() => setFilter(f)}
                   className={`px-2.5 py-1 rounded text-xs font-medium transition
                     ${filter === f ? 'bg-primary/20 text-primary' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}
                 >
-                  {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
+                  {f.charAt(0).toUpperCase() + f.slice(1)}
                 </button>
               ))}
             </div>
@@ -109,30 +126,34 @@ export default function Step3Assess() {
                   <tr className="bg-gray-900/60 border-b border-border">
                     <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 uppercase">Processor</th>
                     <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 uppercase">Type</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 uppercase">Category</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 uppercase">Role</th>
                     <th className="text-center px-4 py-2.5 text-xs font-medium text-gray-500 uppercase">Confidence</th>
-                    <th className="text-center px-4 py-2.5 text-xs font-medium text-gray-500 uppercase">Risk</th>
-                    <th className="text-center px-4 py-2.5 text-xs font-medium text-gray-500 uppercase">Phase</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 uppercase">Mapped To</th>
+                    <th className="text-center px-4 py-2.5 text-xs font-medium text-gray-500 uppercase">Mapped</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 uppercase">Notes</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {filteredMappings.map((m: MappingEntry, i: number) => (
                     <tr key={i} className="hover:bg-gray-800/30 transition">
-                      <td className="px-4 py-2.5 text-gray-200 font-medium">{m.processorName}</td>
-                      <td className="px-4 py-2.5 text-gray-400 font-mono text-xs">{m.processorType}</td>
+                      <td className="px-4 py-2.5 text-gray-200 font-medium">{m.name}</td>
+                      <td className="px-4 py-2.5 text-gray-400 font-mono text-xs">{m.type}</td>
+                      <td className="px-4 py-2.5 text-gray-400 text-xs">{m.category || '—'}</td>
+                      <td className="px-4 py-2.5 text-gray-400">{m.role}</td>
                       <td className="px-4 py-2.5 text-center">
-                        <span className={`font-medium tabular-nums ${confidenceColor(m.confidence)}`}>{m.confidence}%</span>
+                        <span className={`font-medium tabular-nums ${confidenceColor(m.confidence)}`}>{fmtConfidence(m.confidence)}</span>
                       </td>
                       <td className="px-4 py-2.5 text-center">
-                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${RISK_STYLES[m.risk]}`}>{m.risk}</span>
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${m.mapped ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                          {m.mapped ? 'Yes' : 'No'}
+                        </span>
                       </td>
-                      <td className="px-4 py-2.5 text-center text-gray-400">{m.phase}</td>
-                      <td className="px-4 py-2.5 text-gray-300">{m.mappedTo}</td>
+                      <td className="px-4 py-2.5 text-gray-300">{m.notes}</td>
                     </tr>
                   ))}
                   {filteredMappings.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-gray-500">No matching processors</td>
+                      <td colSpan={7} className="px-4 py-8 text-center text-gray-500">No matching processors</td>
                     </tr>
                   )}
                 </tbody>

@@ -84,10 +84,16 @@ def parse_snowflake(content: bytes, filename: str) -> ParseResult:
             props["column_count"] = str(len(cols))
 
         elif obj_type in ("VIEW", "MATERIALIZED"):
-            pass  # Capture as-is
+            # Extract the SQL body (AS SELECT ... or AS ...)
+            as_match = re.search(r"\bAS\b\s+(.*)", stmt_text, re.IGNORECASE | re.DOTALL)
+            if as_match:
+                props["sql_body"] = as_match.group(1).strip()[:500]
 
         elif obj_type in ("PROCEDURE", "FUNCTION"):
-            pass
+            # Extract the SQL body
+            as_match = re.search(r"\bAS\b\s+(.*)", stmt_text, re.IGNORECASE | re.DOTALL)
+            if as_match:
+                props["sql_body"] = as_match.group(1).strip()[:500]
 
         else:
             continue  # Skip other CREATE types

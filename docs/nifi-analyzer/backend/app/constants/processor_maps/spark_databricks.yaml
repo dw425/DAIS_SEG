@@ -1,124 +1,295 @@
-# Apache Spark (standalone/EMR/Dataproc) -> Databricks Mapping
-# Maps Spark patterns from other environments to Databricks-optimized equivalents
-
 mappings:
-  - type: "SparkSession.builder"
-    category: "Pre-configured"
-    template: |
-      # SparkSession is pre-configured in Databricks notebooks
-      # spark = SparkSession.builder.appName(...).getOrCreate() -- NOT NEEDED
-      # Just use `spark` directly
-      print(f"Spark version: {spark.version}")
-    description: "SparkSession already available as `spark` in Databricks"
-    imports: []
-    confidence: 0.98
-    role: "utility"
+- type: SparkSession.builder
+  category: Pre-configured
+  template: '# SparkSession is pre-configured in Databricks notebooks
 
-  - type: "spark.read.parquet"
-    category: "Delta Read"
-    template: |
-      # Prefer Delta Lake over raw Parquet for ACID + time travel
-      df_{name} = spark.table("{catalog}.{schema}.{table}")
-      # Or if raw parquet is needed:
-      # df_{name} = spark.read.parquet("{path}")
-    description: "Parquet read upgraded to Delta table read"
-    imports: []
-    confidence: 0.92
-    role: "source"
+    # spark = SparkSession.builder.appName(...).getOrCreate() -- NOT NEEDED
 
-  - type: "df.write.parquet"
-    category: "Delta Write"
-    template: |
-      # Prefer Delta Lake over raw Parquet
-      (df_{input}.write
-          .format("delta")
-          .mode("{mode}")
-          .saveAsTable("{catalog}.{schema}.{table}"))
-    description: "Parquet write upgraded to Delta saveAsTable"
-    imports: []
-    confidence: 0.92
-    role: "sink"
+    # Just use `spark` directly
 
-  - type: "spark.read.format('hive')"
-    category: "Unity Catalog"
-    template: |
-      # Hive metastore -> Unity Catalog
-      df_{name} = spark.table("{catalog}.{schema}.{table}")
-    description: "Hive table read via Unity Catalog"
-    imports: []
-    confidence: 0.95
-    role: "source"
+    print(f"Spark version: {spark.version}")
 
-  - type: "df.write.saveAsTable (Hive)"
-    category: "Delta Write"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("{mode}")
-          .saveAsTable("{catalog}.{schema}.{table}"))
-    description: "Hive saveAsTable upgraded to Delta in Unity Catalog"
-    imports: []
-    confidence: 0.95
-    role: "sink"
+    '
+  description: SparkSession already available as `spark` in Databricks
+  imports: []
+  confidence: 0.98
+  role: utility
+- type: spark.read.parquet
+  category: Delta Read
+  template: '# Prefer Delta Lake over raw Parquet for ACID + time travel
 
-  - type: "spark-submit"
-    category: "Databricks Job"
-    template: |
-      # spark-submit -> Databricks Job API
-      from databricks.sdk import WorkspaceClient
-      w = WorkspaceClient()
-      _run = w.jobs.submit(
-          run_name="{name}",
-          tasks=[{{
-              "task_key": "{name}",
-              "spark_python_task": {{
-                  "python_file": "{python_file}",
-                  "parameters": ["{arg1}", "{arg2}"]
-              }}
-          }}])
-    description: "spark-submit replaced by Databricks Jobs API"
-    imports: ["from databricks.sdk import WorkspaceClient"]
-    confidence: 0.90
-    role: "process"
+    df_{name} = spark.table("{catalog}.{schema}.{table}")
 
-  - type: "sc.textFile"
-    category: "DataFrame Read"
-    template: |
-      # RDD textFile -> DataFrame read
-      df_{name} = spark.read.text("{path}")
-    description: "RDD textFile upgraded to DataFrame read"
-    imports: []
-    confidence: 0.92
-    role: "source"
+    # Or if raw parquet is needed:
 
-  - type: "sc.parallelize"
-    category: "createDataFrame"
-    template: |
-      # RDD parallelize -> createDataFrame
-      df_{name} = spark.createDataFrame({data}, {schema})
-    description: "RDD parallelize upgraded to createDataFrame"
-    imports: []
-    confidence: 0.92
-    role: "source"
+    # df_{name} = spark.read.parquet("{path}")
 
-  - type: "rdd.map / rdd.flatMap"
-    category: "DataFrame API"
-    template: |
-      # RDD map/flatMap -> DataFrame withColumn/select
-      df_{name} = df_{input}.withColumn("{col}", expr("{expression}"))
-    description: "RDD map operations upgraded to DataFrame API"
-    imports: ["from pyspark.sql.functions import expr"]
-    confidence: 0.88
-    role: "transform"
+    '
+  description: Parquet read upgraded to Delta table read
+  imports: []
+  confidence: 0.92
+  role: source
+- type: df.write.parquet
+  category: Delta Write
+  template: "# Prefer Delta Lake over raw Parquet\n(df_{input}.write\n    .format(\"delta\")\n    .mode(\"{mode}\")\n    .saveAsTable(\"\
+    {catalog}.{schema}.{table}\"))\n"
+  description: Parquet write upgraded to Delta saveAsTable
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: spark.read.format('hive')
+  category: Unity Catalog
+  template: '# Hive metastore -> Unity Catalog
 
-  - type: "rdd.saveAsTextFile"
-    category: "Delta Write"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("overwrite")
-          .saveAsTable("{catalog}.{schema}.{table}"))
-    description: "RDD saveAsTextFile upgraded to Delta write"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    df_{name} = spark.table("{catalog}.{schema}.{table}")
+
+    '
+  description: Hive table read via Unity Catalog
+  imports: []
+  confidence: 0.95
+  role: source
+- type: df.write.saveAsTable (Hive)
+  category: Delta Write
+  template: "(df_{input}.write\n    .format(\"delta\")\n    .mode(\"{mode}\")\n    .saveAsTable(\"{catalog}.{schema}.{table}\"\
+    ))\n"
+  description: Hive saveAsTable upgraded to Delta in Unity Catalog
+  imports: []
+  confidence: 0.95
+  role: sink
+- type: spark-submit
+  category: Databricks Job
+  template: "# spark-submit -> Databricks Job API\nfrom databricks.sdk import WorkspaceClient\nw = WorkspaceClient()\n_run\
+    \ = w.jobs.submit(\n    run_name=\"{name}\",\n    tasks=[{{\n        \"task_key\": \"{name}\",\n        \"spark_python_task\"\
+    : {{\n            \"python_file\": \"{python_file}\",\n            \"parameters\": [\"{arg1}\", \"{arg2}\"]\n        }}\n\
+    \    }}])\n"
+  description: spark-submit replaced by Databricks Jobs API
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.9
+  role: process
+- type: sc.textFile
+  category: DataFrame Read
+  template: '# RDD textFile -> DataFrame read
+
+    df_{name} = spark.read.text("{path}")
+
+    '
+  description: RDD textFile upgraded to DataFrame read
+  imports: []
+  confidence: 0.92
+  role: source
+- type: sc.parallelize
+  category: createDataFrame
+  template: '# RDD parallelize -> createDataFrame
+
+    df_{name} = spark.createDataFrame({data}, {schema})
+
+    '
+  description: RDD parallelize upgraded to createDataFrame
+  imports: []
+  confidence: 0.92
+  role: source
+- type: rdd.map / rdd.flatMap
+  category: DataFrame API
+  template: '# RDD map/flatMap -> DataFrame withColumn/select
+
+    df_{name} = df_{input}.withColumn("{col}", expr("{expression}"))
+
+    '
+  description: RDD map operations upgraded to DataFrame API
+  imports:
+  - from pyspark.sql.functions import expr
+  confidence: 0.88
+  role: transform
+- type: rdd.saveAsTextFile
+  category: Delta Write
+  template: "(df_{input}.write\n    .format(\"delta\")\n    .mode(\"overwrite\")\n    .saveAsTable(\"{catalog}.{schema}.{table}\"\
+    ))\n"
+  description: RDD saveAsTextFile upgraded to Delta write
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: spark.read.csv
+  category: CSV Read
+  template: "df_{name} = (spark.read\n    .format('csv')\n    .option('header', 'true')\n    .option('inferSchema', 'true')\n\
+    \    .option('delimiter', '{delimiter}')\n    .load('{path}'))\n"
+  description: spark.read.csv with header and schema inference
+  imports: []
+  confidence: 0.95
+  role: source
+- type: spark.read.json
+  category: JSON Read
+  template: "df_{name} = (spark.read\n    .format('json')\n    .option('multiLine', '{multi_line}')\n    .load('{path}'))\n"
+  description: spark.read.json with multi-line option
+  imports: []
+  confidence: 0.95
+  role: source
+- type: spark.read.orc
+  category: ORC Read
+  template: 'df_{name} = spark.read.format(''orc'').load(''{path}'')
+
+    '
+  description: spark.read.orc as format('orc').load()
+  imports: []
+  confidence: 0.95
+  role: source
+- type: spark.read.avro
+  category: Avro Read
+  template: 'df_{name} = spark.read.format(''avro'').load(''{path}'')
+
+    '
+  description: spark.read.avro natively supported in Databricks
+  imports: []
+  confidence: 0.95
+  role: source
+- type: spark.read.jdbc
+  category: JDBC Read
+  template: "df_{name} = (spark.read\n    .format('jdbc')\n    .option('url', '{jdbc_url}')\n    .option('dbtable', '{table}')\n\
+    \    .option('user', dbutils.secrets.get(scope='{scope}', key='db-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}',\
+    \ key='db-pass'))\n    .load())\n"
+  description: spark.read.jdbc with secrets-based auth
+  imports: []
+  confidence: 0.92
+  role: source
+- type: spark.read.text
+  category: Text Read
+  template: 'df_{name} = spark.read.text(''{path}'')
+
+    '
+  description: spark.read.text for line-by-line text files
+  imports: []
+  confidence: 0.95
+  role: source
+- type: spark.readStream.kafka
+  category: Kafka Stream
+  template: "df_{name} = (spark.readStream\n    .format('kafka')\n    .option('kafka.bootstrap.servers', '{bootstrap_servers}')\n\
+    \    .option('subscribe', '{topic}')\n    .option('startingOffsets', '{starting_offsets}')\n    .load()\n    .selectExpr('CAST(key\
+    \ AS STRING)', 'CAST(value AS STRING)'))\n"
+  description: Kafka structured streaming source
+  imports: []
+  confidence: 0.92
+  role: source
+- type: spark.readStream.socket
+  category: Socket Stream
+  template: "# Socket stream (dev/test only)\ndf_{name} = (spark.readStream\n    .format('socket')\n    .option('host', '{host}')\n\
+    \    .option('port', '{port}')\n    .load())\n"
+  description: Socket structured streaming (dev/test only)
+  imports: []
+  confidence: 0.8
+  role: source
+- type: df.write.csv
+  category: CSV Write
+  template: 'df_{input}.write.format(''csv'').option(''header'', ''true'').mode(''{mode}'').save(''{path}'')
+
+    '
+  description: DataFrame write to CSV files
+  imports: []
+  confidence: 0.95
+  role: sink
+- type: df.write.json
+  category: JSON Write
+  template: 'df_{input}.write.format(''json'').mode(''{mode}'').save(''{path}'')
+
+    '
+  description: DataFrame write to JSON files
+  imports: []
+  confidence: 0.95
+  role: sink
+- type: df.write.orc
+  category: ORC Write
+  template: '# ORC -> prefer Delta/Parquet in Databricks
+
+    df_{input}.write.format(''delta'').mode(''{mode}'').saveAsTable(''{catalog}.{schema}.{table}'')
+
+    # Or keep ORC: df_{input}.write.format(''orc'').save(''{path}'')
+
+    '
+  description: ORC write converted to Delta (preferred) or kept as ORC
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: df.write.jdbc
+  category: JDBC Write
+  template: "(df_{input}.write\n    .format('jdbc')\n    .option('url', '{jdbc_url}')\n    .option('dbtable', '{table}')\n\
+    \    .option('user', dbutils.secrets.get(scope='{scope}', key='db-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}',\
+    \ key='db-pass'))\n    .mode('{mode}')\n    .save())\n"
+  description: DataFrame JDBC write with secrets auth
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: df.write.text
+  category: Text Write
+  template: 'df_{input}.select(''{text_col}'').write.text(''{path}'')
+
+    '
+  description: DataFrame write to text file
+  imports: []
+  confidence: 0.95
+  role: sink
+- type: df.writeStream.kafka
+  category: Kafka Sink
+  template: "(df_{input}\n    .selectExpr('CAST({key_col} AS STRING) AS key', 'CAST({value_col} AS STRING) AS value')\n  \
+    \  .writeStream\n    .format('kafka')\n    .option('kafka.bootstrap.servers', '{bootstrap_servers}')\n    .option('topic',\
+    \ '{topic}')\n    .option('checkpointLocation', '{checkpoint}')\n    .start())\n"
+  description: Structured streaming write to Kafka
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: df.writeStream.console
+  category: Debug Sink
+  template: "# Console sink (dev/test only) -> display() in Databricks\n(df_{input}.writeStream\n    .format('console')\n\
+    \    .option('truncate', 'false')\n    .start())\n# In Databricks prefer: display(df_{input})\n"
+  description: Console writeStream replaced by display() in Databricks
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: df.writeStream.memory
+  category: In-Memory Sink
+  template: "# Memory sink -> temp view in Databricks\n(df_{input}.writeStream\n    .format('memory')\n    .queryName('{query_name}')\n\
+    \    .start())\n# Query via: spark.sql('SELECT * FROM {query_name}')\n"
+  description: Memory writeStream as queryable temp view
+  imports: []
+  confidence: 0.88
+  role: sink
+- type: spark.sql
+  category: SQL Execution
+  template: "df_{name} = spark.sql(\"\"\"\n    {sql_query}\n\"\"\")\ndisplay(df_{name})\n"
+  description: spark.sql for direct SQL execution
+  imports: []
+  confidence: 0.95
+  role: process
+- type: spark.catalog
+  category: Catalog API
+  template: '# Spark Catalog operations
+
+    _tables = spark.catalog.listTables(''{database}'')
+
+    _columns = spark.catalog.listColumns(''{table}'')
+
+    print(f''[CATALOG] Tables: {{[t.name for t in _tables]}}'')
+
+    '
+  description: spark.catalog for metadata inspection
+  imports: []
+  confidence: 0.92
+  role: utility
+- type: spark.read.delta
+  category: Delta Read
+  template: 'df_{name} = spark.read.format(''delta'').load(''{path}'')
+
+    # Or: df_{name} = spark.table(''{catalog}.{schema}.{table}'')
+
+    '
+  description: Delta table read via path or catalog
+  imports: []
+  confidence: 0.95
+  role: source
+- type: df.write.delta
+  category: Delta Write
+  template: 'df_{input}.write.format(''delta'').mode(''{mode}'').saveAsTable(''{catalog}.{schema}.{table}'')
+
+    '
+  description: Delta table write via saveAsTable
+  imports: []
+  confidence: 0.95
+  role: sink

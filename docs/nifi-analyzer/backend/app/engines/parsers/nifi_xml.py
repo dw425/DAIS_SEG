@@ -2,13 +2,16 @@
 
 Parses NiFi templates, flowController exports, and registry XML exports.
 Uses lxml.etree for XML DOM traversal.
+Includes Phase 1 enhancements: parameter contexts, controller service resolution,
+FlowFile attribute tracking, and backpressure extraction.
 """
 
 import logging
+import re
 
 from lxml import etree
 
-from app.models.pipeline import ParseResult, Warning
+from app.models.pipeline import ParameterContext, ParameterEntry, ParseResult, Warning
 from app.models.processor import Connection, ControllerService, ProcessGroup, Processor
 
 logger = logging.getLogger(__name__)
@@ -40,8 +43,10 @@ def _extract_properties(el: etree._Element) -> dict:
             for entry in properties.findall("entry"):
                 key_el = entry.find("key")
                 val_el = entry.find("value")
-                if key_el is not None and key_el.text and val_el is not None:
-                    props[key_el.text] = val_el.text or ""
+                # Accept entries with missing <value> (empty property) — NiFi
+                # allows entries with just a <key> to represent empty properties
+                if key_el is not None and key_el.text:
+                    props[key_el.text] = (val_el.text or "") if val_el is not None else ""
 
     # Direct properties > entry (snippet level)
     if not props:
@@ -50,8 +55,8 @@ def _extract_properties(el: etree._Element) -> dict:
             for entry in properties.findall("entry"):
                 key_el = entry.find("key")
                 val_el = entry.find("value")
-                if key_el is not None and key_el.text and val_el is not None:
-                    props[key_el.text] = val_el.text or ""
+                if key_el is not None and key_el.text:
+                    props[key_el.text] = (val_el.text or "") if val_el is not None else ""
 
     # flowController format: direct property/name + value children
     if not props:
@@ -62,6 +67,143 @@ def _extract_properties(el: etree._Element) -> dict:
                 props[name_el.text] = (val_el.text or "") if val_el is not None else ""
 
     return props
+
+
+_DBCP_SERVICE_TYPES = {
+    "DBCPConnectionPool",
+    "DBCPConnectionPoolLookup",
+    "HikariCPConnectionPool",
+}
+
+_JDBC_PROPERTY_KEYS = {
+    "Database Connection URL",
+    "Database Driver Class Name",
+    "Database User",
+    "Password",
+    "database-connection-url",
+    "database-driver-class-name",
+    "db-user",
+}
+
+
+def _infer_parameter_type(key: str, value: str, sensitive: bool) -> str:
+    """Infer parameter type: 'secret', 'numeric', or 'string'."""
+    if sensitive:
+        return "secret"
+    lower_key = key.lower()
+    if any(kw in lower_key for kw in ("password", "secret", "token", "key", "credential")):
+        return "secret"
+    stripped = value.strip()
+    if stripped:
+        try:
+            float(stripped)
+            return "numeric"
+        except ValueError:
+            pass
+    return "string"
+
+
+def _make_databricks_variable_name(context_name: str, param_key: str) -> str:
+    """Generate a Databricks Asset Bundle variable name from a NiFi parameter."""
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", f"{context_name}_{param_key}").strip("_").lower()
+    return slug
+
+
+def _extract_parameter_contexts_xml(doc: etree._Element) -> list[ParameterContext]:
+    """Extract parameterContexts from NiFi XML document."""
+    contexts: list[ParameterContext] = []
+
+    # Look for parameterContexts in multiple locations
+    ctx_elements: list[etree._Element] = []
+    for tag in [
+        ".//parameterContexts/parameterContext",
+        ".//parameterContext",
+        ".//parameterContexts",
+    ]:
+        found = doc.findall(tag)
+        if found:
+            ctx_elements.extend(found)
+            break
+
+    seen_names: set[str] = set()
+    for ctx_el in ctx_elements:
+        ctx_name = _get_child_text(ctx_el, "name")
+        if not ctx_name or ctx_name in seen_names:
+            continue
+        seen_names.add(ctx_name)
+
+        params: list[ParameterEntry] = []
+        for p_el in ctx_el.findall("parameters/parameter"):
+            key = _get_child_text(p_el, "name") or _get_child_text(p_el, "key")
+            value = _get_child_text(p_el, "value")
+            sensitive_text = _get_child_text(p_el, "sensitive")
+            sensitive = sensitive_text.lower() == "true" if sensitive_text else False
+            if not key:
+                continue
+            inferred = _infer_parameter_type(key, value, sensitive)
+            params.append(
+                ParameterEntry(
+                    key=key,
+                    value="" if sensitive else value,
+                    sensitive=sensitive,
+                    inferred_type=inferred,
+                    databricks_variable=_make_databricks_variable_name(ctx_name, key),
+                )
+            )
+
+        # Also try flat parameter children (no wrapper)
+        if not params:
+            for p_el in ctx_el.findall("parameter"):
+                key = _get_child_text(p_el, "name") or _get_child_text(p_el, "key")
+                value = _get_child_text(p_el, "value")
+                sensitive_text = _get_child_text(p_el, "sensitive")
+                sensitive = sensitive_text.lower() == "true" if sensitive_text else False
+                if not key:
+                    continue
+                inferred = _infer_parameter_type(key, value, sensitive)
+                params.append(
+                    ParameterEntry(
+                        key=key,
+                        value="" if sensitive else value,
+                        sensitive=sensitive,
+                        inferred_type=inferred,
+                        databricks_variable=_make_databricks_variable_name(ctx_name, key),
+                    )
+                )
+
+        contexts.append(ParameterContext(name=ctx_name, parameters=params))
+
+    return contexts
+
+
+def _build_cs_index(controller_services: list[ControllerService]) -> dict[str, dict]:
+    """Build controller service name -> properties index."""
+    index: dict[str, dict] = {}
+    for cs in controller_services:
+        index[cs.name] = {"type": cs.type, "properties": dict(cs.properties)}
+    return index
+
+
+def _resolve_processor_services(proc: Processor, cs_index: dict[str, dict]) -> dict | None:
+    """Resolve controller service references in processor properties."""
+    resolved: dict[str, dict] = {}
+    for prop_key, prop_val in proc.properties.items():
+        if not prop_val or not isinstance(prop_val, str):
+            continue
+        if prop_val in cs_index:
+            cs_entry = cs_index[prop_val]
+            service_info: dict = {"service_name": prop_val, "service_type": cs_entry["type"]}
+            if cs_entry["type"] in _DBCP_SERVICE_TYPES:
+                for jdbc_key in _JDBC_PROPERTY_KEYS:
+                    if jdbc_key in cs_entry["properties"]:
+                        safe_key = jdbc_key.lower().replace(" ", "_").replace("-", "_")
+                        service_info[safe_key] = cs_entry["properties"][jdbc_key]
+            else:
+                for sk, sv in cs_entry["properties"].items():
+                    if sv and "password" not in sk.lower() and "secret" not in sk.lower():
+                        service_info[sk] = sv
+            resolved[prop_key] = service_info
+    return resolved if resolved else None
 
 
 def parse_nifi_xml(content: bytes, filename: str) -> ParseResult:
@@ -160,11 +302,19 @@ def parse_nifi_xml(content: bytes, filename: str) -> ParseResult:
                     if r.text:
                         rels.append(r.text.strip())
 
+            # Extract backpressure configuration
+            bp_obj_text = _get_child_text(conn, "backPressureObjectThreshold")
+            bp_data_text = _get_child_text(conn, "backPressureDataSizeThreshold")
+            bp_obj = int(bp_obj_text) if bp_obj_text and bp_obj_text.isdigit() else 0
+            bp_data = bp_data_text or ""
+
             connections.append(
                 Connection(
                     source_name=src_id,
                     destination_name=dst_id,
                     relationship=",".join(rels) if rels else "success",
+                    back_pressure_object_threshold=bp_obj,
+                    back_pressure_data_size_threshold=bp_data,
                 )
             )
 
@@ -202,15 +352,18 @@ def parse_nifi_xml(content: bytes, filename: str) -> ParseResult:
                         )
                     )
 
-        # Funnels
+        # Funnels — give each a unique name to prevent DAG node collisions
+        funnel_counter = 0
         for funnel_tag in ["funnels/funnel", "funnel"]:
             for f in contents.findall(funnel_tag):
                 fid = _get_child_text(f, "id")
                 if fid:
-                    id_to_name[fid] = "Funnel"
+                    funnel_counter += 1
+                    funnel_name = f"Funnel_{funnel_counter}" if funnel_counter > 1 else "Funnel"
+                    id_to_name[fid] = funnel_name
                     processors.append(
                         Processor(
-                            name="Funnel",
+                            name=funnel_name,
                             type="Funnel",
                             platform="nifi",
                             group=group_name,
@@ -365,11 +518,18 @@ def parse_nifi_xml(content: bytes, filename: str) -> ParseResult:
         key = f"{src_id}|{dst_id}|{rel_str}"
         if key not in conn_keys:
             conn_keys.add(key)
+            # Extract backpressure
+            bp_obj_text = _get_child_text(conn, "backPressureObjectThreshold")
+            bp_data_text = _get_child_text(conn, "backPressureDataSizeThreshold")
+            bp_obj = int(bp_obj_text) if bp_obj_text and bp_obj_text.isdigit() else 0
+            bp_data = bp_data_text or ""
             connections.append(
                 Connection(
                     source_name=src_id,
                     destination_name=dst_id,
                     relationship=rel_str,
+                    back_pressure_object_threshold=bp_obj,
+                    back_pressure_data_size_threshold=bp_data,
                 )
             )
 
@@ -385,6 +545,8 @@ def parse_nifi_xml(content: bytes, filename: str) -> ParseResult:
                 source_name=src_name,
                 destination_name=dst_name,
                 relationship=c.relationship,
+                back_pressure_object_threshold=c.back_pressure_object_threshold,
+                back_pressure_data_size_threshold=c.back_pressure_data_size_threshold,
             )
         )
 
@@ -401,6 +563,16 @@ def parse_nifi_xml(content: bytes, filename: str) -> ParseResult:
     if encoding_el is not None and encoding_el.text:
         version = encoding_el.text.strip()
 
+    # Phase 1: Extract parameter contexts
+    parameter_contexts = _extract_parameter_contexts_xml(doc)
+
+    # Phase 1: Resolve controller service references on processors
+    cs_index = _build_cs_index(controller_services)
+    for proc in processors:
+        resolved_svc = _resolve_processor_services(proc, cs_index)
+        if resolved_svc:
+            proc.resolved_services = resolved_svc
+
     if not processors:
         warnings.append(Warning(severity="warning", message="No processors found in XML", source=filename))
 
@@ -411,6 +583,7 @@ def parse_nifi_xml(content: bytes, filename: str) -> ParseResult:
         connections=resolved_connections,
         process_groups=process_groups,
         controller_services=controller_services,
+        parameter_contexts=parameter_contexts,
         metadata={"source_file": filename, "id_count": len(id_to_name)},
         warnings=warnings,
     )

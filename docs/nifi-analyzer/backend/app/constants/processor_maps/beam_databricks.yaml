@@ -1,144 +1,339 @@
-# Apache Beam -> Databricks PySpark Mapping
-# Maps Beam transforms and IO connectors to PySpark equivalents
-
 mappings:
-  - type: "beam.io.ReadFromText"
-    category: "File Read"
-    template: |
-      df_{name} = spark.read.text("{file_pattern}")
-    description: "Beam ReadFromText as Spark text read"
-    imports: []
-    confidence: 0.92
-    role: "source"
+- type: beam.io.ReadFromText
+  category: File Read
+  template: 'df_{name} = spark.read.text("{file_pattern}")
 
-  - type: "beam.io.ReadFromParquet"
-    category: "Delta Read"
-    template: |
-      df_{name} = spark.read.parquet("{file_pattern}")
-      # Or upgrade to Delta: spark.table("{catalog}.{schema}.{table}")
-    description: "Beam ReadFromParquet as Spark parquet/Delta read"
-    imports: []
-    confidence: 0.92
-    role: "source"
+    '
+  description: Beam ReadFromText as Spark text read
+  imports: []
+  confidence: 0.92
+  role: source
+- type: beam.io.ReadFromParquet
+  category: Delta Read
+  template: 'df_{name} = spark.read.parquet("{file_pattern}")
 
-  - type: "beam.io.ReadFromBigQuery"
-    category: "BigQuery Connector"
-    template: |
-      df_{name} = (spark.read
-          .format("bigquery")
-          .option("table", "{project}:{dataset}.{table}")
-          .load())
-    description: "Beam ReadFromBigQuery via spark-bigquery connector"
-    imports: []
-    confidence: 0.88
-    role: "source"
+    # Or upgrade to Delta: spark.table("{catalog}.{schema}.{table}")
 
-  - type: "beam.io.ReadFromKafka"
-    category: "Structured Streaming"
-    template: |
-      df_{name} = (spark.readStream
-          .format("kafka")
-          .option("kafka.bootstrap.servers", "{bootstrap_servers}")
-          .option("subscribe", "{topic}")
-          .load())
-    description: "Beam ReadFromKafka as Structured Streaming"
-    imports: []
-    confidence: 0.92
-    role: "source"
+    '
+  description: Beam ReadFromParquet as Spark parquet/Delta read
+  imports: []
+  confidence: 0.92
+  role: source
+- type: beam.io.ReadFromBigQuery
+  category: BigQuery Connector
+  template: "df_{name} = (spark.read\n    .format(\"bigquery\")\n    .option(\"table\", \"{project}:{dataset}.{table}\")\n\
+    \    .load())\n"
+  description: Beam ReadFromBigQuery via spark-bigquery connector
+  imports: []
+  confidence: 0.88
+  role: source
+- type: beam.io.ReadFromKafka
+  category: Structured Streaming
+  template: "df_{name} = (spark.readStream\n    .format(\"kafka\")\n    .option(\"kafka.bootstrap.servers\", \"{bootstrap_servers}\"\
+    )\n    .option(\"subscribe\", \"{topic}\")\n    .load())\n"
+  description: Beam ReadFromKafka as Structured Streaming
+  imports: []
+  confidence: 0.92
+  role: source
+- type: beam.Map
+  category: DataFrame API
+  template: "df_{name} = df_{input}.withColumn(\"{output_col}\",\n    expr(\"{map_expression}\"))\n"
+  description: Beam Map as withColumn expression
+  imports:
+  - from pyspark.sql.functions import expr
+  confidence: 0.88
+  role: transform
+- type: beam.Filter
+  category: DataFrame Filter
+  template: 'df_{name} = df_{input}.filter("{predicate}")
 
-  - type: "beam.Map"
-    category: "DataFrame API"
-    template: |
-      df_{name} = df_{input}.withColumn("{output_col}",
-          expr("{map_expression}"))
-    description: "Beam Map as withColumn expression"
-    imports: ["from pyspark.sql.functions import expr"]
-    confidence: 0.88
-    role: "transform"
+    '
+  description: Beam Filter as DataFrame filter
+  imports: []
+  confidence: 0.95
+  role: route
+- type: beam.FlatMap
+  category: DataFrame Explode
+  template: "df_{name} = (df_{input}\n    .withColumn(\"_items\", explode(col(\"{array_col}\")))\n    .select(\"_items.*\"\
+    ))\n"
+  description: Beam FlatMap as explode
+  imports:
+  - from pyspark.sql.functions import explode, col
+  confidence: 0.88
+  role: transform
+- type: beam.GroupByKey
+  category: DataFrame GroupBy
+  template: "df_{name} = (df_{input}\n    .groupBy(\"{key}\")\n    .agg(collect_list(\"{value}\").alias(\"values\")))\n"
+  description: Beam GroupByKey as groupBy + collect_list
+  imports:
+  - from pyspark.sql.functions import collect_list
+  confidence: 0.9
+  role: transform
+- type: beam.CoGroupByKey
+  category: DataFrame Join
+  template: 'df_{name} = df_{input_1}.join(df_{input_2}, on="{key}", how="full")
 
-  - type: "beam.Filter"
-    category: "DataFrame Filter"
-    template: |
-      df_{name} = df_{input}.filter("{predicate}")
-    description: "Beam Filter as DataFrame filter"
-    imports: []
-    confidence: 0.95
-    role: "route"
+    '
+  description: Beam CoGroupByKey as full outer join
+  imports: []
+  confidence: 0.88
+  role: transform
+- type: beam.CombineGlobally
+  category: DataFrame Aggregate
+  template: "_result = df_{input}.agg(\n    {combine_fn}(\"{column}\").alias(\"result\")).first()[\"result\"]\n"
+  description: Beam CombineGlobally as DataFrame agg
+  imports: []
+  confidence: 0.88
+  role: transform
+- type: beam.io.WriteToText
+  category: File Write
+  template: "(df_{input}.write\n    .format(\"text\")\n    .mode(\"overwrite\")\n    .save(\"{output_path}\"))\n"
+  description: Beam WriteToText as Spark text write
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: beam.io.WriteToParquet
+  category: Delta Write
+  template: "(df_{input}.write\n    .format(\"delta\")\n    .mode(\"{mode}\")\n    .saveAsTable(\"{catalog}.{schema}.{table}\"\
+    ))\n"
+  description: Beam WriteToParquet upgraded to Delta write
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: beam.io.WriteToBigQuery
+  category: BigQuery Write
+  template: "(df_{input}.write\n    .format(\"bigquery\")\n    .option(\"table\", \"{project}:{dataset}.{table}\")\n    .option(\"\
+    writeMethod\", \"direct\")\n    .save())\n"
+  description: Beam WriteToBigQuery via spark-bigquery connector
+  imports: []
+  confidence: 0.88
+  role: sink
+- type: beam.io.ReadFromAvro
+  category: File Read
+  template: 'df_{name} = spark.read.format(''avro'').load(''{path}'')
 
-  - type: "beam.FlatMap"
-    category: "DataFrame Explode"
-    template: |
-      df_{name} = (df_{input}
-          .withColumn("_items", explode(col("{array_col}")))
-          .select("_items.*"))
-    description: "Beam FlatMap as explode"
-    imports: ["from pyspark.sql.functions import explode, col"]
-    confidence: 0.88
-    role: "transform"
+    '
+  description: beam.io.ReadFromAvro as Spark Avro reader
+  imports: []
+  confidence: 0.95
+  role: source
+- type: beam.io.WriteToAvro
+  category: File Write
+  template: 'df_{name}.write.format(''avro'').mode(''overwrite'').save(''/Volumes/{catalog}/{schema}/output/{filename}'')
 
-  - type: "beam.GroupByKey"
-    category: "DataFrame GroupBy"
-    template: |
-      df_{name} = (df_{input}
-          .groupBy("{key}")
-          .agg(collect_list("{value}").alias("values")))
-    description: "Beam GroupByKey as groupBy + collect_list"
-    imports: ["from pyspark.sql.functions import collect_list"]
-    confidence: 0.90
-    role: "transform"
+    '
+  description: beam.io.WriteToAvro as Spark Avro writer
+  imports: []
+  confidence: 0.95
+  role: sink
+- type: beam.io.WriteToKafka
+  category: Kafka Sink
+  template: "(df_{input}\n    .selectExpr('CAST({key_col} AS STRING) AS key', 'CAST({value_col} AS STRING) AS value')\n  \
+    \  .write\n    .format('kafka')\n    .option('kafka.bootstrap.servers', '{bootstrap_servers}')\n    .option('topic', '{topic}')\n\
+    \    .save())\n"
+  description: beam.io.WriteToKafka as Spark Kafka writer
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: beam.io.ReadFromPubSub
+  category: Streaming Source
+  template: "# Beam PubSub -> Kafka or Event Hub equivalent\ndf_{name} = (spark.readStream\n    .format('kafka')\n    .option('kafka.bootstrap.servers',\
+    \ '{bootstrap_servers}')\n    .option('subscribe', '{topic}')\n    .load()\n    .selectExpr('CAST(value AS STRING) as\
+    \ message'))\n"
+  description: beam.io.ReadFromPubSub replaced by Kafka Structured Streaming
+  imports: []
+  confidence: 0.82
+  role: source
+- type: beam.io.WriteToPubSub
+  category: Streaming Sink
+  template: "# Beam PubSub write -> Kafka write\n(df_{input}\n    .selectExpr('CAST(value AS STRING) AS value')\n    .write\n\
+    \    .format('kafka')\n    .option('kafka.bootstrap.servers', '{bootstrap_servers}')\n    .option('topic', '{topic}')\n\
+    \    .save())\n"
+  description: beam.io.WriteToPubSub replaced by Kafka write
+  imports: []
+  confidence: 0.82
+  role: sink
+- type: beam.CombinePerKey
+  category: Aggregation
+  template: "from pyspark.sql.functions import col\ndf_{name} = (df_{input}\n    .groupBy('{key_col}')\n    .agg({combine_fn}))\n"
+  description: beam.CombinePerKey as groupBy + agg
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.92
+  role: transform
+- type: beam.Partition
+  category: DataFrame Split
+  template: "# Beam Partition -> conditional DataFrame splits\n_partitions = []\nfor _i in range({num_partitions}):\n    _partitions.append(df_{input}.filter(f'{partition_fn}\
+    \ = {{_i}}'))\nprint(f'[PARTITION] Split into {{len(_partitions)}} partitions')\n"
+  description: beam.Partition as conditional DataFrame filter splits
+  imports: []
+  confidence: 0.85
+  role: route
+- type: beam.Flatten
+  category: Union
+  template: "# Beam Flatten -> union of multiple DataFrames\ndf_{name} = df_{inputs[0]}\nfor _df in [{inputs}][1:]:\n    df_{name}\
+    \ = df_{name}.unionByName(_df, allowMissingColumns=True)\n"
+  description: beam.Flatten as unionByName of DataFrames
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: beam.WindowInto
+  category: Streaming Window
+  template: "from pyspark.sql.functions import window, col\ndf_{name} = df_{input}.withWatermark('{timestamp_col}', '{watermark}')\n\
+    \    .groupBy(window(col('{timestamp_col}'), '{window_size}', '{slide_size}'))\n    .agg({agg_fn})\n"
+  description: beam.WindowInto as Spark Structured Streaming window
+  imports:
+  - from pyspark.sql.functions import window, col
+  confidence: 0.88
+  role: transform
+- type: beam.WithTimestamps
+  category: Timestamp Column
+  template: 'from pyspark.sql.functions import col, to_timestamp
 
-  - type: "beam.CoGroupByKey"
-    category: "DataFrame Join"
-    template: |
-      df_{name} = df_{input_1}.join(df_{input_2}, on="{key}", how="full")
-    description: "Beam CoGroupByKey as full outer join"
-    imports: []
-    confidence: 0.88
-    role: "transform"
+    df_{name} = df_{input}.withColumn(''_event_time'', to_timestamp(col(''{timestamp_field}'')))
 
-  - type: "beam.CombineGlobally"
-    category: "DataFrame Aggregate"
-    template: |
-      _result = df_{input}.agg(
-          {combine_fn}("{column}").alias("result")).first()["result"]
-    description: "Beam CombineGlobally as DataFrame agg"
-    imports: []
-    confidence: 0.88
-    role: "transform"
+    '
+  description: beam.WithTimestamps as to_timestamp column add
+  imports:
+  - from pyspark.sql.functions import col, to_timestamp
+  confidence: 0.92
+  role: transform
+- type: beam.Reshuffle
+  category: Repartition
+  template: 'df_{name} = df_{input}.repartition({num_partitions})
 
-  - type: "beam.io.WriteToText"
-    category: "File Write"
-    template: |
-      (df_{input}.write
-          .format("text")
-          .mode("overwrite")
-          .save("{output_path}"))
-    description: "Beam WriteToText as Spark text write"
-    imports: []
-    confidence: 0.92
-    role: "sink"
+    '
+  description: beam.Reshuffle as DataFrame repartition
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: beam.Create
+  category: In-Memory Source
+  template: 'df_{name} = spark.createDataFrame({elements}, schema={schema})
 
-  - type: "beam.io.WriteToParquet"
-    category: "Delta Write"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("{mode}")
-          .saveAsTable("{catalog}.{schema}.{table}"))
-    description: "Beam WriteToParquet upgraded to Delta write"
-    imports: []
-    confidence: 0.92
-    role: "sink"
+    '
+  description: beam.Create as spark.createDataFrame from list
+  imports: []
+  confidence: 0.95
+  role: source
+- type: beam.ParDo
+  category: UDF Transform
+  template: "from pyspark.sql.functions import udf\nfrom pyspark.sql.types import {return_type}\n\n@udf(returnType={return_type}())\n\
+    def {name}_fn({params}):\n    {process_body}\n    return _result\n\ndf_{name} = df_{input}.withColumn('{output_col}',\
+    \ {name}_fn(col('{input_col}')))\n"
+  description: beam.ParDo as PySpark UDF transformation
+  imports:
+  - from pyspark.sql.functions import udf, col
+  confidence: 0.85
+  role: transform
+- type: beam.DoFn
+  category: UDF Class
+  template: "from pyspark.sql.functions import udf, col\nfrom pyspark.sql.types import {return_type}\n\n# Beam DoFn -> PySpark\
+    \ UDF\ndef {name}_process({params}):\n    \"\"\"Ported from beam.DoFn.process()\"\"\"\n    {setup_body}\n    {process_body}\n\
+    \    return _result\n\n_{name}_udf = udf({name}_process, {return_type}())\ndf_{name} = df_{input}.withColumn('{output_col}',\
+    \ _{name}_udf(col('{input_col}')))\n"
+  description: beam.DoFn as PySpark UDF class
+  imports:
+  - from pyspark.sql.functions import udf, col
+  confidence: 0.82
+  role: transform
+- type: beam.io.ReadFromJdbc
+  category: JDBC Source
+  template: "df_{name} = (spark.read\n    .format('jdbc')\n    .option('url', '{jdbc_url}')\n    .option('dbtable', '{table}')\n\
+    \    .option('user', dbutils.secrets.get(scope='{scope}', key='db-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}',\
+    \ key='db-pass'))\n    .load())\n"
+  description: beam.io.ReadFromJdbc as Spark JDBC read
+  imports: []
+  confidence: 0.92
+  role: source
+- type: beam.io.WriteToJdbc
+  category: JDBC Sink
+  template: "(df_{input}.write\n    .format('jdbc')\n    .option('url', '{jdbc_url}')\n    .option('dbtable', '{table}')\n\
+    \    .option('user', dbutils.secrets.get(scope='{scope}', key='db-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}',\
+    \ key='db-pass'))\n    .mode('append')\n    .save())\n"
+  description: beam.io.WriteToJdbc as Spark JDBC write
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: beam.Keys
+  category: Column Select
+  template: 'df_{name} = df_{input}.select(''{key_col}'')
 
-  - type: "beam.io.WriteToBigQuery"
-    category: "BigQuery Write"
-    template: |
-      (df_{input}.write
-          .format("bigquery")
-          .option("table", "{project}:{dataset}.{table}")
-          .option("writeMethod", "direct")
-          .save())
-    description: "Beam WriteToBigQuery via spark-bigquery connector"
-    imports: []
-    confidence: 0.88
-    role: "sink"
+    '
+  description: beam.Keys as select key column
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: beam.Values
+  category: Column Select
+  template: 'df_{name} = df_{input}.select(''{value_col}'')
+
+    '
+  description: beam.Values as select value column
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: beam.KvSwap
+  category: Column Swap
+  template: 'from pyspark.sql.functions import col
+
+    df_{name} = df_{input}.select(col(''{value_col}'').alias(''{key_col}''), col(''{key_col}'').alias(''{value_col}''))
+
+    '
+  description: beam.KvSwap as column select swap
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.92
+  role: transform
+- type: beam.Distinct
+  category: Deduplicate
+  template: 'df_{name} = df_{input}.distinct()
+
+    '
+  description: beam.Distinct as DataFrame distinct
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: beam.Count.Globally
+  category: Count
+  template: '_{name}_count = df_{input}.count()
+
+    print(f''[COUNT] {{_{name}_count}} elements'')
+
+    '
+  description: beam.Count.Globally as DataFrame count
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: beam.Count.PerKey
+  category: Group Count
+  template: 'from pyspark.sql.functions import count
+
+    df_{name} = df_{input}.groupBy(''{key_col}'').agg(count(''*'').alias(''count''))
+
+    '
+  description: beam.Count.PerKey as groupBy count
+  imports:
+  - from pyspark.sql.functions import count
+  confidence: 0.95
+  role: transform
+- type: beam.Top.Largest
+  category: Top N
+  template: 'df_{name} = df_{input}.orderBy(col(''{sort_col}'').desc()).limit({n})
+
+    '
+  description: beam.Top.Largest as orderBy desc limit
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.95
+  role: transform
+- type: beam.Top.Smallest
+  category: Bottom N
+  template: 'df_{name} = df_{input}.orderBy(col(''{sort_col}'').asc()).limit({n})
+
+    '
+  description: beam.Top.Smallest as orderBy asc limit
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.95
+  role: transform

@@ -1,240 +1,522 @@
-# Apache Airflow -> Databricks PySpark Mapping
-# Maps Airflow operators to Databricks equivalents
-
 mappings:
-  - type: "BashOperator"
-    category: "Shell Command"
-    template: |
-      import subprocess
-      _result = subprocess.run(
-          ["{bash_command}"],
-          shell=True, capture_output=True, text=True, timeout=3600)
-      if _result.returncode != 0:
-          raise Exception(f"Bash failed: {_result.stderr[:500]}")
-      print(_result.stdout[:1000])
-    description: "BashOperator via subprocess in notebook cell"
-    imports: ["import subprocess"]
-    confidence: 0.90
-    role: "process"
+- type: BashOperator
+  category: Shell Command
+  template: "import subprocess\n_result = subprocess.run(\n    [\"{bash_command}\"],\n    shell=True, capture_output=True,\
+    \ text=True, timeout=3600)\nif _result.returncode != 0:\n    raise Exception(f\"Bash failed: {_result.stderr[:500]}\"\
+    )\nprint(_result.stdout[:1000])\n"
+  description: BashOperator via subprocess in notebook cell
+  imports:
+  - import subprocess
+  confidence: 0.9
+  role: process
+- type: PythonOperator
+  category: Python Function
+  template: "def {name}_callable(**kwargs):\n    # Port Airflow python_callable logic here\n    # Access params via kwargs['params'],\
+    \ kwargs['ds'], etc.\n    {python_callable_body}\n    return \"success\"\n\n_result = {name}_callable(\n    params={params},\n\
+    \    ds=str(spark.sql(\"SELECT current_date()\").first()[0]))\n"
+  description: PythonOperator as direct Python function call
+  imports: []
+  confidence: 0.92
+  role: process
+- type: SparkSubmitOperator
+  category: Notebook Run
+  template: "# SparkSubmitOperator -> Databricks Job or notebook.run\n# Spark session is already available in Databricks\n\
+    _result = dbutils.notebook.run(\n    \"{application}\",\n    timeout_seconds=3600,\n    arguments={{\"arg1\": \"{arg1}\"\
+    , \"arg2\": \"{arg2}\"}})\nprint(f\"[SPARK] Notebook result: {_result}\")\n"
+  description: SparkSubmitOperator replaced by Databricks notebook run
+  imports: []
+  confidence: 0.92
+  role: process
+- type: BigQueryOperator
+  category: Spark SQL
+  template: "# BigQuery -> read via spark-bigquery connector\ndf_{name} = (spark.read\n    .format(\"bigquery\")\n    .option(\"\
+    table\", \"{project}.{dataset}.{table}\")\n    .load())\n# Or execute SQL:\n# spark.sql(\"{sql}\")\n"
+  description: BigQuery operation via spark-bigquery connector
+  imports: []
+  confidence: 0.88
+  role: process
+- type: S3ToRedshiftOperator
+  category: Delta Lakehouse
+  template: "# S3 -> Redshift replaced by S3 -> Delta Lake\ndf_{name} = spark.read.format(\"{format}\").load(\"s3://{s3_bucket}/{s3_key}\"\
+    )\n(df_{name}.write\n    .format(\"delta\")\n    .mode(\"append\")\n    .saveAsTable(\"{catalog}.{schema}.{table}\"))\n"
+  description: S3-to-Redshift replaced by S3-to-Delta Lake pipeline
+  imports: []
+  confidence: 0.9
+  role: process
+- type: EmailOperator
+  category: Notification
+  template: "# Email via Databricks workflow notifications\n# Configure in job settings: email_notifications\nimport requests\n\
+    requests.post(\"{smtp_webhook_url}\", json={\n    \"to\": \"{to}\",\n    \"subject\": \"{subject}\",\n    \"html_content\"\
+    : \"{html_content}\"\n})\n"
+  description: Email notification via workflow settings or webhook
+  imports:
+  - import requests
+  confidence: 0.85
+  role: utility
+- type: DatabricksRunNowOperator
+  category: Databricks Job
+  template: "# Direct Databricks Job trigger via SDK\nfrom databricks.sdk import WorkspaceClient\nw = WorkspaceClient()\n\
+    _run = w.jobs.run_now(\n    job_id={job_id},\n    notebook_params={{\"param1\": \"{value1}\"}})\nprint(f\"[JOB] Triggered\
+    \ run: {_run.run_id}\")\n"
+  description: Databricks job trigger via SDK
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.95
+  role: process
+- type: DatabricksSubmitRunOperator
+  category: Databricks Job
+  template: "from databricks.sdk import WorkspaceClient\nw = WorkspaceClient()\n_run = w.jobs.submit(\n    run_name=\"{name}\"\
+    ,\n    tasks=[{\n        \"task_key\": \"{name}\",\n        \"notebook_task\": {\n            \"notebook_path\": \"{notebook_path}\"\
+    ,\n            \"base_parameters\": {{\"key\": \"value\"}}\n        },\n        \"new_cluster\": {\n            \"spark_version\"\
+    : \"14.3.x-scala2.12\",\n            \"num_workers\": 2,\n            \"node_type_id\": \"Standard_DS3_v2\"\n        }\n\
+    \    }])\nprint(f\"[JOB] Submitted: {_run.run_id}\")\n"
+  description: Submit one-time Databricks run via SDK
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.92
+  role: process
+- type: SFTPOperator
+  category: External Transfer
+  template: "import paramiko\n_transport = paramiko.Transport((\"{remote_host}\", 22))\n_transport.connect(\n    username=dbutils.secrets.get(scope=\"\
+    {scope}\", key=\"sftp-user\"),\n    password=dbutils.secrets.get(scope=\"{scope}\", key=\"sftp-pass\"))\n_sftp = paramiko.SFTPClient.from_transport(_transport)\n\
+    _sftp.get(\"{remote_filepath}\", \"/Volumes/{catalog}/{schema}/landing/{local_filepath}\")\n_sftp.close()\n_transport.close()\n"
+  description: SFTP file transfer via paramiko
+  imports:
+  - import paramiko
+  confidence: 0.9
+  role: source
+- type: HttpOperator
+  category: HTTP Request
+  template: "import requests\n_response = requests.request(\n    method=\"{method}\",\n    url=\"{endpoint}\",\n    headers={headers},\n\
+    \    json={data},\n    timeout=60)\n_response.raise_for_status()\n_result_{name} = _response.json()\nprint(f\"[HTTP] {method}\
+    \ {endpoint}: {_response.status_code}\")\n"
+  description: HTTP request via requests library
+  imports:
+  - import requests
+  confidence: 0.9
+  role: process
+- type: MySqlOperator
+  category: JDBC Execute
+  template: "df_{name} = (spark.read\n    .format(\"jdbc\")\n    .option(\"url\", \"jdbc:mysql://{host}:{port}/{schema}\"\
+    )\n    .option(\"dbtable\", \"({sql}) subq\")\n    .option(\"driver\", \"com.mysql.cj.jdbc.Driver\")\n    .option(\"user\"\
+    , dbutils.secrets.get(scope=\"{scope}\", key=\"mysql-user\"))\n    .option(\"password\", dbutils.secrets.get(scope=\"\
+    {scope}\", key=\"mysql-pass\"))\n    .load())\n"
+  description: MySQL query execution via JDBC
+  imports: []
+  confidence: 0.92
+  role: process
+- type: PostgresOperator
+  category: JDBC Execute
+  template: "df_{name} = (spark.read\n    .format(\"jdbc\")\n    .option(\"url\", \"jdbc:postgresql://{host}:{port}/{database}\"\
+    )\n    .option(\"dbtable\", \"({sql}) subq\")\n    .option(\"driver\", \"org.postgresql.Driver\")\n    .load())\n"
+  description: PostgreSQL query via JDBC
+  imports: []
+  confidence: 0.92
+  role: process
+- type: S3FileTransformOperator
+  category: DataFrame Transform
+  template: 'df_{name} = spark.read.format("{format}").load("s3://{source_s3_key}")
 
-  - type: "PythonOperator"
-    category: "Python Function"
-    template: |
-      def {name}_callable(**kwargs):
-          # Port Airflow python_callable logic here
-          # Access params via kwargs['params'], kwargs['ds'], etc.
-          {python_callable_body}
-          return "success"
+    # Apply transformation
 
-      _result = {name}_callable(
-          params={params},
-          ds=str(spark.sql("SELECT current_date()").first()[0]))
-    description: "PythonOperator as direct Python function call"
-    imports: []
-    confidence: 0.92
-    role: "process"
+    df_transformed = df_{name}.select("*")
 
-  - type: "SparkSubmitOperator"
-    category: "Notebook Run"
-    template: |
-      # SparkSubmitOperator -> Databricks Job or notebook.run
-      # Spark session is already available in Databricks
-      _result = dbutils.notebook.run(
-          "{application}",
-          timeout_seconds=3600,
-          arguments={{"arg1": "{arg1}", "arg2": "{arg2}"}})
-      print(f"[SPARK] Notebook result: {_result}")
-    description: "SparkSubmitOperator replaced by Databricks notebook run"
-    imports: []
-    confidence: 0.92
-    role: "process"
+    df_transformed.write.format("delta").mode("overwrite").save("s3://{dest_s3_key}")
 
-  - type: "BigQueryOperator"
-    category: "Spark SQL"
-    template: |
-      # BigQuery -> read via spark-bigquery connector
-      df_{name} = (spark.read
-          .format("bigquery")
-          .option("table", "{project}.{dataset}.{table}")
-          .load())
-      # Or execute SQL:
-      # spark.sql("{sql}")
-    description: "BigQuery operation via spark-bigquery connector"
-    imports: []
-    confidence: 0.88
-    role: "process"
+    '
+  description: S3 file transform via DataFrame read-transform-write
+  imports: []
+  confidence: 0.9
+  role: transform
+- type: BranchPythonOperator
+  category: Python Branching
+  template: "# BranchPythonOperator -> conditional notebook execution\ndef _branch_{name}():\n    if {condition}:\n      \
+    \  return dbutils.notebook.run(\"{branch_true_notebook}\", 3600)\n    else:\n        return dbutils.notebook.run(\"{branch_false_notebook}\"\
+    , 3600)\n\n_branch_result = _branch_{name}()\n"
+  description: Branch logic via conditional notebook runs
+  imports: []
+  confidence: 0.9
+  role: route
+- type: TriggerDagRunOperator
+  category: Databricks Workflow
+  template: 'from databricks.sdk import WorkspaceClient
 
-  - type: "S3ToRedshiftOperator"
-    category: "Delta Lakehouse"
-    template: |
-      # S3 -> Redshift replaced by S3 -> Delta Lake
-      df_{name} = spark.read.format("{format}").load("s3://{s3_bucket}/{s3_key}")
-      (df_{name}.write
-          .format("delta")
-          .mode("append")
-          .saveAsTable("{catalog}.{schema}.{table}"))
-    description: "S3-to-Redshift replaced by S3-to-Delta Lake pipeline"
-    imports: []
-    confidence: 0.90
-    role: "process"
+    w = WorkspaceClient()
 
-  - type: "EmailOperator"
-    category: "Notification"
-    template: |
-      # Email via Databricks workflow notifications
-      # Configure in job settings: email_notifications
-      import requests
-      requests.post("{smtp_webhook_url}", json={
-          "to": "{to}",
-          "subject": "{subject}",
-          "html_content": "{html_content}"
-      })
-    description: "Email notification via workflow settings or webhook"
-    imports: ["import requests"]
-    confidence: 0.85
-    role: "utility"
+    _run = w.jobs.run_now(job_id={target_job_id})
 
-  - type: "DatabricksRunNowOperator"
-    category: "Databricks Job"
-    template: |
-      # Direct Databricks Job trigger via SDK
-      from databricks.sdk import WorkspaceClient
-      w = WorkspaceClient()
-      _run = w.jobs.run_now(
-          job_id={job_id},
-          notebook_params={{"param1": "{value1}"}})
-      print(f"[JOB] Triggered run: {_run.run_id}")
-    description: "Databricks job trigger via SDK"
-    imports: ["from databricks.sdk import WorkspaceClient"]
-    confidence: 0.95
-    role: "process"
+    print(f"[TRIGGER] Triggered downstream job: {_run.run_id}")
 
-  - type: "DatabricksSubmitRunOperator"
-    category: "Databricks Job"
-    template: |
-      from databricks.sdk import WorkspaceClient
-      w = WorkspaceClient()
-      _run = w.jobs.submit(
-          run_name="{name}",
-          tasks=[{
-              "task_key": "{name}",
-              "notebook_task": {
-                  "notebook_path": "{notebook_path}",
-                  "base_parameters": {{"key": "value"}}
-              },
-              "new_cluster": {
-                  "spark_version": "14.3.x-scala2.12",
-                  "num_workers": 2,
-                  "node_type_id": "Standard_DS3_v2"
-              }
-          }])
-      print(f"[JOB] Submitted: {_run.run_id}")
-    description: "Submit one-time Databricks run via SDK"
-    imports: ["from databricks.sdk import WorkspaceClient"]
-    confidence: 0.92
-    role: "process"
+    '
+  description: Trigger downstream Databricks job
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.92
+  role: process
+- type: ShortCircuitOperator
+  category: Conditional Skip
+  template: "def short_circuit_{name}(**kwargs):\n    condition = {condition}\n    if not condition:\n        print('[SKIP]\
+    \ Short-circuit: downstream tasks skipped')\n        dbutils.notebook.exit('skipped')\n    return True\n\nshort_circuit_{name}()\n"
+  description: ShortCircuitOperator skips downstream if condition is False
+  imports: []
+  confidence: 0.9
+  role: route
+- type: ExternalTaskSensor
+  category: Job Dependency
+  template: "# ExternalTaskSensor -> poll Databricks job status\nfrom databricks.sdk import WorkspaceClient\nimport time\n\
+    w = WorkspaceClient()\nwhile True:\n    _run = w.jobs.list_runs(job_id={external_job_id}, limit=1)\n    if _run and _run[0].state.result_state\
+    \ == 'SUCCESS':\n        break\n    time.sleep({poke_interval})\n"
+  description: ExternalTaskSensor polls upstream Databricks job completion
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  - import time
+  confidence: 0.85
+  role: utility
+- type: FileSensor
+  category: File Arrival
+  template: "# FileSensor -> dbutils.fs.ls polling or Auto Loader\nimport time\n_timeout = {timeout}\n_start = time.time()\n\
+    while time.time() - _start < _timeout:\n    try:\n        _files = dbutils.fs.ls('{filepath}')\n        if _files:\n \
+    \           print(f'[SENSOR] File found: {_files[0].path}')\n            break\n    except Exception:\n        pass\n\
+    \    time.sleep({poke_interval})\nelse:\n    raise TimeoutError('FileSensor timed out')\n"
+  description: FileSensor polls for file arrival on cloud storage
+  imports:
+  - import time
+  confidence: 0.88
+  role: utility
+- type: S3KeySensor
+  category: S3 File Arrival
+  template: "# S3KeySensor -> dbutils.fs.ls on mounted S3 path\nimport time\n_timeout = {timeout}\n_start = time.time()\n\
+    while time.time() - _start < _timeout:\n    try:\n        _files = dbutils.fs.ls('s3a://{bucket_name}/{bucket_key}')\n\
+    \        if _files:\n            print(f'[SENSOR] S3 key found')\n            break\n    except Exception:\n        pass\n\
+    \    time.sleep({poke_interval})\nelse:\n    raise TimeoutError('S3KeySensor timed out')\n"
+  description: S3KeySensor polls for S3 key existence
+  imports:
+  - import time
+  confidence: 0.88
+  role: utility
+- type: HttpSensor
+  category: HTTP Polling
+  template: "import requests, time\n_timeout = {timeout}\n_start = time.time()\nwhile time.time() - _start < _timeout:\n \
+    \   _resp = requests.get('{endpoint}', headers={headers}, timeout=30)\n    if {response_check}(_resp):\n        print('[SENSOR]\
+    \ HTTP check passed')\n        break\n    time.sleep({poke_interval})\nelse:\n    raise TimeoutError('HttpSensor timed\
+    \ out')\n"
+  description: HttpSensor polls HTTP endpoint until condition met
+  imports:
+  - import requests
+  - import time
+  confidence: 0.85
+  role: utility
+- type: SqlSensor
+  category: SQL Polling
+  template: "import time\n_timeout = {timeout}\n_start = time.time()\nwhile time.time() - _start < _timeout:\n    _result\
+    \ = spark.sql(\"\"\"{sql}\"\"\").first()\n    if _result and _result[0]:\n        print('[SENSOR] SQL condition met')\n\
+    \        break\n    time.sleep({poke_interval})\nelse:\n    raise TimeoutError('SqlSensor timed out')\n"
+  description: SqlSensor polls SQL query until truthy result
+  imports:
+  - import time
+  confidence: 0.9
+  role: utility
+- type: TimeDeltaSensor
+  category: Time Delay
+  template: 'import time
 
-  - type: "SFTPOperator"
-    category: "External Transfer"
-    template: |
-      import paramiko
-      _transport = paramiko.Transport(("{remote_host}", 22))
-      _transport.connect(
-          username=dbutils.secrets.get(scope="{scope}", key="sftp-user"),
-          password=dbutils.secrets.get(scope="{scope}", key="sftp-pass"))
-      _sftp = paramiko.SFTPClient.from_transport(_transport)
-      _sftp.get("{remote_filepath}", "/Volumes/{catalog}/{schema}/landing/{local_filepath}")
-      _sftp.close()
-      _transport.close()
-    description: "SFTP file transfer via paramiko"
-    imports: ["import paramiko"]
-    confidence: 0.90
-    role: "source"
+    print(f''[WAIT] Sleeping {delta_seconds} seconds...'')
 
-  - type: "HttpOperator"
-    category: "HTTP Request"
-    template: |
-      import requests
-      _response = requests.request(
-          method="{method}",
-          url="{endpoint}",
-          headers={headers},
-          json={data},
-          timeout=60)
-      _response.raise_for_status()
-      _result_{name} = _response.json()
-      print(f"[HTTP] {method} {endpoint}: {_response.status_code}")
-    description: "HTTP request via requests library"
-    imports: ["import requests"]
-    confidence: 0.90
-    role: "process"
+    time.sleep({delta_seconds})
 
-  - type: "MySqlOperator"
-    category: "JDBC Execute"
-    template: |
-      df_{name} = (spark.read
-          .format("jdbc")
-          .option("url", "jdbc:mysql://{host}:{port}/{schema}")
-          .option("dbtable", "({sql}) subq")
-          .option("driver", "com.mysql.cj.jdbc.Driver")
-          .option("user", dbutils.secrets.get(scope="{scope}", key="mysql-user"))
-          .option("password", dbutils.secrets.get(scope="{scope}", key="mysql-pass"))
-          .load())
-    description: "MySQL query execution via JDBC"
-    imports: []
-    confidence: 0.92
-    role: "process"
+    print(''[WAIT] Done'')
 
-  - type: "PostgresOperator"
-    category: "JDBC Execute"
-    template: |
-      df_{name} = (spark.read
-          .format("jdbc")
-          .option("url", "jdbc:postgresql://{host}:{port}/{database}")
-          .option("dbtable", "({sql}) subq")
-          .option("driver", "org.postgresql.Driver")
-          .load())
-    description: "PostgreSQL query via JDBC"
-    imports: []
-    confidence: 0.92
-    role: "process"
+    '
+  description: TimeDeltaSensor as simple time.sleep delay
+  imports:
+  - import time
+  confidence: 0.95
+  role: utility
+- type: MsSqlOperator
+  category: JDBC Query
+  template: "df_{name} = (spark.read\n    .format('jdbc')\n    .option('url', 'jdbc:sqlserver://{host}:{port};databaseName={database}')\n\
+    \    .option('dbtable', '({sql}) t')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='mssql-user'))\n  \
+    \  .option('password', dbutils.secrets.get(scope='{scope}', key='mssql-pass'))\n    .load())\n"
+  description: MsSqlOperator via JDBC read
+  imports: []
+  confidence: 0.9
+  role: source
+- type: OracleOperator
+  category: JDBC Query
+  template: "df_{name} = (spark.read\n    .format('jdbc')\n    .option('url', 'jdbc:oracle:thin:@{host}:{port}:{sid}')\n \
+    \   .option('dbtable', '({sql}) t')\n    .option('driver', 'oracle.jdbc.OracleDriver')\n    .option('user', dbutils.secrets.get(scope='{scope}',\
+    \ key='oracle-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}', key='oracle-pass'))\n    .load())\n"
+  description: OracleOperator via JDBC read
+  imports: []
+  confidence: 0.9
+  role: source
+- type: SlackWebhookOperator
+  category: Notification
+  template: 'import requests
 
-  - type: "S3FileTransformOperator"
-    category: "DataFrame Transform"
-    template: |
-      df_{name} = spark.read.format("{format}").load("s3://{source_s3_key}")
-      # Apply transformation
-      df_transformed = df_{name}.select("*")
-      df_transformed.write.format("delta").mode("overwrite").save("s3://{dest_s3_key}")
-    description: "S3 file transform via DataFrame read-transform-write"
-    imports: []
-    confidence: 0.90
-    role: "transform"
+    _webhook_url = dbutils.secrets.get(scope=''{scope}'', key=''slack-webhook'')
 
-  - type: "BranchPythonOperator"
-    category: "Python Branching"
-    template: |
-      # BranchPythonOperator -> conditional notebook execution
-      def _branch_{name}():
-          if {condition}:
-              return dbutils.notebook.run("{branch_true_notebook}", 3600)
-          else:
-              return dbutils.notebook.run("{branch_false_notebook}", 3600)
+    _payload = {{''text'': ''{message}'', ''channel'': ''{channel}''}}
 
-      _branch_result = _branch_{name}()
-    description: "Branch logic via conditional notebook runs"
-    imports: []
-    confidence: 0.90
-    role: "route"
+    requests.post(_webhook_url, json=_payload, timeout=30)
 
-  - type: "TriggerDagRunOperator"
-    category: "Databricks Workflow"
-    template: |
-      from databricks.sdk import WorkspaceClient
-      w = WorkspaceClient()
-      _run = w.jobs.run_now(job_id={target_job_id})
-      print(f"[TRIGGER] Triggered downstream job: {_run.run_id}")
-    description: "Trigger downstream Databricks job"
-    imports: ["from databricks.sdk import WorkspaceClient"]
-    confidence: 0.92
-    role: "process"
+    print(''[SLACK] Message sent'')
+
+    '
+  description: SlackWebhookOperator via requests POST to Slack webhook
+  imports:
+  - import requests
+  confidence: 0.9
+  role: utility
+- type: SparkSubmitOperator_v2
+  category: Notebook Run
+  template: "# SparkSubmitOperator -> dbutils.notebook.run\n_result = dbutils.notebook.run(\n    '{application}',\n    timeout_seconds={timeout},\n\
+    \    arguments={args})\nprint(f'[SPARK] Result: {_result}')\n"
+  description: SparkSubmitOperator as Databricks notebook run
+  imports: []
+  confidence: 0.92
+  role: process
+- type: SSHOperator
+  category: Remote Command
+  template: "import subprocess\n# SSHOperator -> subprocess with ssh\n_result = subprocess.run(\n    ['ssh', '-o', 'StrictHostKeyChecking=no',\
+    \ '{user}@{host}', '{command}'],\n    capture_output=True, text=True, timeout=3600)\nif _result.returncode != 0:\n   \
+    \ raise Exception(f'SSH failed: {_result.stderr[:500]}')\nprint(_result.stdout[:1000])\n"
+  description: SSHOperator via subprocess ssh call
+  imports:
+  - import subprocess
+  confidence: 0.8
+  role: process
+- type: DockerOperator
+  category: Container Run
+  template: "# DockerOperator -> Databricks notebook or job\n# Docker containers replaced by cluster-scoped init scripts or\
+    \ job runs\n_result = dbutils.notebook.run(\n    '{notebook_path}',\n    timeout_seconds=3600,\n    arguments={{'image':\
+    \ '{image}', 'command': '{command}'}})\nprint(f'[DOCKER] Result: {_result}')\n"
+  description: DockerOperator replaced by Databricks notebook/job execution
+  imports: []
+  confidence: 0.78
+  role: process
+- type: KubernetesPodOperator
+  category: Container Run
+  template: "# KubernetesPodOperator -> Databricks Job\n# K8s pods replaced by Databricks job runs\nfrom databricks.sdk import\
+    \ WorkspaceClient\nw = WorkspaceClient()\n_run = w.jobs.submit(\n    run_name='{name}',\n    tasks=[{{\n        'task_key':\
+    \ '{name}',\n        'notebook_task': {{'notebook_path': '{notebook_path}'}},\n        'new_cluster': {{'spark_version':\
+    \ '14.3.x-scala2.12', 'num_workers': {num_workers}}}\n    }}])\nprint(f'[K8S->DBX] Run ID: {_run.run_id}')\n"
+  description: KubernetesPodOperator replaced by Databricks job submit
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.8
+  role: process
+- type: GCSToS3Operator
+  category: Cloud Copy
+  template: '# GCSToS3Operator -> read from GCS, write to S3 via Spark
+
+    df_{name} = spark.read.format(''{format}'').load(''gs://{gcs_bucket}/{gcs_key}'')
+
+    df_{name}.write.format(''{format}'').save(''s3a://{s3_bucket}/{s3_key}'')
+
+    print(''[COPY] GCS -> S3 complete'')
+
+    '
+  description: GCSToS3Operator via Spark read/write across cloud storage
+  imports: []
+  confidence: 0.88
+  role: process
+- type: DataprocSubmitJobOperator
+  category: Spark Job
+  template: "# DataprocSubmitJobOperator -> Databricks notebook run\n# Dataproc jobs run natively on Databricks clusters\n\
+    _result = dbutils.notebook.run(\n    '{notebook_path}',\n    timeout_seconds=3600,\n    arguments={args})\nprint(f'[DATAPROC->DBX]\
+    \ Result: {_result}')\n"
+  description: DataprocSubmitJobOperator replaced by Databricks notebook
+  imports: []
+  confidence: 0.85
+  role: process
+- type: EmrAddStepsOperator
+  category: Spark Job
+  template: "# EmrAddStepsOperator -> Databricks notebook run\n# EMR steps run as Databricks notebook cells\n_result = dbutils.notebook.run(\n\
+    \    '{notebook_path}',\n    timeout_seconds=3600,\n    arguments={args})\nprint(f'[EMR->DBX] Result: {_result}')\n"
+  description: EmrAddStepsOperator replaced by Databricks notebook run
+  imports: []
+  confidence: 0.85
+  role: process
+- type: AthenaOperator
+  category: Spark SQL
+  template: "# AthenaOperator -> Spark SQL (Athena SQL is ANSI-compatible)\ndf_{name} = spark.sql(\"\"\"\n    {query}\n\"\"\
+    \")\ndf_{name}.write.format('delta').mode('overwrite').saveAsTable('{catalog}.{schema}.{table}')\n"
+  description: AthenaOperator SQL executed via Spark SQL
+  imports: []
+  confidence: 0.88
+  role: process
+- type: GlueJobOperator
+  category: Notebook Run
+  template: "# GlueJobOperator -> Databricks notebook\n# Glue ETL scripts port directly to PySpark notebooks\n_result = dbutils.notebook.run(\n\
+    \    '{notebook_path}',\n    timeout_seconds=3600,\n    arguments={args})\nprint(f'[GLUE->DBX] Result: {_result}')\n"
+  description: GlueJobOperator replaced by Databricks notebook execution
+  imports: []
+  confidence: 0.85
+  role: process
+- type: RedshiftSQLOperator
+  category: JDBC Query
+  template: "df_{name} = (spark.read\n    .format('jdbc')\n    .option('url', 'jdbc:redshift://{host}:{port}/{database}')\n\
+    \    .option('dbtable', '({sql}) t')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='redshift-user'))\n\
+    \    .option('password', dbutils.secrets.get(scope='{scope}', key='redshift-pass'))\n    .load())\n"
+  description: RedshiftSQLOperator via JDBC read from Redshift
+  imports: []
+  confidence: 0.88
+  role: source
+- type: SubDagOperator
+  category: Notebook Run
+  template: "# SubDagOperator -> nested notebook run\n_result = dbutils.notebook.run(\n    '{subdag_notebook}',\n    timeout_seconds=3600,\n\
+    \    arguments={args})\nprint(f'[SUBDAG] Result: {_result}')\n"
+  description: SubDagOperator replaced by nested Databricks notebook run
+  imports: []
+  confidence: 0.85
+  role: process
+- type: TaskGroup
+  category: Notebook Orchestration
+  template: "# TaskGroup -> sequential notebook runs\n_results = {}\nfor _task_name, _notebook in {task_notebooks}.items():\n\
+    \    _results[_task_name] = dbutils.notebook.run(_notebook, 3600)\n    print(f'[GROUP] {{_task_name}}: {{_results[_task_name]}}')\n\
+    print(f'[GROUP] All tasks complete: {list(_results.keys())}')\n"
+  description: TaskGroup as sequential Databricks notebook runs
+  imports: []
+  confidence: 0.85
+  role: process
+- type: LatestOnlyOperator
+  category: Conditional Skip
+  template: "# LatestOnlyOperator -> check if this is the latest run\nimport datetime\n_now = datetime.datetime.utcnow()\n\
+    _execution_date = datetime.datetime.strptime('{execution_date}', '%Y-%m-%d')\nif _execution_date.date() < _now.date():\n\
+    \    print('[SKIP] Not the latest run, skipping downstream')\n    dbutils.notebook.exit('skipped - not latest')\n"
+  description: LatestOnlyOperator skips backfill runs
+  imports:
+  - import datetime
+  confidence: 0.85
+  role: route
+- type: SFTPOperator_upload
+  category: File Transfer
+  template: "import paramiko\n_ssh = paramiko.SSHClient()\n_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())\n_ssh.connect('{host}',\
+    \ username=dbutils.secrets.get(scope='{scope}', key='sftp-user'),\n             password=dbutils.secrets.get(scope='{scope}',\
+    \ key='sftp-pass'))\n_sftp = _ssh.open_sftp()\n_sftp.put('{local_path}', '{remote_path}')\n_sftp.close()\n_ssh.close()\n\
+    print('[SFTP] Upload complete')\n"
+  description: SFTPOperator upload via paramiko
+  imports:
+  - import paramiko
+  confidence: 0.82
+  role: sink
+- type: PythonVirtualenvOperator
+  category: Python Function
+  template: "# PythonVirtualenvOperator -> pip install in notebook + run\n%pip install {requirements}\n\ndef {name}_callable(**kwargs):\n\
+    \    {python_callable_body}\n    return 'success'\n\n_result = {name}_callable(params={params})\n"
+  description: PythonVirtualenvOperator via %pip install and function call
+  imports: []
+  confidence: 0.88
+  role: process
+- type: SimpleHttpOperator
+  category: HTTP Request
+  template: "import requests\n_response = requests.request(\n    method='{method}',\n    url='{endpoint}',\n    headers={headers},\n\
+    \    data={data},\n    timeout=30)\n_response.raise_for_status()\nprint(f'[HTTP] Status: {{_response.status_code}}')\n\
+    _result_{name} = _response.json() if _response.headers.get('content-type','').startswith('application/json') else _response.text\n"
+  description: SimpleHttpOperator via requests library
+  imports:
+  - import requests
+  confidence: 0.9
+  role: process
+- type: S3CopyObjectOperator
+  category: Cloud Copy
+  template: "# S3CopyObjectOperator -> dbutils.fs.cp\ndbutils.fs.cp(\n    's3a://{source_bucket}/{source_key}',\n    's3a://{dest_bucket}/{dest_key}',\n\
+    \    recurse={recurse})\nprint('[S3] Copy complete')\n"
+  description: S3CopyObjectOperator via dbutils.fs.cp
+  imports: []
+  confidence: 0.92
+  role: process
+- type: S3DeleteObjectsOperator
+  category: Cloud Delete
+  template: '# S3DeleteObjectsOperator -> dbutils.fs.rm
+
+    dbutils.fs.rm(''s3a://{bucket}/{prefix}'', recurse=True)
+
+    print(''[S3] Delete complete'')
+
+    '
+  description: S3DeleteObjectsOperator via dbutils.fs.rm
+  imports: []
+  confidence: 0.9
+  role: utility
+- type: S3ListOperator
+  category: Cloud List
+  template: '# S3ListOperator -> dbutils.fs.ls
+
+    _files = dbutils.fs.ls(''s3a://{bucket}/{prefix}'')
+
+    _keys = [f.path for f in _files]
+
+    print(f''[S3] Found {{len(_keys)}} files'')
+
+    '
+  description: S3ListOperator via dbutils.fs.ls
+  imports: []
+  confidence: 0.92
+  role: utility
+- type: DatabricksNotebookOperator
+  category: Notebook Run
+  template: "_result = dbutils.notebook.run(\n    '{notebook_path}',\n    timeout_seconds={timeout},\n    arguments={params})\n\
+    print(f'[NOTEBOOK] Result: {_result}')\n"
+  description: DatabricksNotebookOperator via dbutils.notebook.run
+  imports: []
+  confidence: 0.95
+  role: process
+- type: DatabricksSqlOperator
+  category: Spark SQL
+  template: "# DatabricksSqlOperator -> spark.sql\ndf_{name} = spark.sql(\"\"\"\n    {sql}\n\"\"\")\ndisplay(df_{name})\n"
+  description: DatabricksSqlOperator via spark.sql
+  imports: []
+  confidence: 0.95
+  role: process
+- type: SnowflakeOperator
+  category: JDBC Query
+  template: "df_{name} = (spark.read\n    .format('jdbc')\n    .option('url', 'jdbc:snowflake://{account}.snowflakecomputing.com')\n\
+    \    .option('dbtable', '({sql}) t')\n    .option('sfDatabase', '{database}')\n    .option('sfSchema', '{schema}')\n \
+    \   .option('sfWarehouse', '{warehouse}')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='sf-user'))\n\
+    \    .option('password', dbutils.secrets.get(scope='{scope}', key='sf-pass'))\n    .load())\n"
+  description: SnowflakeOperator via JDBC read from Snowflake
+  imports: []
+  confidence: 0.88
+  role: source
+- type: SalesforceOperator
+  category: API Read
+  template: "# SalesforceOperator -> simple_salesforce or spark-salesforce\n%pip install simple_salesforce\nfrom simple_salesforce\
+    \ import Salesforce\nsf = Salesforce(\n    username=dbutils.secrets.get(scope='{scope}', key='sf-user'),\n    password=dbutils.secrets.get(scope='{scope}',\
+    \ key='sf-pass'),\n    security_token=dbutils.secrets.get(scope='{scope}', key='sf-token'))\n_records = sf.query_all(\"\
+    {soql}\")\ndf_{name} = spark.createDataFrame(_records['records'])\n"
+  description: SalesforceOperator via simple_salesforce library
+  imports:
+  - from simple_salesforce import Salesforce
+  confidence: 0.82
+  role: source
+- type: SqsPublishOperator
+  category: Message Queue
+  template: "import boto3\n_sqs = boto3.client('sqs', region_name='{region}')\n_sqs.send_message(\n    QueueUrl='{queue_url}',\n\
+    \    MessageBody='{message}')\nprint('[SQS] Message sent')\n"
+  description: SqsPublishOperator via boto3 SQS client
+  imports:
+  - import boto3
+  confidence: 0.85
+  role: utility
+- type: SnsPublishOperator
+  category: Notification
+  template: "import boto3\n_sns = boto3.client('sns', region_name='{region}')\n_sns.publish(\n    TopicArn='{topic_arn}',\n\
+    \    Subject='{subject}',\n    Message='{message}')\nprint('[SNS] Notification sent')\n"
+  description: SnsPublishOperator via boto3 SNS client
+  imports:
+  - import boto3
+  confidence: 0.85
+  role: utility
+- type: LambdaInvokeFunctionOperator
+  category: Serverless
+  template: "import boto3, json\n_lambda = boto3.client('lambda', region_name='{region}')\n_response = _lambda.invoke(\n \
+    \   FunctionName='{function_name}',\n    InvocationType='RequestResponse',\n    Payload=json.dumps({payload}))\n_result\
+    \ = json.loads(_response['Payload'].read())\nprint(f'[LAMBDA] Result: {_result}')\n"
+  description: LambdaInvokeFunctionOperator via boto3 Lambda client
+  imports:
+  - import boto3
+  - import json
+  confidence: 0.85
+  role: process

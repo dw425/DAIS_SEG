@@ -1,0 +1,1 @@
+import{u as a,a as s,r as o,j as r}from"./index-tIH9TuVJ.js";import{R as i}from"./RegisterPage-xaxt3pgu.js";function g(){const{token:t}=a(),e=s();return o.useEffect(()=>{t&&e("/dashboard",{replace:!0})},[t,e]),r.jsx(i,{onSwitchToLogin:()=>e("/login")})}export{g as default};

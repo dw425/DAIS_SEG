@@ -1,10 +1,13 @@
 """Build processor DAG using networkx — ported from dependency-graph.js."""
 
+import logging
 from collections import deque
 
 import networkx as nx
 
 from app.models.processor import Connection, Processor
+
+logger = logging.getLogger(__name__)
 
 
 def build_dependency_graph(
@@ -66,6 +69,7 @@ def build_dependency_graph(
         fan_in[p.name] = len(upstream.get(p.name, []))
         fan_out[p.name] = len(downstream.get(p.name, []))
 
+    logger.info("Dependency graph: %d nodes, %d edges", graph.number_of_nodes(), graph.number_of_edges())
     return {
         "downstream": downstream,
         "upstream": upstream,

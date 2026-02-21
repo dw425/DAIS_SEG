@@ -1,7 +1,10 @@
 """Export format utilities — convert reports to various output formats."""
 
 import json
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def to_json(report: dict) -> str:
@@ -44,7 +47,32 @@ def to_markdown(report: dict) -> str:
 
 
 def to_csv_rows(report: dict) -> list[dict[str, Any]]:
-    """Export assessment mappings as CSV-compatible rows."""
-    mappings = report.get("summary", {})
-    # For actual CSV we'd extract from the full assessment
-    return [{"key": k, "value": v} for k, v in mappings.items()]
+    """Export assessment mappings as CSV-compatible rows.
+
+    Extracts processor-level mapping data from the report's assessment
+    section and returns one row per processor with standardized fields.
+
+    The report dict is expected to contain an ``assessment`` key with a
+    ``mappings`` list, where each mapping has name, type, confidence,
+    mapped, category, role, and notes fields (matching ``MappingEntry``).
+    """
+    assessment = report.get("assessment", {})
+    mappings = assessment.get("mappings", [])
+    if not mappings:
+        return []
+
+    logger.info("CSV export: %d mappings to rows", len(mappings))
+    rows: list[dict[str, Any]] = []
+    for m in mappings:
+        # Support both dict and object-style access
+        get = m.get if isinstance(m, dict) else lambda k, d=None: getattr(m, k, d)
+        rows.append({
+            "name": get("name", ""),
+            "type": get("type", ""),
+            "confidence": get("confidence", 0),
+            "mapped": get("mapped", False),
+            "category": get("category", ""),
+            "role": get("role", ""),
+            "notes": get("notes", ""),
+        })
+    return rows

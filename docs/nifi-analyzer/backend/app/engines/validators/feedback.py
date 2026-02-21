@@ -3,7 +3,11 @@
 Ported from validators/accelerator-feedback.js.
 """
 
+import logging
+
 from app.models.pipeline import NotebookResult, ParseResult
+
+logger = logging.getLogger(__name__)
 
 
 def compute_feedback(parse_result: ParseResult, notebook: NotebookResult) -> tuple[float, str]:
@@ -12,6 +16,11 @@ def compute_feedback(parse_result: ParseResult, notebook: NotebookResult) -> tup
     Returns:
         (score, details_string)
     """
+    if not parse_result or not parse_result.processors:
+        return 0.0, "No parse result or processors to evaluate"
+    if not notebook or not notebook.cells:
+        return 0.0, "No notebook or cells to evaluate"
+
     total_procs = len(parse_result.processors)
     code_cells = [c for c in notebook.cells if c.type == "code" and c.label.startswith("step_")]
     generated_steps = len(code_cells)
@@ -39,4 +48,5 @@ def compute_feedback(parse_result: ParseResult, notebook: NotebookResult) -> tup
         f"Controller Services: {cs_referenced}/{cs_count} referenced"
     )
 
+    logger.info("Feedback score: %.2f (%s)", overall, details)
     return min(overall, 1.0), details

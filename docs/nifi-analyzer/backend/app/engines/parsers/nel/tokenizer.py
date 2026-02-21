@@ -14,9 +14,18 @@ def tokenize_nel_chain(expr: str) -> list[str]:
     depth = 0
     in_str = False
     str_char = ""
+    escaped = False
 
     for ch in expr:
-        if in_str:
+        if escaped:
+            # Previous char was backslash; consume this char literally
+            current += ch
+            escaped = False
+        elif ch == "\\" and in_str:
+            # Backslash inside a string — next char is escaped
+            current += ch
+            escaped = True
+        elif in_str:
             current += ch
             if ch == str_char:
                 in_str = False

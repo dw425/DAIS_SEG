@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { usePipelineStore } from '../../store/pipeline';
 import { useUIStore } from '../../store/ui';
 import { usePipeline } from '../../hooks/usePipeline';
+import { exportDAB } from '../../api/client';
 import CodePreview from '../shared/CodePreview';
 
 export default function Step4Convert() {
@@ -21,17 +22,17 @@ export default function Step4Convert() {
       nbformat_minor: 5,
       metadata: { kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' } },
       cells: notebook.cells.map((c) => ({
-        cell_type: c.cell_type,
+        cell_type: c.type,
         source: c.source.split('\n'),
         metadata: {},
-        ...(c.cell_type === 'code' ? { outputs: [], execution_count: null } : {}),
+        ...(c.type === 'code' ? { outputs: [], execution_count: null } : {}),
       })),
     }, null, 2);
     const blob = new Blob([content], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${notebook.notebookName || 'migration'}.ipynb`;
+    a.download = 'migration.ipynb';
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -39,16 +40,39 @@ export default function Step4Convert() {
   const downloadPython = () => {
     if (!notebook) return;
     const pyContent = notebook.cells
-      .filter((c) => c.cell_type === 'code')
+      .filter((c) => c.type === 'code')
       .map((c) => c.source)
       .join('\n\n# ──────────────────────────────────────\n\n');
     const blob = new Blob([pyContent], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${notebook.notebookName || 'migration'}.py`;
+    a.download = 'migration.py';
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const [dabExporting, setDabExporting] = useState(false);
+  const [dabError, setDabError] = useState('');
+
+  const downloadDAB = async () => {
+    if (!parsed || !assessment) return;
+    setDabExporting(true);
+    setDabError('');
+    try {
+      const blob = await exportDAB({ parsed, assessment });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'databricks_asset_bundle.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('DAB export failed:', err);
+      setDabError(err instanceof Error ? err.message : 'DAB export failed. Please try again.');
+    } finally {
+      setDabExporting(false);
+    }
   };
 
   return (
@@ -94,8 +118,8 @@ export default function Step4Convert() {
                 </svg>
               </div>
               <div>
-                <p className="text-sm font-medium text-gray-200">{notebook.notebookName || 'migration_notebook'}</p>
-                <p className="text-xs text-gray-500">{notebook.cells.length} cells -- {notebook.language || 'python'}</p>
+                <p className="text-sm font-medium text-gray-200">migration_notebook</p>
+                <p className="text-xs text-gray-500">{notebook.cells.length} cells -- python</p>
               </div>
             </div>
             <div className="flex gap-2">
@@ -105,8 +129,24 @@ export default function Step4Convert() {
               <button onClick={downloadPython} className="px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 text-xs hover:bg-gray-600 transition">
                 Download .py
               </button>
+              <button
+                onClick={downloadDAB}
+                disabled={dabExporting}
+                className="px-3 py-1.5 rounded-lg bg-orange-600/80 text-white text-xs hover:bg-orange-500 disabled:opacity-40 transition flex items-center gap-1.5"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                </svg>
+                {dabExporting ? 'Exporting...' : 'Export DAB'}
+              </button>
             </div>
           </div>
+
+          {dabError && (
+            <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-3 text-xs text-red-400">
+              {dabError}
+            </div>
+          )}
 
           {/* Cell navigator */}
           <div className="flex gap-1 overflow-x-auto pb-2">
@@ -117,7 +157,7 @@ export default function Step4Convert() {
                 className={`px-3 py-1.5 rounded text-xs shrink-0 transition
                   ${i === activeCell ? 'bg-primary/20 text-primary' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}
               >
-                {cell.cell_type === 'code' ? `Code ${i + 1}` : `MD ${i + 1}`}
+                {cell.type === 'code' ? `Code ${i + 1}` : `MD ${i + 1}`}
               </button>
             ))}
           </div>
@@ -126,8 +166,8 @@ export default function Step4Convert() {
           {notebook.cells[activeCell] && (
             <CodePreview
               code={notebook.cells[activeCell].source}
-              language={notebook.cells[activeCell].cell_type === 'code' ? notebook.language || 'python' : 'markdown'}
-              title={`Cell ${activeCell + 1} (${notebook.cells[activeCell].cell_type})`}
+              language={notebook.cells[activeCell].type === 'code' ? 'python' : 'markdown'}
+              title={`Cell ${activeCell + 1} (${notebook.cells[activeCell].type})`}
             />
           )}
         </div>

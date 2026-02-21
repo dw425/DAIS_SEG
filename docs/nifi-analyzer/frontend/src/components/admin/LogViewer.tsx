@@ -40,8 +40,9 @@ export default function LogViewer() {
       const result = await api.getAdminLogs();
       const entries = (result.logs || []).map(parseLogLine);
       setLogs(entries);
-    } catch {
-      setLogs([{ timestamp: new Date().toISOString(), level: 'error', message: 'Failed to fetch logs. Is the backend running?' }]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      setLogs([{ timestamp: new Date().toISOString(), level: 'error', message: `Failed to fetch logs: ${msg}. Is the backend running?` }]);
     } finally {
       setLoading(false);
     }

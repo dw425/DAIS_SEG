@@ -1,105 +1,336 @@
-# Dagster -> Databricks PySpark Mapping
-# Maps Dagster assets/ops/resources to Databricks equivalents
-
 mappings:
-  - type: "asset"
-    category: "Delta Table"
-    template: |
-      # Dagster @asset -> Delta table materialization
-      df_{name} = spark.sql("""
-          {computation_sql}
-      """)
-      (df_{name}.write
-          .format("delta")
-          .mode("overwrite")
-          .saveAsTable("{catalog}.{schema}.{asset_name}"))
-    description: "Dagster @asset as Delta table materialization"
-    imports: []
-    confidence: 0.90
-    role: "transform"
+- type: asset
+  category: Delta Table
+  template: "# Dagster @asset -> Delta table materialization\ndf_{name} = spark.sql(\"\"\"\n    {computation_sql}\n\"\"\"\
+    )\n(df_{name}.write\n    .format(\"delta\")\n    .mode(\"overwrite\")\n    .saveAsTable(\"{catalog}.{schema}.{asset_name}\"\
+    ))\n"
+  description: Dagster @asset as Delta table materialization
+  imports: []
+  confidence: 0.9
+  role: transform
+- type: op
+  category: Python Function
+  template: "def {op_name}({params}):\n    \"\"\"Ported from Dagster @op\"\"\"\n    {op_body}\n    return result\n\n_{op_name}_result\
+    \ = {op_name}({args})\n"
+  description: Dagster @op as Python function
+  imports: []
+  confidence: 0.92
+  role: process
+- type: job
+  category: Databricks Workflow
+  template: '# Dagster @job -> Databricks multi-task workflow
 
-  - type: "op"
-    category: "Python Function"
-    template: |
-      def {op_name}({params}):
-          """Ported from Dagster @op"""
-          {op_body}
-          return result
+    _results = []
 
-      _{op_name}_result = {op_name}({args})
-    description: "Dagster @op as Python function"
-    imports: []
-    confidence: 0.92
-    role: "process"
+    _results.append(dbutils.notebook.run("{op_1_notebook}", 3600))
 
-  - type: "job"
-    category: "Databricks Workflow"
-    template: |
-      # Dagster @job -> Databricks multi-task workflow
-      _results = []
-      _results.append(dbutils.notebook.run("{op_1_notebook}", 3600))
-      _results.append(dbutils.notebook.run("{op_2_notebook}", 3600))
-      print(f"[JOB] {job_name}: {_results}")
-    description: "Dagster @job as Databricks workflow"
-    imports: []
-    confidence: 0.88
-    role: "process"
+    _results.append(dbutils.notebook.run("{op_2_notebook}", 3600))
 
-  - type: "schedule"
-    category: "Databricks Job Schedule"
-    template: |
-      # Dagster @schedule -> Databricks Job cron schedule
-      # Configure via SDK:
-      from databricks.sdk import WorkspaceClient
-      w = WorkspaceClient()
-      # Update existing job with schedule
-      w.jobs.update(job_id={job_id}, new_settings={{
-          "schedule": {{
-              "quartz_cron_expression": "{cron_schedule}",
-              "timezone_id": "UTC"
-          }}
-      }})
-    description: "Dagster schedule as Databricks Job cron trigger"
-    imports: ["from databricks.sdk import WorkspaceClient"]
-    confidence: 0.88
-    role: "utility"
+    print(f"[JOB] {job_name}: {_results}")
 
-  - type: "sensor"
-    category: "Delta CDF / File Arrival"
-    template: |
-      # Dagster @sensor -> Auto Loader (file arrival) or Delta CDF
-      df_{name} = (spark.readStream
-          .format("cloudFiles")
-          .option("cloudFiles.format", "{format}")
-          .load("{watched_path}"))
-    description: "Dagster sensor replaced by Auto Loader or Delta CDF trigger"
-    imports: []
-    confidence: 0.85
-    role: "source"
+    '
+  description: Dagster @job as Databricks workflow
+  imports: []
+  confidence: 0.88
+  role: process
+- type: schedule
+  category: Databricks Job Schedule
+  template: "# Dagster @schedule -> Databricks Job cron schedule\n# Configure via SDK:\nfrom databricks.sdk import WorkspaceClient\n\
+    w = WorkspaceClient()\n# Update existing job with schedule\nw.jobs.update(job_id={job_id}, new_settings={{\n    \"schedule\"\
+    : {{\n        \"quartz_cron_expression\": \"{cron_schedule}\",\n        \"timezone_id\": \"UTC\"\n    }}\n}})\n"
+  description: Dagster schedule as Databricks Job cron trigger
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.88
+  role: utility
+- type: sensor
+  category: Delta CDF / File Arrival
+  template: "# Dagster @sensor -> Auto Loader (file arrival) or Delta CDF\ndf_{name} = (spark.readStream\n    .format(\"cloudFiles\"\
+    )\n    .option(\"cloudFiles.format\", \"{format}\")\n    .load(\"{watched_path}\"))\n"
+  description: Dagster sensor replaced by Auto Loader or Delta CDF trigger
+  imports: []
+  confidence: 0.85
+  role: source
+- type: resource (database)
+  category: JDBC Connection
+  template: "# Dagster resource -> Databricks Secret Scope + JDBC\ndf_{name} = (spark.read\n    .format(\"jdbc\")\n    .option(\"\
+    url\", dbutils.secrets.get(scope=\"{scope}\", key=\"jdbc-url\"))\n    .option(\"dbtable\", \"{table}\")\n    .load())\n"
+  description: Dagster DB resource replaced by Secret Scope + JDBC
+  imports: []
+  confidence: 0.9
+  role: source
+- type: io_manager
+  category: Delta Lake
+  template: '# Dagster IOManager -> Delta Lake read/write
 
-  - type: "resource (database)"
-    category: "JDBC Connection"
-    template: |
-      # Dagster resource -> Databricks Secret Scope + JDBC
-      df_{name} = (spark.read
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
-          .option("dbtable", "{table}")
-          .load())
-    description: "Dagster DB resource replaced by Secret Scope + JDBC"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    # Read:
 
-  - type: "io_manager"
-    category: "Delta Lake"
-    template: |
-      # Dagster IOManager -> Delta Lake read/write
-      # Read:
-      df_{name} = spark.table("{catalog}.{schema}.{table}")
-      # Write:
-      # df.write.format("delta").mode("overwrite").saveAsTable("{catalog}.{schema}.{table}")
-    description: "Dagster IOManager replaced by Delta Lake storage"
-    imports: []
-    confidence: 0.90
-    role: "utility"
+    df_{name} = spark.table("{catalog}.{schema}.{table}")
+
+    # Write:
+
+    # df.write.format("delta").mode("overwrite").saveAsTable("{catalog}.{schema}.{table}")
+
+    '
+  description: Dagster IOManager replaced by Delta Lake storage
+  imports: []
+  confidence: 0.9
+  role: utility
+- type: multi_asset
+  category: Multi-Table Write
+  template: "# Dagster @multi_asset -> multiple Delta table writes\n_results = {}\nfor _asset_name, _sql in {asset_queries}.items():\n\
+    \    df = spark.sql(_sql)\n    df.write.format('delta').mode('overwrite').saveAsTable(f'{catalog}.{schema}.{{_asset_name}}')\n\
+    \    _results[_asset_name] = df.count()\nprint(f'[MULTI_ASSET] Written: {_results}')\n"
+  description: Dagster @multi_asset as multiple Delta table materializations
+  imports: []
+  confidence: 0.88
+  role: transform
+- type: graph_asset
+  category: Pipeline
+  template: "# Dagster @graph_asset -> sequential notebook cells\ndef {name}_step1({params}):\n    {step1_body}\n    return\
+    \ _intermediate\n\ndef {name}_step2(_intermediate):\n    {step2_body}\n    return _result\n\n_final = {name}_step2({name}_step1({args}))\n"
+  description: Dagster @graph_asset as sequential Python function pipeline
+  imports: []
+  confidence: 0.85
+  role: transform
+- type: observable_source_asset
+  category: Source Monitoring
+  template: "# Dagster observable_source_asset -> freshness check\nfrom datetime import datetime, timedelta\n_latest = spark.sql(\"\
+    \"\"\n    SELECT max({timestamp_col}) FROM {catalog}.{schema}.{table}\n\"\"\").first()[0]\n_age = datetime.utcnow() -\
+    \ _latest\nprint(f'[SOURCE] {table} age: {{_age}}')\nassert _age < timedelta(hours={max_age_hours}), f'Source stale: {{_age}}'\n"
+  description: Dagster observable_source_asset as freshness check
+  imports:
+  - from datetime import datetime, timedelta
+  confidence: 0.85
+  role: source
+- type: graph
+  category: Pipeline
+  template: "# Dagster @graph -> sequential function composition\ndef {graph_name}({params}):\n    _step1 = {op_1}({args})\n\
+    \    _step2 = {op_2}(_step1)\n    return _step2\n\n_result = {graph_name}({input_args})\n"
+  description: Dagster @graph as composed Python functions
+  imports: []
+  confidence: 0.85
+  role: process
+- type: resource
+  category: Configuration
+  template: "# Dagster resource -> configuration dict\n_{resource_name}_config = {{\n    'host': dbutils.secrets.get(scope='{scope}',\
+    \ key='{resource_name}-host'),\n    'port': {port},\n    'database': '{database}',\n    'user': dbutils.secrets.get(scope='{scope}',\
+    \ key='{resource_name}-user'),\n    'password': dbutils.secrets.get(scope='{scope}', key='{resource_name}-pass'),\n}}\n"
+  description: Dagster resource as config dict with secrets
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: fs_io_manager
+  category: File Storage
+  template: "# Dagster fs_io_manager -> Volumes file I/O\nimport json\ndef _save_output(data, path):\n    with open(path,\
+    \ 'w') as f:\n        json.dump(data, f)\ndef _load_input(path):\n    with open(path) as f:\n        return json.load(f)\n\
+    \n_output_path = '/Volumes/{catalog}/{schema}/io/{asset_name}.json'\n"
+  description: Dagster fs_io_manager as Databricks Volumes file I/O
+  imports:
+  - import json
+  confidence: 0.85
+  role: utility
+- type: s3_io_manager
+  category: S3 Storage
+  template: '# Dagster s3_io_manager -> S3 via dbutils or spark
+
+    df_{name}.write.format(''{format}'').mode(''overwrite'').save(''s3a://{bucket}/{key}'')
+
+    # Read back:
+
+    df_{name} = spark.read.format(''{format}'').load(''s3a://{bucket}/{key}'')
+
+    '
+  description: Dagster s3_io_manager as Spark S3 read/write
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: gcs_io_manager
+  category: GCS Storage
+  template: '# Dagster gcs_io_manager -> GCS via Spark
+
+    df_{name}.write.format(''{format}'').mode(''overwrite'').save(''gs://{bucket}/{key}'')
+
+    df_{name} = spark.read.format(''{format}'').load(''gs://{bucket}/{key}'')
+
+    '
+  description: Dagster gcs_io_manager as Spark GCS read/write
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: bigquery_io_manager
+  category: BigQuery
+  template: "# Dagster bigquery_io_manager -> spark-bigquery connector\ndf_{name} = (spark.read\n    .format('bigquery')\n\
+    \    .option('table', '{project}.{dataset}.{table}')\n    .load())\n"
+  description: Dagster bigquery_io_manager as spark-bigquery read
+  imports: []
+  confidence: 0.85
+  role: source
+- type: snowflake_io_manager
+  category: JDBC Source
+  template: "# Dagster snowflake_io_manager -> JDBC read\ndf_{name} = (spark.read\n    .format('jdbc')\n    .option('url',\
+    \ 'jdbc:snowflake://{account}.snowflakecomputing.com')\n    .option('dbtable', '{table}')\n    .option('sfDatabase', '{database}')\n\
+    \    .option('sfSchema', '{schema}')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='sf-user'))\n    .option('password',\
+    \ dbutils.secrets.get(scope='{scope}', key='sf-pass'))\n    .load())\n"
+  description: Dagster snowflake_io_manager as JDBC Snowflake read
+  imports: []
+  confidence: 0.85
+  role: source
+- type: databricks_step_launcher
+  category: Job Submit
+  template: "# Dagster databricks_step_launcher -> Databricks job submit\nfrom databricks.sdk import WorkspaceClient\nw =\
+    \ WorkspaceClient()\n_run = w.jobs.submit(\n    run_name='{step_name}',\n    tasks=[{{\n        'task_key': '{step_name}',\n\
+    \        'notebook_task': {{'notebook_path': '{notebook_path}'}},\n        'new_cluster': {{'spark_version': '14.3.x-scala2.12',\
+    \ 'num_workers': {workers}}}\n    }}])\nprint(f'[STEP] Run ID: {{_run.run_id}}')\n"
+  description: Dagster databricks_step_launcher as SDK job submit
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.9
+  role: process
+- type: spark_resource
+  category: SparkSession
+  template: '# Dagster spark_resource -> already available in Databricks
+
+    # SparkSession ''spark'' is pre-initialized in Databricks notebooks
+
+    print(f''[SPARK] Version: {{spark.version}}'')
+
+    print(f''[SPARK] App: {{spark.sparkContext.appName}}'')
+
+    '
+  description: Dagster spark_resource is pre-initialized in Databricks
+  imports: []
+  confidence: 0.95
+  role: utility
+- type: dbt_resource
+  category: dbt Integration
+  template: "# Dagster dbt_resource -> dbt CLI or SQL execution\nimport subprocess\n_result = subprocess.run(\n    ['dbt',\
+    \ 'run', '--project-dir', '{project_dir}', '--target', 'databricks'],\n    capture_output=True, text=True)\nprint(_result.stdout)\n\
+    if _result.returncode != 0:\n    raise Exception(f'dbt failed: {_result.stderr}')\n"
+  description: Dagster dbt_resource as dbt CLI execution
+  imports:
+  - import subprocess
+  confidence: 0.82
+  role: process
+- type: freshness_policy
+  category: Data Quality
+  template: '# Dagster FreshnessPolicy -> freshness assertion
+
+    from datetime import datetime, timedelta
+
+    _latest = spark.sql("SELECT max({timestamp_col}) FROM {catalog}.{schema}.{table}").first()[0]
+
+    _max_lag = timedelta(minutes={maximum_lag_minutes})
+
+    assert datetime.utcnow() - _latest < _max_lag, f''Freshness violation: data older than {_max_lag}''
+
+    '
+  description: Dagster FreshnessPolicy as timestamp freshness assertion
+  imports:
+  - from datetime import datetime, timedelta
+  confidence: 0.85
+  role: test
+- type: auto_materialize_policy
+  category: Scheduled Refresh
+  template: "# Dagster AutoMaterializePolicy -> Databricks scheduled job\n# Configure eager/lazy materialization via job schedule\n\
+    from databricks.sdk import WorkspaceClient\nw = WorkspaceClient()\nw.jobs.update(job_id={job_id}, new_settings={{\n  \
+    \  'schedule': {{'quartz_cron_expression': '{cron}', 'timezone_id': 'UTC'}}\n}})\nprint('[POLICY] Auto-materialize configured\
+    \ as scheduled job')\n"
+  description: Dagster AutoMaterializePolicy as Databricks scheduled job
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.82
+  role: utility
+- type: partition_definition
+  category: Partitioned Table
+  template: "# Dagster PartitionDefinition -> Delta partitioned table\nspark.sql(\"\"\"\n    CREATE TABLE IF NOT EXISTS {catalog}.{schema}.{table}\
+    \ (\n        {columns}\n    )\n    USING delta\n    PARTITIONED BY ({partition_cols})\n\"\"\")\n"
+  description: Dagster PartitionDefinition as Delta partitioned table
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: dynamic_partition
+  category: Dynamic Partitioning
+  template: '# Dagster DynamicPartitionsDefinition -> dynamic partition write
+
+    df_{name} = spark.sql("""{select_sql}""")
+
+    df_{name}.write.format(''delta'').mode(''append'').partitionBy(''{partition_col}'').saveAsTable(''{catalog}.{schema}.{table}'')
+
+    print(f''[PARTITION] Written partition: {partition_value}'')
+
+    '
+  description: Dagster DynamicPartitionsDefinition as Delta partitioned write
+  imports: []
+  confidence: 0.85
+  role: sink
+- type: asset_check
+  category: Data Quality
+  template: '# Dagster @asset_check -> assertion
+
+    _check_result = spark.sql("""{check_sql}""").first()[0]
+
+    assert {assertion}, f''Asset check failed: {{_check_result}}''
+
+    print(f''[CHECK] {check_name} passed: {{_check_result}}'')
+
+    '
+  description: Dagster @asset_check as SQL-based assertion
+  imports: []
+  confidence: 0.88
+  role: test
+- type: run_config
+  category: Configuration
+  template: "# Dagster RunConfig -> widget parameters\n_{name}_config = {{\n    'param1': dbutils.widgets.get('{param1}'),\n\
+    \    'param2': dbutils.widgets.get('{param2}'),\n}}\nprint(f'[CONFIG] {{_{name}_config}}')\n"
+  description: Dagster RunConfig as Databricks widget parameters
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: materialize
+  category: Job Run
+  template: "# Dagster materialize() -> notebook run\n_results = []\nfor _notebook in {notebook_list}:\n    _results.append(dbutils.notebook.run(_notebook,\
+    \ 3600))\nprint(f'[MATERIALIZE] Results: {{_results}}')\n"
+  description: Dagster materialize as sequential notebook runs
+  imports: []
+  confidence: 0.85
+  role: process
+- type: define_asset_job
+  category: Databricks Workflow
+  template: "# Dagster define_asset_job -> multi-task Databricks job\nfrom databricks.sdk import WorkspaceClient\nw = WorkspaceClient()\n\
+    _job = w.jobs.create(\n    name='{job_name}',\n    tasks=[{{\n        'task_key': _name,\n        'notebook_task': {{'notebook_path':\
+    \ f'/Workspace/jobs/{{_name}}'}},\n        'depends_on': _deps\n    }} for _name, _deps in {task_graph}.items()])\nprint(f'[JOB]\
+    \ Created: {{_job.job_id}}')\n"
+  description: Dagster define_asset_job as multi-task Databricks workflow
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.85
+  role: process
+- type: repository
+  category: Workspace
+  template: '# Dagster @repository -> Databricks workspace folder
+
+    # All assets/jobs organized in workspace folder structure
+
+    print(''[REPO] Assets organized in /Workspace/{workspace_path}/'')
+
+    '
+  description: Dagster @repository as Databricks workspace folder organization
+  imports: []
+  confidence: 0.8
+  role: utility
+- type: config_schema
+  category: Configuration
+  template: '# Dagster config_schema -> typed widget parameters
+
+    dbutils.widgets.text(''{param_name}'', ''{default_value}'')
+
+    _{param_name} = dbutils.widgets.get(''{param_name}'')
+
+    print(f''[CONFIG] {param_name} = {{_{param_name}}}'')
+
+    '
+  description: Dagster config_schema as Databricks widgets
+  imports: []
+  confidence: 0.88
+  role: utility

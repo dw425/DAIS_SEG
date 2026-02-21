@@ -245,3 +245,183 @@ def test_format_detection_xml():
 def test_format_detection_unsupported():
     with pytest.raises(Exception):
         parse_flow(b"random binary data", "file.xyz")
+
+
+# ── NiFi JSON: connection ID-to-name resolution ──
+
+
+def test_nifi_json_connection_id_resolution():
+    """Verify connections referencing processor IDs are resolved to processor names."""
+    data = {
+        "flowContents": {
+            "name": "root",
+            "processors": [
+                {
+                    "identifier": "uuid-aaa",
+                    "name": "Fetch",
+                    "type": "org.apache.nifi.processors.standard.GetFile",
+                    "properties": {},
+                },
+                {
+                    "identifier": "uuid-bbb",
+                    "name": "Store",
+                    "type": "org.apache.nifi.processors.standard.PutFile",
+                    "properties": {},
+                },
+            ],
+            "connections": [
+                {
+                    "source": {"id": "uuid-aaa"},
+                    "destination": {"id": "uuid-bbb"},
+                    "selectedRelationships": ["success"],
+                }
+            ],
+        }
+    }
+    content = json.dumps(data).encode()
+    result = parse_flow(content, "id_resolve.json")
+    assert result.connections[0].source_name == "Fetch"
+    assert result.connections[0].destination_name == "Store"
+
+
+def test_nifi_json_backpressure_string_threshold():
+    """Verify string-typed backpressure thresholds are handled without error."""
+    data = {
+        "flowContents": {
+            "name": "root",
+            "processors": [
+                {
+                    "identifier": "p1",
+                    "name": "A",
+                    "type": "org.apache.nifi.processors.standard.GenerateFlowFile",
+                    "properties": {},
+                },
+                {
+                    "identifier": "p2",
+                    "name": "B",
+                    "type": "org.apache.nifi.processors.standard.LogAttribute",
+                    "properties": {},
+                },
+            ],
+            "connections": [
+                {
+                    "source": {"id": "p1", "name": "A"},
+                    "destination": {"id": "p2", "name": "B"},
+                    "selectedRelationships": ["success"],
+                    "backPressureObjectThreshold": "10000",
+                    "backPressureDataSizeThreshold": "1 GB",
+                }
+            ],
+        }
+    }
+    content = json.dumps(data).encode()
+    result = parse_flow(content, "bp.json")
+    assert result.connections[0].back_pressure_object_threshold == 10000
+    assert result.connections[0].back_pressure_data_size_threshold == "1 GB"
+
+
+# ── NEL tokenizer: escape handling ──
+
+
+def test_nel_tokenizer_escaped_quotes():
+    """Verify tokenizer handles backslash-escaped quotes inside strings."""
+    from app.engines.parsers.nel.tokenizer import tokenize_nel_chain
+
+    expr = r"field:replace('it\'s', 'its'):toUpper()"
+    parts = tokenize_nel_chain(expr)
+    assert parts[0] == "field"
+    assert "replace" in parts[1]
+    assert parts[2] == "toUpper()"
+
+
+# ── Cycle 2: JSON parser None property preservation ──
+
+
+def test_nifi_json_none_properties_preserved():
+    """None-valued properties in dict format should become '' not be dropped."""
+    data = {
+        "flowContents": {
+            "name": "root",
+            "processors": [
+                {
+                    "identifier": "p1",
+                    "name": "Proc",
+                    "type": "org.apache.nifi.processors.standard.UpdateAttribute",
+                    "properties": {"attr_a": "value", "attr_b": None, "attr_c": "other"},
+                    "scheduledState": "RUNNING",
+                },
+            ],
+            "connections": [],
+        }
+    }
+    content = json.dumps(data).encode()
+    result = parse_flow(content, "none_props.json")
+    props = result.processors[0].properties
+    # attr_b should be present as empty string, not missing
+    assert "attr_b" in props, "None-valued property was silently dropped"
+    assert props["attr_b"] == ""
+
+
+# ── Cycle 2: XML parser properties with missing <value> ──
+
+
+def test_nifi_xml_property_without_value_element():
+    """Properties with <key> but no <value> element should be parsed as empty."""
+    xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <template><snippet>
+      <processors>
+        <name>Test</name>
+        <type>org.apache.nifi.processors.standard.UpdateAttribute</type>
+        <id>p-1</id>
+        <config>
+          <properties>
+            <entry><key>has_value</key><value>yes</value></entry>
+            <entry><key>no_value</key></entry>
+          </properties>
+        </config>
+      </processors>
+    </snippet></template>
+    """
+    result = parse_flow(xml, "missing_value.xml")
+    props = result.processors[0].properties
+    assert props.get("has_value") == "yes"
+    assert "no_value" in props, "Property with missing <value> was dropped"
+    assert props["no_value"] == ""
+
+
+# ── Cycle 2: XML parser unique funnel naming ──
+
+
+def test_nifi_xml_funnels_get_unique_names():
+    """Multiple funnels in the same group should have unique names for DAG correctness."""
+    xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <template><snippet>
+      <processGroups>
+        <name>Group1</name>
+        <id>pg-1</id>
+        <contents>
+          <funnel><id>f1</id></funnel>
+          <funnel><id>f2</id></funnel>
+          <funnel><id>f3</id></funnel>
+        </contents>
+      </processGroups>
+    </snippet></template>
+    """
+    result = parse_flow(xml, "funnels.xml")
+    funnel_names = [p.name for p in result.processors if p.type == "Funnel"]
+    assert len(funnel_names) == 3
+    # All names must be unique
+    assert len(set(funnel_names)) == 3, f"Funnel names are not unique: {funnel_names}"
+
+
+# ── Cycle 2: NEL $$ escape for literal $ ──
+
+
+def test_nel_dollar_dollar_escape():
+    """NiFi $${...} should produce literal ${...}, not evaluate the expression."""
+    from app.engines.parsers.nel.parser import translate_nel_string
+
+    result = translate_nel_string("prefix$${not_an_expr}suffix", mode="python")
+    assert "${not_an_expr}" in result, f"$$ escape not handled: {result}"
+    # Should NOT contain col() or _attrs.get() for the escaped part
+    assert "not_an_expr" not in result.replace("${not_an_expr}", "")

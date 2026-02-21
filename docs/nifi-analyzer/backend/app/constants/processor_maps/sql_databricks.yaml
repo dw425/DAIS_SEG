@@ -1,140 +1,199 @@
-# Generic SQL / Stored Procedures -> Databricks PySpark/SQL Mapping
-# Maps common SQL patterns and SSIS/SSRS SQL constructs to Spark equivalents
-
 mappings:
-  - type: "SELECT"
-    category: "Spark SQL"
-    template: |
-      df_{name} = spark.sql("""
-          {select_statement}
-      """)
-    description: "SQL SELECT via spark.sql"
-    imports: []
-    confidence: 0.95
-    role: "source"
-
-  - type: "INSERT INTO"
-    category: "Delta Write"
-    template: |
-      spark.sql("""
-          INSERT INTO {catalog}.{schema}.{table}
-          {select_or_values}
-      """)
-    description: "SQL INSERT INTO via Spark SQL"
-    imports: []
-    confidence: 0.95
-    role: "sink"
-
-  - type: "UPDATE"
-    category: "Delta UPDATE"
-    template: |
-      spark.sql("""
-          UPDATE {catalog}.{schema}.{table}
-          SET {set_clause}
-          WHERE {where_clause}
-      """)
-    description: "SQL UPDATE directly supported on Delta tables"
-    imports: []
-    confidence: 0.95
-    role: "process"
-
-  - type: "DELETE"
-    category: "Delta DELETE"
-    template: |
-      spark.sql("""
-          DELETE FROM {catalog}.{schema}.{table}
-          WHERE {where_clause}
-      """)
-    description: "SQL DELETE directly supported on Delta tables"
-    imports: []
-    confidence: 0.95
-    role: "process"
-
-  - type: "MERGE"
-    category: "Delta MERGE"
-    template: |
-      spark.sql("""
-          MERGE INTO {catalog}.{schema}.{target_table} AS t
-          USING {catalog}.{schema}.{source_table} AS s
-          ON {merge_condition}
-          WHEN MATCHED THEN UPDATE SET *
-          WHEN NOT MATCHED THEN INSERT *
-      """)
-    description: "SQL MERGE directly supported on Delta tables"
-    imports: []
-    confidence: 0.95
-    role: "process"
-
-  - type: "CREATE TABLE AS SELECT"
-    category: "Delta CTAS"
-    template: |
-      spark.sql("""
-          CREATE OR REPLACE TABLE {catalog}.{schema}.{table} AS
-          {select_statement}
-      """)
-    description: "CTAS with Delta Lake"
-    imports: []
-    confidence: 0.95
-    role: "transform"
-
-  - type: "Stored Procedure"
-    category: "Python Function"
-    template: |
-      def {procedure_name}({params}):
-          """Ported from SQL stored procedure"""
-          # Port T-SQL/PL/SQL logic to Python + Spark SQL
-          df = spark.sql("""
-              {main_query}
-          """)
-          (df.write
-              .format("delta")
-              .mode("{write_mode}")
-              .saveAsTable("{catalog}.{schema}.{output_table}"))
-          return df.count()
-
-      _rows = {procedure_name}({args})
-      print(f"[SP] {procedure_name}: {_rows} rows affected")
-    description: "Stored procedure ported to Python function"
-    imports: []
-    confidence: 0.82
-    role: "process"
-
-  - type: "Cursor Loop"
-    category: "DataFrame Iteration"
-    template: |
-      # SQL cursor loop -> DataFrame collect + Python loop
-      # WARNING: Avoid for large datasets; prefer set-based operations
-      df_{name} = spark.sql("{select_statement}")
-      for _row in df_{name}.collect():
-          # Row-level processing
-          spark.sql(f"UPDATE {catalog}.{schema}.{table} SET {set_clause} WHERE id = {{_row.id}}")
-    description: "SQL cursor loop as DataFrame iteration (prefer set-based)"
-    imports: []
-    confidence: 0.75
-    role: "process"
-
-  - type: "Temp Table"
-    category: "Temp View"
-    template: |
-      spark.sql("""
-          CREATE OR REPLACE TEMP VIEW {temp_table} AS
-          {select_statement}
-      """)
-    description: "SQL temp table as Spark temp view"
-    imports: []
-    confidence: 0.95
-    role: "transform"
-
-  - type: "Window Function"
-    category: "Spark SQL"
-    template: |
-      df_{name} = spark.sql("""
-          SELECT *,
-              ROW_NUMBER() OVER (PARTITION BY {partition_by} ORDER BY {order_by}) AS rn,
-              SUM({measure}) OVER (PARTITION BY {partition_by}) AS running_total
-          FROM {catalog}.{schema}.{table}
-      """)
-    description: "SQL window functions natively supported in Spark SQL"
-    imports: []
-    confidence: 0.95
-    role: "transform"
+- type: SELECT
+  category: Spark SQL
+  template: "df_{name} = spark.sql(\"\"\"\n    {select_statement}\n\"\"\")\n"
+  description: SQL SELECT via spark.sql
+  imports: []
+  confidence: 0.95
+  role: source
+- type: INSERT INTO
+  category: Delta Write
+  template: "spark.sql(\"\"\"\n    INSERT INTO {catalog}.{schema}.{table}\n    {select_or_values}\n\"\"\")\n"
+  description: SQL INSERT INTO via Spark SQL
+  imports: []
+  confidence: 0.95
+  role: sink
+- type: UPDATE
+  category: Delta UPDATE
+  template: "spark.sql(\"\"\"\n    UPDATE {catalog}.{schema}.{table}\n    SET {set_clause}\n    WHERE {where_clause}\n\"\"\
+    \")\n"
+  description: SQL UPDATE directly supported on Delta tables
+  imports: []
+  confidence: 0.95
+  role: process
+- type: DELETE
+  category: Delta DELETE
+  template: "spark.sql(\"\"\"\n    DELETE FROM {catalog}.{schema}.{table}\n    WHERE {where_clause}\n\"\"\")\n"
+  description: SQL DELETE directly supported on Delta tables
+  imports: []
+  confidence: 0.95
+  role: process
+- type: MERGE
+  category: Delta MERGE
+  template: "spark.sql(\"\"\"\n    MERGE INTO {catalog}.{schema}.{target_table} AS t\n    USING {catalog}.{schema}.{source_table}\
+    \ AS s\n    ON {merge_condition}\n    WHEN MATCHED THEN UPDATE SET *\n    WHEN NOT MATCHED THEN INSERT *\n\"\"\")\n"
+  description: SQL MERGE directly supported on Delta tables
+  imports: []
+  confidence: 0.95
+  role: process
+- type: CREATE TABLE AS SELECT
+  category: Delta CTAS
+  template: "spark.sql(\"\"\"\n    CREATE OR REPLACE TABLE {catalog}.{schema}.{table} AS\n    {select_statement}\n\"\"\")\n"
+  description: CTAS with Delta Lake
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: Stored Procedure
+  category: Python Function
+  template: "def {procedure_name}({params}):\n    \"\"\"Ported from SQL stored procedure\"\"\"\n    # Port T-SQL/PL/SQL logic\
+    \ to Python + Spark SQL\n    df = spark.sql(\"\"\"\n        {main_query}\n    \"\"\")\n    (df.write\n        .format(\"\
+    delta\")\n        .mode(\"{write_mode}\")\n        .saveAsTable(\"{catalog}.{schema}.{output_table}\"))\n    return df.count()\n\
+    \n_rows = {procedure_name}({args})\nprint(f\"[SP] {procedure_name}: {_rows} rows affected\")\n"
+  description: Stored procedure ported to Python function
+  imports: []
+  confidence: 0.82
+  role: process
+- type: Cursor Loop
+  category: DataFrame Iteration
+  template: "# SQL cursor loop -> DataFrame collect + Python loop\n# WARNING: Avoid for large datasets; prefer set-based operations\n\
+    df_{name} = spark.sql(\"{select_statement}\")\nfor _row in df_{name}.collect():\n    # Row-level processing\n    spark.sql(f\"\
+    UPDATE {catalog}.{schema}.{table} SET {set_clause} WHERE id = {{_row.id}}\")\n"
+  description: SQL cursor loop as DataFrame iteration (prefer set-based)
+  imports: []
+  confidence: 0.75
+  role: process
+- type: Temp Table
+  category: Temp View
+  template: "spark.sql(\"\"\"\n    CREATE OR REPLACE TEMP VIEW {temp_table} AS\n    {select_statement}\n\"\"\")\n"
+  description: SQL temp table as Spark temp view
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: Window Function
+  category: Spark SQL
+  template: "df_{name} = spark.sql(\"\"\"\n    SELECT *,\n        ROW_NUMBER() OVER (PARTITION BY {partition_by} ORDER BY\
+    \ {order_by}) AS rn,\n        SUM({measure}) OVER (PARTITION BY {partition_by}) AS running_total\n    FROM {catalog}.{schema}.{table}\n\
+    \"\"\")\n"
+  description: SQL window functions natively supported in Spark SQL
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: CREATE_TABLE_AS_SELECT
+  category: CTAS
+  template: "spark.sql(\"\"\"\n    CREATE OR REPLACE TABLE {catalog}.{schema}.{table}\n    USING delta\n    AS {select_sql}\n\
+    \"\"\")\n"
+  description: CTAS as Delta table creation from SELECT
+  imports: []
+  confidence: 0.95
+  role: sink
+- type: INSERT_INTO_SELECT
+  category: Insert
+  template: "spark.sql(\"\"\"\n    INSERT INTO {catalog}.{schema}.{table}\n    {select_sql}\n\"\"\")\n"
+  description: INSERT INTO SELECT for appending data
+  imports: []
+  confidence: 0.95
+  role: sink
+- type: MERGE_STATEMENT
+  category: Delta MERGE
+  template: "spark.sql(\"\"\"\n    MERGE INTO {catalog}.{schema}.{target} t\n    USING {source} s\n    ON {join_condition}\n\
+    \    WHEN MATCHED THEN UPDATE SET {update_cols}\n    WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})\n\
+    \"\"\")\n"
+  description: MERGE statement for upsert operations
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: DELETE_STATEMENT
+  category: Delete
+  template: "spark.sql(\"\"\"\n    DELETE FROM {catalog}.{schema}.{table}\n    WHERE {condition}\n\"\"\")\n"
+  description: DELETE statement with WHERE condition
+  imports: []
+  confidence: 0.95
+  role: process
+- type: UPDATE_STATEMENT
+  category: Update
+  template: "spark.sql(\"\"\"\n    UPDATE {catalog}.{schema}.{table}\n    SET {set_clause}\n    WHERE {condition}\n\"\"\"\
+    )\n"
+  description: UPDATE statement with SET and WHERE
+  imports: []
+  confidence: 0.95
+  role: process
+- type: CREATE_VIEW
+  category: View
+  template: "spark.sql(\"\"\"\n    CREATE OR REPLACE VIEW {catalog}.{schema}.{view_name} AS\n    {select_sql}\n\"\"\")\n"
+  description: CREATE VIEW as Spark SQL view
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: CREATE_MATERIALIZED_VIEW
+  category: Materialized View
+  template: "spark.sql(\"\"\"\n    CREATE OR REPLACE MATERIALIZED VIEW {catalog}.{schema}.{view_name} AS\n    {select_sql}\n\
+    \"\"\")\n"
+  description: CREATE MATERIALIZED VIEW (Databricks SQL)
+  imports: []
+  confidence: 0.9
+  role: transform
+- type: CREATE_TEMP_TABLE
+  category: Temp View
+  template: "spark.sql(\"\"\"\n    CREATE OR REPLACE TEMPORARY VIEW {view_name} AS\n    {select_sql}\n\"\"\")\n"
+  description: Temp table as Spark temporary view
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: CTE_QUERY
+  category: Common Table Expression
+  template: "df_{name} = spark.sql(\"\"\"\n    WITH {cte_name} AS (\n        {cte_sql}\n    )\n    SELECT * FROM {cte_name}\n\
+    \    {main_query}\n\"\"\")\n"
+  description: CTE query using WITH clause
+  imports: []
+  confidence: 0.95
+  role: transform
+- type: PIVOT_QUERY
+  category: Pivot
+  template: "df_{name} = spark.sql(\"\"\"\n    SELECT * FROM (\n        SELECT {group_cols}, {pivot_col}, {value_col}\n  \
+    \      FROM {catalog}.{schema}.{table}\n    )\n    PIVOT (\n        {agg_func}({value_col})\n        FOR {pivot_col} IN\
+    \ ({pivot_values})\n    )\n\"\"\")\n"
+  description: PIVOT query using Spark SQL PIVOT syntax
+  imports: []
+  confidence: 0.92
+  role: transform
+- type: UNPIVOT_QUERY
+  category: Unpivot
+  template: "df_{name} = spark.sql(\"\"\"\n    SELECT {id_cols}, stack({n_cols}, {stack_expressions}) AS (attribute, value)\n\
+    \    FROM {catalog}.{schema}.{table}\n\"\"\")\n"
+  description: UNPIVOT query using Spark SQL stack
+  imports: []
+  confidence: 0.9
+  role: transform
+- type: STORED_PROCEDURE_CALL
+  category: Python Function
+  template: "# Stored Procedure -> Python function\ndef sp_{procedure_name}({params}):\n    \"\"\"Ported from stored procedure\"\
+    \"\"\n    {body}\n    return result\n\n_result = sp_{procedure_name}({args})\n"
+  description: Stored procedure ported to Python function
+  imports: []
+  confidence: 0.85
+  role: process
+- type: TRIGGER_DEFINITION
+  category: Delta CDF
+  template: "# SQL Trigger -> Delta Change Data Feed + streaming\nspark.sql(\"ALTER TABLE {catalog}.{schema}.{table} SET TBLPROPERTIES\
+    \ (delta.enableChangeDataFeed = true)\")\n# Process changes:\ndf_changes = (spark.readStream\n    .format('delta')\n \
+    \   .option('readChangeFeed', 'true')\n    .table('{catalog}.{schema}.{table}'))\n"
+  description: SQL Trigger replaced by Delta CDF streaming
+  imports: []
+  confidence: 0.82
+  role: process
+- type: INDEX_CREATION
+  category: Optimize
+  template: "# SQL Index -> Delta OPTIMIZE + ZORDER\nspark.sql(\"\"\"\n    OPTIMIZE {catalog}.{schema}.{table}\n    ZORDER\
+    \ BY ({columns})\n\"\"\")\n# Or use Liquid Clustering:\n# ALTER TABLE {table} CLUSTER BY ({columns})\n"
+  description: Index creation replaced by Delta OPTIMIZE ZORDER
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: DYNAMIC_SQL
+  category: Dynamic Query
+  template: "# Dynamic SQL -> Python f-string SQL\n_sql = f\"\"\"\n    SELECT {{_columns}} FROM {{_table}}\n    WHERE {{_condition}}\n\
+    \"\"\"\ndf_{name} = spark.sql(_sql)\n"
+  description: Dynamic SQL via Python f-string interpolation
+  imports: []
+  confidence: 0.9
+  role: process

@@ -3,9 +3,12 @@
 Ported from attribute-flow.js.
 """
 
+import logging
 import re
 
 from app.models.processor import Connection, Processor
+
+logger = logging.getLogger(__name__)
 
 _INTERNAL_PROPS = {
     "Destination",
@@ -40,6 +43,42 @@ _BUILTIN_FUNCS = {"now", "nextInt", "random", "UUID", "uuid", "hostname", "ip", 
 _EL_REF_RE = re.compile(r"\$\{([^}:]+)")
 
 
+def _extract_el_references(text: str) -> list[str]:
+    """Extract attribute references from NiFi Expression Language strings.
+
+    Handles nested ${...} by tracking brace depth rather than relying on
+    a simple regex that breaks on nested expressions like
+    ${literal(${other}):toUpper()}.
+    """
+    refs: list[str] = []
+    pos = 0
+    while pos < len(text):
+        idx = text.find("${", pos)
+        if idx < 0:
+            break
+        # Extract the base variable name (before first : or })
+        start = idx + 2
+        end = start
+        depth = 0
+        while end < len(text):
+            ch = text[end]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif ch == ":" and depth == 0:
+                break
+            end += 1
+        name = text[start:end].strip()
+        # Skip names that are function calls or nested expressions
+        if name and "(" not in name and "$" not in name and len(name) <= 80:
+            refs.append(name)
+        pos = end + 1
+    return refs
+
+
 def analyze_attribute_flow(
     processors: list[Processor],
     connections: list[Connection],
@@ -53,6 +92,7 @@ def analyze_attribute_flow(
             "attribute_lineage": {attr: [{"proc": name, "action": "create"|"read"|"modify"}]},
         }
     """
+    logger.info("Analyzing attribute flow: %d processors, %d connections", len(processors), len(connections))
     attribute_map: dict[str, dict] = {}
     processor_attrs: dict[str, dict] = {}
 
@@ -86,15 +126,12 @@ def analyze_attribute_flow(
                 if k not in proc_info["creates"]:
                     proc_info["creates"].append(k)
 
-        # Attributes read by this processor
+        # Attributes read by this processor — use depth-aware extraction
+        # to correctly handle nested ${...} expressions
         for v in p.properties.values():
             if not v or not isinstance(v, str) or "${" not in v:
                 continue
-            for ref_match in _EL_REF_RE.finditer(v):
-                raw = ref_match.group(1).strip()
-                attr_name = raw.split(":")[0].split(".")[0].strip()
-                if not attr_name or "(" in attr_name or len(attr_name) > 80:
-                    continue
+            for attr_name in _extract_el_references(v):
                 if attr_name.lower() in {f.lower() for f in _BUILTIN_FUNCS}:
                     continue
                 attr = ensure_attr(attr_name)
@@ -116,6 +153,7 @@ def analyze_attribute_flow(
         if lineage:
             attribute_lineage[attr_name] = lineage
 
+    logger.info("Attribute flow analysis complete: %d attributes tracked", len(attribute_map))
     return {
         "attribute_map": attribute_map,
         "processor_attributes": processor_attrs,

@@ -5,13 +5,17 @@ Parses NiFi Expression Language expressions into PySpark column ops or Python st
 
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 from app.engines.parsers.nel.functions import (
     apply_nel_function,
     resolve_nel_arg,
     resolve_variable_context,
 )
+from app.engines.parsers.nel.functions_extended import apply_nel_function_extended
 from app.engines.parsers.nel.tokenizer import tokenize_nel_chain
 
 
@@ -50,6 +54,14 @@ def parse_nel_expression(expr: str, mode: str = "col") -> str:
         result = f'lit("{lit_val}")' if mode == "col" else f'"{lit_val}"'
     elif m := re.match(r"^literal\((\d+)\)$", base, re.IGNORECASE):
         result = f"lit({m.group(1)})" if mode == "col" else m.group(1)
+    elif m := re.match(r"^literal\((\$\{.+\})\)$", base, re.IGNORECASE):
+        # Compound boolean: literal(${type:equals('X')}) with chained :or(${type:equals('Y')})
+        inner_expr = m.group(1)
+        # Parse the inner NEL expression (strip outer ${})
+        inner_content = inner_expr
+        if inner_content.startswith("${") and inner_content.endswith("}"):
+            inner_content = inner_content[2:-1]
+        result = parse_nel_expression(inner_content, mode)
     # Math namespace
     elif m := re.match(r"^math:abs\((.+)\)$", base, re.IGNORECASE):
         arg = resolve_nel_arg(m.group(1), mode)
@@ -76,7 +88,13 @@ def parse_nel_expression(expr: str, mode: str = "col") -> str:
 
     # Apply chained function calls
     for segment in chain:
-        result = apply_nel_function(result, segment.strip(), mode)
+        candidate = apply_nel_function(result, segment.strip(), mode)
+        # If base function returned a comment fallback, try extended functions
+        if "/* NEL:" in candidate:
+            extended = apply_nel_function_extended(result, segment.strip(), mode)
+            if "/* NEL:" not in extended:
+                candidate = extended
+        result = candidate
 
     return result
 
@@ -85,7 +103,8 @@ def translate_nel_string(text: str, mode: str = "col") -> str:
     """Translate all ${...} expressions in a string to PySpark/Python code.
 
     Non-expression text is preserved as string literals. Multiple expressions
-    are concatenated.
+    are concatenated.  NiFi uses $$ to represent a literal $ character, so
+    $${...} produces the literal string "${...}" instead of being evaluated.
     """
     parts: list[str] = []
     pos = 0
@@ -99,6 +118,33 @@ def translate_nel_string(text: str, mode: str = "col") -> str:
                 escaped = remaining.replace("\\", "\\\\").replace('"', '\\"')
                 parts.append(f'lit("{escaped}")' if mode == "col" else f'"{escaped}"')
             break
+
+        # Handle $$ escape: $${...} is a literal "${...}", not an expression
+        if idx > 0 and text[idx - 1] == "$":
+            # Everything before the $$ (excluding the extra $)
+            if idx - 1 > pos:
+                literal = text[pos:idx - 1]
+                escaped = literal.replace("\\", "\\\\").replace('"', '\\"')
+                parts.append(f'lit("{escaped}")' if mode == "col" else f'"{escaped}"')
+            # Find the matching } for the escaped block and emit as literal
+            depth = 0
+            end = idx + 2
+            while end < len(text):
+                if text[end] == "{":
+                    depth += 1
+                elif text[end] == "}":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                end += 1
+            if end < len(text):
+                literal_expr = text[idx:end + 1]  # "${...}" as literal text
+            else:
+                literal_expr = text[idx:]
+            escaped = literal_expr.replace("\\", "\\\\").replace('"', '\\"')
+            parts.append(f'lit("{escaped}")' if mode == "col" else f'"{escaped}"')
+            pos = end + 1 if end < len(text) else len(text)
+            continue
 
         # Literal text before ${
         if idx > pos:
@@ -120,6 +166,7 @@ def translate_nel_string(text: str, mode: str = "col") -> str:
 
         if end >= len(text):
             # Unmatched ${, treat rest as literal
+            logger.warning("Unmatched ${ at position %d in text: %s", idx, text[:80])
             remaining = text[idx:]
             escaped = remaining.replace("\\", "\\\\").replace('"', '\\"')
             parts.append(f'lit("{escaped}")' if mode == "col" else f'"{escaped}"')

@@ -3,9 +3,12 @@
 Ported from reporters/migration-report.js.
 """
 
+import logging
 from datetime import datetime, timezone
 
 from app.engines.reporters.final_report import build_final_report
+
+logger = logging.getLogger(__name__)
 from app.engines.reporters.value_analysis import compute_value_analysis
 from app.models.pipeline import (
     AnalysisResult,
@@ -24,6 +27,10 @@ def generate_report(
     validation: ValidationResult,
 ) -> dict:
     """Generate a comprehensive migration report."""
+    logger.info("Generating migration report for %s", parse_result.platform if parse_result else "unknown")
+    if not parse_result or not analysis or not assessment or not notebook or not validation:
+        return {"error": "Incomplete pipeline data — one or more required inputs is None"}
+
     final = build_final_report(parse_result, analysis, assessment, validation)
     value = compute_value_analysis(parse_result, assessment)
 

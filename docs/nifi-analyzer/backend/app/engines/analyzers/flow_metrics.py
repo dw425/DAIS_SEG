@@ -1,6 +1,10 @@
 """Compute flow metrics: total processors, connections, depth, fan-out, density."""
 
+import logging
+
 from app.models.pipeline import ParseResult
+
+logger = logging.getLogger(__name__)
 
 
 def compute_flow_metrics(parse_result: ParseResult, graph: dict) -> dict:
@@ -22,6 +26,7 @@ def compute_flow_metrics(parse_result: ParseResult, graph: dict) -> dict:
     max_possible = proc_count * (proc_count - 1) if proc_count > 1 else 1
     density = conn_count / max_possible
 
+    logger.info("Flow metrics: %d processors, %d connections, max_depth=%d, density=%.4f", proc_count, conn_count, max_depth, density)
     return {
         "processor_count": proc_count,
         "connection_count": conn_count,

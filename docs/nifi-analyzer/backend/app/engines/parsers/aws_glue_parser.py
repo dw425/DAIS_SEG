@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 def parse_glue(content: bytes, filename: str) -> ParseResult:
     """Parse an AWS Glue JSON job definition."""
-    data = json.loads(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {filename}: {exc}") from exc
     processors: list[Processor] = []
     connections: list[Connection] = []
     controller_services: list[ControllerService] = []

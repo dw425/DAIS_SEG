@@ -1,97 +1,356 @@
-# Prefect -> Databricks PySpark Mapping
-# Maps Prefect flow/task patterns to Databricks equivalents
-
 mappings:
-  - type: "flow"
-    category: "Databricks Workflow"
-    template: |
-      # Prefect Flow -> Databricks multi-task job
-      # Configure via Databricks Jobs API or SDK
-      from databricks.sdk import WorkspaceClient
-      w = WorkspaceClient()
-      _job = w.jobs.create(
-          name="{flow_name}",
-          tasks=[
-              {{"task_key": "step_1", "notebook_task": {{"notebook_path": "{notebook_1}"}}}},
-              {{"task_key": "step_2", "notebook_task": {{"notebook_path": "{notebook_2}"}},
-               "depends_on": [{{"task_key": "step_1"}}]}}
-          ])
-    description: "Prefect Flow as Databricks multi-task workflow"
-    imports: ["from databricks.sdk import WorkspaceClient"]
-    confidence: 0.88
-    role: "process"
+- type: flow
+  category: Databricks Workflow
+  template: "# Prefect Flow -> Databricks multi-task job\n# Configure via Databricks Jobs API or SDK\nfrom databricks.sdk\
+    \ import WorkspaceClient\nw = WorkspaceClient()\n_job = w.jobs.create(\n    name=\"{flow_name}\",\n    tasks=[\n     \
+    \   {{\"task_key\": \"step_1\", \"notebook_task\": {{\"notebook_path\": \"{notebook_1}\"}}}},\n        {{\"task_key\"\
+    : \"step_2\", \"notebook_task\": {{\"notebook_path\": \"{notebook_2}\"}},\n         \"depends_on\": [{{\"task_key\": \"\
+    step_1\"}}]}}\n    ])\n"
+  description: Prefect Flow as Databricks multi-task workflow
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.88
+  role: process
+- type: task
+  category: Python Function
+  template: "def {task_name}({params}):\n    \"\"\"Ported from Prefect @task\"\"\"\n    {task_body}\n    return result\n\n\
+    _{task_name}_result = {task_name}({args})\n"
+  description: Prefect @task as plain Python function
+  imports: []
+  confidence: 0.92
+  role: process
+- type: ShellTask
+  category: Shell Command
+  template: 'import subprocess
 
-  - type: "task"
-    category: "Python Function"
-    template: |
-      def {task_name}({params}):
-          """Ported from Prefect @task"""
-          {task_body}
-          return result
+    _result = subprocess.run(["{command}"], shell=True, capture_output=True, text=True, timeout=3600)
 
-      _{task_name}_result = {task_name}({args})
-    description: "Prefect @task as plain Python function"
-    imports: []
-    confidence: 0.92
-    role: "process"
+    print(_result.stdout[:1000])
 
-  - type: "ShellTask"
-    category: "Shell Command"
-    template: |
-      import subprocess
-      _result = subprocess.run(["{command}"], shell=True, capture_output=True, text=True, timeout=3600)
-      print(_result.stdout[:1000])
-    description: "Prefect ShellTask via subprocess"
-    imports: ["import subprocess"]
-    confidence: 0.90
-    role: "process"
+    '
+  description: Prefect ShellTask via subprocess
+  imports:
+  - import subprocess
+  confidence: 0.9
+  role: process
+- type: DbtTask
+  category: Spark SQL
+  template: "spark.sql(\"\"\"\n    CREATE OR REPLACE TABLE {catalog}.{schema}.{model} AS\n    {select_sql}\n\"\"\")\n"
+  description: Prefect DbtTask as Spark SQL model materialization
+  imports: []
+  confidence: 0.88
+  role: transform
+- type: GCSDownload
+  category: Cloud Storage
+  template: 'df_{name} = spark.read.format("{format}").load("gs://{bucket}/{blob}")
 
-  - type: "DbtTask"
-    category: "Spark SQL"
-    template: |
-      spark.sql("""
-          CREATE OR REPLACE TABLE {catalog}.{schema}.{model} AS
-          {select_sql}
-      """)
-    description: "Prefect DbtTask as Spark SQL model materialization"
-    imports: []
-    confidence: 0.88
-    role: "transform"
+    '
+  description: GCS download via Spark read
+  imports: []
+  confidence: 0.9
+  role: source
+- type: S3Download
+  category: Cloud Storage
+  template: 'df_{name} = spark.read.format("{format}").load("s3://{bucket}/{key}")
 
-  - type: "GCSDownload"
-    category: "Cloud Storage"
-    template: |
-      df_{name} = spark.read.format("{format}").load("gs://{bucket}/{blob}")
-    description: "GCS download via Spark read"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    '
+  description: S3 download via Spark read
+  imports: []
+  confidence: 0.9
+  role: source
+- type: SlackTask
+  category: Notification
+  template: 'import requests
 
-  - type: "S3Download"
-    category: "Cloud Storage"
-    template: |
-      df_{name} = spark.read.format("{format}").load("s3://{bucket}/{key}")
-    description: "S3 download via Spark read"
-    imports: []
-    confidence: 0.90
-    role: "source"
+    requests.post("{webhook_url}", json={"text": "{message}"})
 
-  - type: "SlackTask"
-    category: "Notification"
-    template: |
-      import requests
-      requests.post("{webhook_url}", json={"text": "{message}"})
-    description: "Slack notification via webhook"
-    imports: ["import requests"]
-    confidence: 0.90
-    role: "utility"
+    '
+  description: Slack notification via webhook
+  imports:
+  - import requests
+  confidence: 0.9
+  role: utility
+- type: EmailTask
+  category: Notification
+  template: '# Use Databricks workflow email notifications
 
-  - type: "EmailTask"
-    category: "Notification"
-    template: |
-      # Use Databricks workflow email notifications
-      dbutils.notebook.exit("NOTIFY: {subject}")
-    description: "Email via workflow notification settings"
-    imports: []
-    confidence: 0.85
-    role: "utility"
+    dbutils.notebook.exit("NOTIFY: {subject}")
+
+    '
+  description: Email via workflow notification settings
+  imports: []
+  confidence: 0.85
+  role: utility
+- type: subflow
+  category: Notebook Run
+  template: "# Prefect subflow -> nested notebook run\n_result = dbutils.notebook.run(\n    '{subflow_notebook}',\n    timeout_seconds=3600,\n\
+    \    arguments={params})\nprint(f'[SUBFLOW] Result: {_result}')\n"
+  description: Prefect subflow as nested Databricks notebook run
+  imports: []
+  confidence: 0.88
+  role: process
+- type: deployment
+  category: Databricks Job
+  template: "# Prefect deployment -> Databricks Job\nfrom databricks.sdk import WorkspaceClient\nw = WorkspaceClient()\n_job\
+    \ = w.jobs.create(\n    name='{deployment_name}',\n    tasks=[{{\n        'task_key': '{flow_name}',\n        'notebook_task':\
+    \ {{'notebook_path': '{notebook_path}'}}\n    }}],\n    schedule={{'quartz_cron_expression': '{cron}', 'timezone_id':\
+    \ 'UTC'}})\nprint(f'[DEPLOY] Job ID: {{_job.job_id}}')\n"
+  description: Prefect deployment as Databricks scheduled job
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.85
+  role: utility
+- type: work_pool
+  category: Cluster Config
+  template: '# Prefect work_pool -> Databricks cluster pool
+
+    # Cluster pools managed via Databricks UI/SDK
+
+    print(''[POOL] Use Databricks cluster pools for resource management'')
+
+    '
+  description: Prefect work_pool as Databricks cluster pool
+  imports: []
+  confidence: 0.78
+  role: utility
+- type: work_queue
+  category: Job Queue
+  template: '# Prefect work_queue -> Databricks job queue
+
+    # Databricks handles job queuing natively
+
+    print(''[QUEUE] Databricks manages job queuing automatically'')
+
+    '
+  description: Prefect work_queue handled by Databricks job scheduler
+  imports: []
+  confidence: 0.78
+  role: utility
+- type: block
+  category: Configuration
+  template: "# Prefect Block -> Databricks secret scope\n_{block_name} = {{\n    'key1': dbutils.secrets.get(scope='{scope}',\
+    \ key='{block_name}-key1'),\n    'key2': dbutils.secrets.get(scope='{scope}', key='{block_name}-key2'),\n}}\n"
+  description: Prefect Block as Databricks secret scope config
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: secret_block
+  category: Secret
+  template: '# Prefect Secret block -> dbutils.secrets
+
+    _{secret_name} = dbutils.secrets.get(scope=''{scope}'', key=''{secret_name}'')
+
+    '
+  description: Prefect Secret block as dbutils.secrets.get
+  imports: []
+  confidence: 0.95
+  role: utility
+- type: s3_block
+  category: S3 Config
+  template: '# Prefect S3 block -> S3 via Spark
+
+    _{name}_path = ''s3a://{bucket}/{prefix}''
+
+    df_{name} = spark.read.format(''{format}'').load(_{name}_path)
+
+    '
+  description: Prefect S3 block as Spark S3 read path
+  imports: []
+  confidence: 0.9
+  role: source
+- type: gcs_block
+  category: GCS Config
+  template: '# Prefect GCS block -> GCS via Spark
+
+    _{name}_path = ''gs://{bucket}/{prefix}''
+
+    df_{name} = spark.read.format(''{format}'').load(_{name}_path)
+
+    '
+  description: Prefect GCS block as Spark GCS read path
+  imports: []
+  confidence: 0.9
+  role: source
+- type: azure_block
+  category: Azure Config
+  template: '# Prefect Azure block -> ABFS via Spark
+
+    _{name}_path = ''abfss://{container}@{account}.dfs.core.windows.net/{prefix}''
+
+    df_{name} = spark.read.format(''{format}'').load(_{name}_path)
+
+    '
+  description: Prefect Azure block as Spark ABFS read path
+  imports: []
+  confidence: 0.9
+  role: source
+- type: slack_webhook_block
+  category: Notification
+  template: 'import requests
+
+    _webhook = dbutils.secrets.get(scope=''{scope}'', key=''slack-webhook'')
+
+    requests.post(_webhook, json={{''text'': ''{message}''}}, timeout=30)
+
+    print(''[SLACK] Notification sent'')
+
+    '
+  description: Prefect Slack webhook block as requests POST
+  imports:
+  - import requests
+  confidence: 0.9
+  role: utility
+- type: email_block
+  category: Notification
+  template: "import smtplib\nfrom email.mime.text import MIMEText\n_msg = MIMEText('{body}')\n_msg['Subject'] = '{subject}'\n\
+    _msg['To'] = '{to}'\n_smtp = smtplib.SMTP('{smtp_server}', {smtp_port})\n_smtp.starttls()\n_smtp.login(dbutils.secrets.get(scope='{scope}',\
+    \ key='email-user'),\n            dbutils.secrets.get(scope='{scope}', key='email-pass'))\n_smtp.send_message(_msg)\n\
+    _smtp.quit()\nprint('[EMAIL] Sent')\n"
+  description: Prefect Email block as smtplib email send
+  imports:
+  - import smtplib
+  - from email.mime.text import MIMEText
+  confidence: 0.85
+  role: utility
+- type: databricks_credentials
+  category: Authentication
+  template: '# Prefect DatabricksCredentials -> already authenticated in notebook
+
+    # Token/auth handled by Databricks runtime
+
+    from databricks.sdk import WorkspaceClient
+
+    w = WorkspaceClient()
+
+    print(f''[AUTH] Connected to: {{w.config.host}}'')
+
+    '
+  description: Prefect DatabricksCredentials already handled by runtime
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.95
+  role: utility
+- type: snowflake_connector
+  category: JDBC Source
+  template: "df_{name} = (spark.read\n    .format('jdbc')\n    .option('url', 'jdbc:snowflake://{account}.snowflakecomputing.com')\n\
+    \    .option('dbtable', '{table}')\n    .option('sfDatabase', '{database}')\n    .option('sfSchema', '{schema}')\n   \
+    \ .option('user', dbutils.secrets.get(scope='{scope}', key='sf-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}',\
+    \ key='sf-pass'))\n    .load())\n"
+  description: Prefect Snowflake connector as JDBC read
+  imports: []
+  confidence: 0.88
+  role: source
+- type: dbt_core_operation
+  category: dbt CLI
+  template: "import subprocess\n_result = subprocess.run(\n    ['dbt', '{dbt_command}', '--project-dir', '{project_dir}',\
+    \ '--target', 'databricks'],\n    capture_output=True, text=True, timeout=3600)\nprint(_result.stdout)\nif _result.returncode\
+    \ != 0:\n    raise Exception(f'dbt failed: {_result.stderr[:500]}')\n"
+  description: Prefect dbt core operation as subprocess CLI call
+  imports:
+  - import subprocess
+  confidence: 0.82
+  role: process
+- type: shell_operation
+  category: Shell Command
+  template: "import subprocess\n_result = subprocess.run(\n    {command},\n    shell=True, capture_output=True, text=True,\
+    \ timeout=3600)\nif _result.returncode != 0:\n    raise Exception(f'Shell failed: {_result.stderr[:500]}')\nprint(_result.stdout[:1000])\n"
+  description: Prefect ShellOperation as subprocess run
+  imports:
+  - import subprocess
+  confidence: 0.9
+  role: process
+- type: kubernetes_job
+  category: Job Run
+  template: "# Prefect KubernetesJob -> Databricks job submit\nfrom databricks.sdk import WorkspaceClient\nw = WorkspaceClient()\n\
+    _run = w.jobs.submit(\n    run_name='{name}',\n    tasks=[{{'task_key': '{name}', 'notebook_task': {{'notebook_path':\
+    \ '{notebook_path}'}}}}])\nprint(f'[K8S->DBX] Run: {{_run.run_id}}')\n"
+  description: Prefect KubernetesJob replaced by Databricks job submit
+  imports:
+  - from databricks.sdk import WorkspaceClient
+  confidence: 0.8
+  role: process
+- type: docker_container
+  category: Job Run
+  template: '# Prefect DockerContainer -> Databricks notebook run
+
+    _result = dbutils.notebook.run(''{notebook_path}'', timeout_seconds=3600, arguments={params})
+
+    print(f''[DOCKER->DBX] Result: {_result}'')
+
+    '
+  description: Prefect DockerContainer replaced by Databricks notebook
+  imports: []
+  confidence: 0.78
+  role: process
+- type: state_handler
+  category: Error Handling
+  template: "# Prefect state handler -> try/except with notification\ntry:\n    {task_body}\n    print('[STATE] Task completed\
+    \ successfully')\nexcept Exception as e:\n    print(f'[STATE] Task failed: {{e}}')\n    # Notify on failure\n    {on_failure_action}\n\
+    \    raise\n"
+  description: Prefect state handler as try/except with error notification
+  imports: []
+  confidence: 0.85
+  role: utility
+- type: retry_handler
+  category: Retry Logic
+  template: "import time\n_max_retries = {retries}\n_retry_delay = {retry_delay_seconds}\nfor _attempt in range(1, _max_retries\
+    \ + 1):\n    try:\n        {task_body}\n        break\n    except Exception as e:\n        if _attempt == _max_retries:\n\
+    \            raise\n        print(f'[RETRY] Attempt {{_attempt}} failed: {{e}}. Retrying in {{_retry_delay}}s...')\n \
+    \       time.sleep(_retry_delay)\n"
+  description: Prefect retry handler as Python retry loop
+  imports:
+  - import time
+  confidence: 0.9
+  role: utility
+- type: concurrency_limit
+  category: Resource Control
+  template: '# Prefect concurrency limit -> Spark fair scheduler pool
+
+    spark.sparkContext.setLocalProperty(''spark.scheduler.pool'', ''{pool_name}'')
+
+    # Or use Databricks job max concurrent runs
+
+    print(''[CONCURRENCY] Managed via Spark scheduler pools or job settings'')
+
+    '
+  description: Prefect concurrency limit via Spark scheduler pools
+  imports: []
+  confidence: 0.8
+  role: utility
+- type: caching
+  category: Delta Cache
+  template: '# Prefect task caching -> Delta table cache
+
+    spark.sql(''CACHE TABLE {catalog}.{schema}.{table}'')
+
+    df_{name} = spark.table(''{catalog}.{schema}.{table}'')
+
+    print(''[CACHE] Table cached'')
+
+    '
+  description: Prefect task caching as Delta table cache
+  imports: []
+  confidence: 0.85
+  role: utility
+- type: map_task
+  category: Parallel Processing
+  template: '# Prefect .map() -> Spark parallelism
+
+    from pyspark.sql.functions import col
+
+    df_{name} = df_{input}.withColumn(''{output_col}'', {map_expression})
+
+    # Or use Python ThreadPool for non-Spark tasks:
+
+    # from concurrent.futures import ThreadPoolExecutor
+
+    # with ThreadPoolExecutor(max_workers={concurrency}) as pool:
+
+    #     results = list(pool.map({func}, {items}))
+
+    '
+  description: Prefect .map() as Spark column transformation or ThreadPool
+  imports:
+  - from pyspark.sql.functions import col
+  confidence: 0.85
+  role: process

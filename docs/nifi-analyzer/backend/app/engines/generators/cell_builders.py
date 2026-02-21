@@ -5,9 +5,18 @@ from app.models.pipeline import AssessmentResult, ParseResult
 
 
 def build_imports_cell(assessment: AssessmentResult) -> str:
-    """Build the imports cell from assessment packages."""
+    """Build the imports cell from assessment packages.
+
+    Uses ``import pyspark.sql.functions as F`` so that both ``F.col()``
+    (processor_translators style) and bare ``col()`` (YAML template style)
+    work without conflict.  A selective wildcard import is kept for
+    convenience of YAML-generated code that references bare names.
+    """
     imports: set[str] = set()
-    imports.add("from pyspark.sql.functions import *")
+    # Qualified alias — required by processor_translators (F.col, F.when, …)
+    imports.add("from pyspark.sql import functions as F")
+    # Wildcard — keeps YAML-template code that uses bare col()/lit() working
+    imports.add("from pyspark.sql.functions import col, lit, when, coalesce, regexp_replace, from_json, sha2, current_timestamp")
     imports.add("from pyspark.sql.types import *")
 
     for pkg in assessment.packages:

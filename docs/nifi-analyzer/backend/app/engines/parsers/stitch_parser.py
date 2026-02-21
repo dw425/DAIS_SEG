@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 def parse_stitch(content: bytes, filename: str) -> ParseResult:
     """Parse a Stitch Data config JSON."""
-    data = json.loads(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {filename}: {exc}") from exc
     processors: list[Processor] = []
     connections: list[Connection] = []
     warnings: list[Warning] = []

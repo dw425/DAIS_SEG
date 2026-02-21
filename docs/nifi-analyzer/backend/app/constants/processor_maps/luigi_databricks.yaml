@@ -1,103 +1,259 @@
-# Luigi -> Databricks PySpark Mapping
-# Maps Luigi task patterns to Databricks equivalents
-
 mappings:
-  - type: "Task"
-    category: "Notebook Cell"
-    template: |
-      # Luigi Task -> Databricks notebook cell or function
-      def {task_name}():
-          """Ported from Luigi Task: {task_name}"""
-          {run_body}
-          return "complete"
+- type: Task
+  category: Notebook Cell
+  template: "# Luigi Task -> Databricks notebook cell or function\ndef {task_name}():\n    \"\"\"Ported from Luigi Task: {task_name}\"\
+    \"\"\n    {run_body}\n    return \"complete\"\n\n_{task_name}_result = {task_name}()\n"
+  description: Luigi Task as Python function in notebook
+  imports: []
+  confidence: 0.9
+  role: process
+- type: ExternalTask
+  category: Databricks Job Dependency
+  template: "# Luigi ExternalTask -> check upstream job/table existence\nassert spark.catalog.tableExists(\"{catalog}.{schema}.{table}\"\
+    ), \\\n    f\"Upstream table {table} not found\"\n"
+  description: Luigi ExternalTask as table existence check
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: LocalTarget
+  category: Volumes Path
+  template: "_output_path = \"/Volumes/{catalog}/{schema}/output/{filename}\"\n(df_{input}.write\n    .format(\"{format}\"\
+    )\n    .mode(\"overwrite\")\n    .save(_output_path))\n"
+  description: Luigi LocalTarget as Volumes file output
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: S3Target
+  category: Cloud Storage Write
+  template: "(df_{input}.write\n    .format(\"delta\")\n    .mode(\"overwrite\")\n    .save(\"s3://{bucket}/{key}\"))\n"
+  description: Luigi S3Target as Delta write to S3
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: HdfsTarget
+  category: Delta Write
+  template: "(df_{input}.write\n    .format(\"delta\")\n    .mode(\"overwrite\")\n    .saveAsTable(\"{catalog}.{schema}.{table}\"\
+    ))\n"
+  description: Luigi HdfsTarget as Delta Lake table
+  imports: []
+  confidence: 0.92
+  role: sink
+- type: WrapperTask
+  category: Databricks Workflow
+  template: "# Luigi WrapperTask -> multi-notebook orchestration\n_results = []\nfor _nb in [\"{notebook_1}\", \"{notebook_2}\"\
+    , \"{notebook_3}\"]:\n    _results.append(dbutils.notebook.run(_nb, 3600))\nprint(f\"[WRAPPER] All tasks completed: {_results}\"\
+    )\n"
+  description: Luigi WrapperTask as sequential notebook runs
+  imports: []
+  confidence: 0.88
+  role: process
+- type: SparkSubmitTask
+  category: Notebook Run
+  template: "_result = dbutils.notebook.run(\"{app_notebook}\", 3600,\n    arguments={{\"arg1\": \"{arg1}\"}})\n"
+  description: Luigi SparkSubmitTask as notebook run
+  imports: []
+  confidence: 0.9
+  role: process
+- type: CopyToTable
+  category: JDBC Write
+  template: "(df_{input}.write\n    .format(\"jdbc\")\n    .option(\"url\", dbutils.secrets.get(scope=\"{scope}\", key=\"\
+    jdbc-url\"))\n    .option(\"dbtable\", \"{table}\")\n    .mode(\"append\")\n    .save())\n"
+  description: Luigi CopyToTable as JDBC write
+  imports: []
+  confidence: 0.9
+  role: sink
+- type: RangeDaily
+  category: Date Range
+  template: "# Luigi RangeDaily -> date-parameterized notebook\nimport datetime\n_start = datetime.date({start_year}, {start_month},\
+    \ {start_day})\n_end = datetime.date.today()\n_current = _start\nwhile _current <= _end:\n    dbutils.notebook.run('{task_notebook}',\
+    \ 3600, {{'date': str(_current)}})\n    _current += datetime.timedelta(days=1)\n"
+  description: Luigi RangeDaily as date-iterated notebook runs
+  imports:
+  - import datetime
+  confidence: 0.85
+  role: process
+- type: RangeHourly
+  category: Hour Range
+  template: "import datetime\n_start = datetime.datetime({start_year}, {start_month}, {start_day}, {start_hour})\n_end = datetime.datetime.utcnow()\n\
+    _current = _start\nwhile _current <= _end:\n    dbutils.notebook.run('{task_notebook}', 3600, {{'datetime': str(_current)}})\n\
+    \    _current += datetime.timedelta(hours=1)\n"
+  description: Luigi RangeHourly as hour-iterated notebook runs
+  imports:
+  - import datetime
+  confidence: 0.85
+  role: process
+- type: GCSTarget
+  category: GCS Storage
+  template: '# Luigi GCSTarget -> GCS path via Spark
 
-      _{task_name}_result = {task_name}()
-    description: "Luigi Task as Python function in notebook"
-    imports: []
-    confidence: 0.90
-    role: "process"
+    _{name}_path = ''gs://{bucket}/{key}''
 
-  - type: "ExternalTask"
-    category: "Databricks Job Dependency"
-    template: |
-      # Luigi ExternalTask -> check upstream job/table existence
-      assert spark.catalog.tableExists("{catalog}.{schema}.{table}"), \
-          f"Upstream table {table} not found"
-    description: "Luigi ExternalTask as table existence check"
-    imports: []
-    confidence: 0.88
-    role: "utility"
+    df_{name}.write.format(''{format}'').mode(''overwrite'').save(_{name}_path)
 
-  - type: "LocalTarget"
-    category: "Volumes Path"
-    template: |
-      _output_path = "/Volumes/{catalog}/{schema}/output/{filename}"
-      (df_{input}.write
-          .format("{format}")
-          .mode("overwrite")
-          .save(_output_path))
-    description: "Luigi LocalTarget as Volumes file output"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    '
+  description: Luigi GCSTarget as Spark GCS write
+  imports: []
+  confidence: 0.88
+  role: sink
+- type: HDFSTarget
+  category: DBFS Storage
+  template: '# Luigi HDFSTarget -> DBFS or Volumes
 
-  - type: "S3Target"
-    category: "Cloud Storage Write"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("overwrite")
-          .save("s3://{bucket}/{key}"))
-    description: "Luigi S3Target as Delta write to S3"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    _{name}_path = ''/Volumes/{catalog}/{schema}/data/{filename}''
 
-  - type: "HdfsTarget"
-    category: "Delta Write"
-    template: |
-      (df_{input}.write
-          .format("delta")
-          .mode("overwrite")
-          .saveAsTable("{catalog}.{schema}.{table}"))
-    description: "Luigi HdfsTarget as Delta Lake table"
-    imports: []
-    confidence: 0.92
-    role: "sink"
+    df_{name}.write.format(''{format}'').mode(''overwrite'').save(_{name}_path)
 
-  - type: "WrapperTask"
-    category: "Databricks Workflow"
-    template: |
-      # Luigi WrapperTask -> multi-notebook orchestration
-      _results = []
-      for _nb in ["{notebook_1}", "{notebook_2}", "{notebook_3}"]:
-          _results.append(dbutils.notebook.run(_nb, 3600))
-      print(f"[WRAPPER] All tasks completed: {_results}")
-    description: "Luigi WrapperTask as sequential notebook runs"
-    imports: []
-    confidence: 0.88
-    role: "process"
+    '
+  description: Luigi HDFSTarget as Volumes file write
+  imports: []
+  confidence: 0.88
+  role: sink
+- type: MysqlTarget
+  category: JDBC Sink
+  template: "(df_{input}.write\n    .format('jdbc')\n    .option('url', 'jdbc:mysql://{host}:{port}/{database}')\n    .option('dbtable',\
+    \ '{table}')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='mysql-user'))\n    .option('password', dbutils.secrets.get(scope='{scope}',\
+    \ key='mysql-pass'))\n    .mode('append')\n    .save())\n"
+  description: Luigi MysqlTarget as JDBC write
+  imports: []
+  confidence: 0.88
+  role: sink
+- type: PostgresTarget
+  category: JDBC Sink
+  template: "(df_{input}.write\n    .format('jdbc')\n    .option('url', 'jdbc:postgresql://{host}:{port}/{database}')\n  \
+    \  .option('dbtable', '{table}')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='pg-user'))\n    .option('password',\
+    \ dbutils.secrets.get(scope='{scope}', key='pg-pass'))\n    .mode('append')\n    .save())\n"
+  description: Luigi PostgresTarget as JDBC write
+  imports: []
+  confidence: 0.88
+  role: sink
+- type: BigQueryTarget
+  category: BigQuery Sink
+  template: "(df_{input}.write\n    .format('bigquery')\n    .option('table', '{project}.{dataset}.{table}')\n    .option('temporaryGcsBucket',\
+    \ '{temp_bucket}')\n    .mode('overwrite')\n    .save())\n"
+  description: Luigi BigQueryTarget as spark-bigquery write
+  imports: []
+  confidence: 0.85
+  role: sink
+- type: RedshiftTarget
+  category: JDBC Sink
+  template: "(df_{input}.write\n    .format('jdbc')\n    .option('url', 'jdbc:redshift://{host}:{port}/{database}')\n    .option('dbtable',\
+    \ '{table}')\n    .option('user', dbutils.secrets.get(scope='{scope}', key='redshift-user'))\n    .option('password',\
+    \ dbutils.secrets.get(scope='{scope}', key='redshift-pass'))\n    .mode('append')\n    .save())\n"
+  description: Luigi RedshiftTarget as JDBC write
+  imports: []
+  confidence: 0.85
+  role: sink
+- type: PySparkTask
+  category: Notebook Run
+  template: '# Luigi PySparkTask -> Databricks notebook
 
-  - type: "SparkSubmitTask"
-    category: "Notebook Run"
-    template: |
-      _result = dbutils.notebook.run("{app_notebook}", 3600,
-          arguments={{"arg1": "{arg1}"}})
-    description: "Luigi SparkSubmitTask as notebook run"
-    imports: []
-    confidence: 0.90
-    role: "process"
+    # Spark session already available, just run the logic:
 
-  - type: "CopyToTable"
-    category: "JDBC Write"
-    template: |
-      (df_{input}.write
-          .format("jdbc")
-          .option("url", dbutils.secrets.get(scope="{scope}", key="jdbc-url"))
-          .option("dbtable", "{table}")
-          .mode("append")
-          .save())
-    description: "Luigi CopyToTable as JDBC write"
-    imports: []
-    confidence: 0.90
-    role: "sink"
+    {pyspark_body}
+
+    '
+  description: Luigi PySparkTask runs directly in Databricks notebook
+  imports: []
+  confidence: 0.92
+  role: process
+- type: HadoopJobTask
+  category: Notebook Run
+  template: '# Luigi HadoopJobTask -> PySpark job
+
+    # MapReduce logic ported to DataFrame API:
+
+    df_{name} = df_{input}.groupBy({group_cols}).agg({agg_expressions})
+
+    '
+  description: Luigi HadoopJobTask ported to PySpark DataFrame API
+  imports: []
+  confidence: 0.85
+  role: process
+- type: build
+  category: Job Orchestration
+  template: "# Luigi build() -> sequential notebook execution\n_tasks = {task_list}\nfor _task in _tasks:\n    _result = dbutils.notebook.run(_task['notebook'],\
+    \ _task.get('timeout', 3600), _task.get('params', {{}}))\n    print(f'[BUILD] {{_task[\"notebook\"]}}: {{_result}}')\n\
+    print('[BUILD] All tasks complete')\n"
+  description: Luigi build() as sequential notebook orchestration
+  imports: []
+  confidence: 0.88
+  role: process
+- type: EventCallback
+  category: Notification
+  template: "# Luigi EventCallback -> try/except with notification\ntry:\n    {task_body}\n    print('[EVENT] Task SUCCESS')\n\
+    except Exception as e:\n    print(f'[EVENT] Task FAILURE: {{e}}')\n    {on_failure}\n    raise\n"
+  description: Luigi EventCallback as try/except handler
+  imports: []
+  confidence: 0.85
+  role: utility
+- type: Parameter
+  category: Widget
+  template: '# Luigi Parameter -> Databricks widget
+
+    dbutils.widgets.text(''{param_name}'', ''{default}'')
+
+    _{param_name} = dbutils.widgets.get(''{param_name}'')
+
+    '
+  description: Luigi Parameter as Databricks widget
+  imports: []
+  confidence: 0.92
+  role: utility
+- type: DateParameter
+  category: Date Widget
+  template: 'import datetime
+
+    dbutils.widgets.text(''{param_name}'', str(datetime.date.today()))
+
+    _{param_name} = datetime.date.fromisoformat(dbutils.widgets.get(''{param_name}''))
+
+    '
+  description: Luigi DateParameter as date widget
+  imports:
+  - import datetime
+  confidence: 0.9
+  role: utility
+- type: DictParameter
+  category: JSON Widget
+  template: 'import json
+
+    dbutils.widgets.text(''{param_name}'', ''{default_json}'')
+
+    _{param_name} = json.loads(dbutils.widgets.get(''{param_name}''))
+
+    '
+  description: Luigi DictParameter as JSON widget
+  imports:
+  - import json
+  confidence: 0.88
+  role: utility
+- type: requires
+  category: Dependency
+  template: '# Luigi requires() -> notebook dependency
+
+    # Run prerequisite notebook first
+
+    _prereq_result = dbutils.notebook.run(''{required_notebook}'', 3600)
+
+    print(f''[REQUIRES] Prerequisite complete: {{_prereq_result}}'')
+
+    '
+  description: Luigi requires() as prerequisite notebook run
+  imports: []
+  confidence: 0.88
+  role: utility
+- type: output
+  category: Output Path
+  template: '# Luigi output() -> Delta table or Volumes path
+
+    _{name}_output = ''{catalog}.{schema}.{table}''
+
+    df_{name}.write.format(''delta'').mode(''overwrite'').saveAsTable(_{name}_output)
+
+    print(f''[OUTPUT] Written to {{_{name}_output}}'')
+
+    '
+  description: Luigi output() as Delta table write target
+  imports: []
+  confidence: 0.9
+  role: sink

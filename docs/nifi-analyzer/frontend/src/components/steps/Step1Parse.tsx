@@ -16,13 +16,13 @@ export default function Step1Parse() {
   const fileSize = usePipelineStore((s) => s.fileSize);
   const platform = usePipelineStore((s) => s.platform);
   const status = useUIStore((s) => s.stepStatuses[0]);
-  const { runParse } = usePipeline();
+  const { runAll } = usePipeline();
 
   const handleFile = useCallback(
     (file: File) => {
-      runParse(file);
+      runAll(file);
     },
-    [runParse],
+    [runAll],
   );
 
   return (
@@ -56,7 +56,7 @@ export default function Step1Parse() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <InfoCard label="File" value={fileName || 'Unknown'} />
             <InfoCard label="Size" value={formatSize(fileSize)} />
-            <InfoCard label="Format" value={parsed.format || 'Auto'} badge />
+            <InfoCard label="Version" value={parsed.version || 'Auto'} badge />
             <InfoCard label="Platform" value={platform || parsed.platform || 'Unknown'} badge />
           </div>
 
@@ -68,16 +68,16 @@ export default function Step1Parse() {
           </div>
 
           {/* Warnings */}
-          {parsed.parse_warnings && parsed.parse_warnings.length > 0 && (
+          {parsed.warnings && parsed.warnings.length > 0 && (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
               <h4 className="text-sm font-medium text-amber-400 mb-2">
-                Parse Warnings ({parsed.parse_warnings.length})
+                Parse Warnings ({parsed.warnings.length})
               </h4>
               <ul className="space-y-1">
-                {parsed.parse_warnings.map((w: string, i: number) => (
+                {parsed.warnings.map((w, i: number) => (
                   <li key={i} className="text-xs text-amber-300/70 flex items-start gap-2">
                     <span className="text-amber-500 mt-0.5">&#x26A0;</span>
-                    {w}
+                    {w.message}
                   </li>
                 ))}
               </ul>

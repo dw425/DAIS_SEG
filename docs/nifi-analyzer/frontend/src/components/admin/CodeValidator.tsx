@@ -6,6 +6,10 @@ interface ValidationResult {
   warnings: string[];
 }
 
+// Client-side validation for immediate feedback only. The backend performs
+// proper AST-based validation via code_validator.py which catches actual
+// syntax errors, undefined references, and type issues. This function only
+// checks bracket matching and common style issues.
 function validatePythonSyntax(code: string): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -14,8 +18,6 @@ function validatePythonSyntax(code: string): ValidationResult {
     errors.push('Code is empty');
     return { valid: false, errors, warnings };
   }
-
-  // Basic checks (real validation would happen server-side)
   const lines = code.split('\n');
   let openParens = 0;
   let openBrackets = 0;
