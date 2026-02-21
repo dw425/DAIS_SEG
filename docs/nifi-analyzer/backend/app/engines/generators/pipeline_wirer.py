@@ -133,7 +133,7 @@ def build_wiring_plan(
             continue
 
         # Determine upstream DataFrames
-        upstream_info = _resolve_upstream_df(proc_name, reverse_adj, df_registry, conn_index)
+        upstream_info = _resolve_upstream_df(proc_name, reverse_adj, df_registry, conn_index, adjacency)
         upstream_df_names = [info["df_name"] for info in upstream_info]
         primary_relationship = upstream_info[0]["relationship"] if upstream_info else "none"
         output_df_name = df_registry.get(proc_name, f"df_{_safe_var(proc_name)}")
@@ -326,8 +326,12 @@ def _resolve_upstream_df(
     reverse_adj: dict[str, list[str]],
     df_registry: dict[str, str],
     conn_index: dict[tuple[str, str], list[Connection]],
+    adjacency: dict[str, list[str]] | None = None,
 ) -> list[dict]:
     """Determine which upstream DataFrame(s) feed *processor* and via which relationship.
+
+    When the upstream is a fan-out point (multiple downstream) and the relationship
+    is not 'success', uses the branch-specific df name (e.g. df_X_matched).
 
     Returns a list of dicts:
         [{"upstream_proc": name, "df_name": var, "relationship": rel}, ...]
@@ -342,6 +346,17 @@ def _resolve_upstream_df(
         conns = conn_index.get((up, processor), [])
         # Pick the first relationship (usually "success")
         rel = conns[0].relationship if conns else "success"
+
+        # For fan-out points with non-success relationships, use branch df name
+        is_fan_out = adjacency and len(adjacency.get(up, [])) > 1
+        if is_fan_out and rel != "success":
+            if rel in ("matched", "valid"):
+                df_name = f"{df_name}_{rel}"
+            elif rel in ("unmatched", "invalid"):
+                df_name = f"{df_name}_{rel}"
+            elif rel == "failure":
+                df_name = f"{df_name}_errors"
+
         results.append({
             "upstream_proc": up,
             "df_name": df_name,
@@ -386,15 +401,13 @@ def _wire_relationship(
     if rel == "matched":
         return (
             f"# -- matched branch: rows that satisfy the upstream condition --\n"
-            f"# NOTE: The actual filter condition depends on the upstream processor.\n"
-            f"# Wire the specific condition from the RouteOnAttribute/ValidateRecord.\n"
-            f"# {upstream_df}_matched = {upstream_df}.filter(<condition>)"
+            f"# The filter condition is applied in the upstream fan-out cell."
         )
 
     if rel == "unmatched":
         return (
             f"# -- unmatched branch: rows that did NOT satisfy the upstream condition --\n"
-            f"# {upstream_df}_unmatched = {upstream_df}.filter(~<condition>)"
+            f"# The negated filter is applied in the upstream fan-out cell."
         )
 
     if rel == "original":
@@ -507,18 +520,20 @@ def _handle_fan_out(
     for dst in sorted(dests):
         conns = conn_index.get((processor, dst), [])
         rel = conns[0].relationship if conns else "success"
-        branch_df = df_registry.get(dst, f"df_{_safe_var(dst)}")
 
         if rel == "success":
             lines.append(f"# {dst} receives full success output")
-        elif rel == "failure":
-            lines.append(f"# {dst} receives failure/error rows")
         elif rel in ("matched", "valid"):
-            lines.append(f"# {dst} receives {rel} rows (filter condition from upstream)")
+            branch_df = f"{output_df}_{rel}"
+            lines.append(f"{branch_df} = {output_df}  # {rel} rows for {dst}")
         elif rel in ("unmatched", "invalid"):
-            lines.append(f"# {dst} receives {rel} rows (negated filter condition)")
+            branch_df = f"{output_df}_{rel}"
+            lines.append(f"{branch_df} = {output_df}  # {rel} rows for {dst}")
+        elif rel == "failure":
+            lines.append(f"{output_df}_errors = {output_df}  # error rows for {dst}")
         else:
-            lines.append(f"# {dst} receives '{rel}' branch")
+            branch_df = f"{output_df}_{_safe_var(rel)}"
+            lines.append(f"{branch_df} = {output_df}  # '{rel}' branch for {dst}")
 
     return "\n".join(lines)
 
@@ -618,6 +633,9 @@ def _inject_code_with_upstream(
         code = re.sub(r'\bdf\b(?=\s*\.\s*(write|writeStream))', upstream_df_name, code)
         # Also replace any remaining bare df references
         code = re.sub(r'\bdf\b(?!\w)', upstream_df_name, code)
+        # Define output df as alias of upstream so downstream cells can reference it
+        if output_df_name != upstream_df_name:
+            code = f"{output_df_name} = {upstream_df_name}\n{code}"
         return code
 
     # Transform / route / utility processors
@@ -646,6 +664,15 @@ def _inject_code_with_upstream(
         count=1,
         flags=re.MULTILINE,
     )
+
+    # Step C: If the output df is still not defined (no assignment found),
+    # prepend an alias so downstream cells can reference this processor's df.
+    # This handles cases where the mapper generates code using the processor's
+    # own df name (e.g. df_log_success) without a leading assignment.
+    if upstream_df_name and not re.search(
+        rf'^{re.escape(output_df_name)}\s*=', code, re.MULTILINE,
+    ):
+        code = f"{output_df_name} = {upstream_df_name}\n{code}"
 
     return code
 

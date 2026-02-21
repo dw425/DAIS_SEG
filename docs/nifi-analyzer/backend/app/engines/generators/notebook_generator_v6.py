@@ -371,9 +371,14 @@ def _build_sink_cells(
 
     # Track which processors already have wired sink code from the wiring plan
     wired_sinks: set[str] = set()
+    # Build upstream lookup from wired cells (processor_name -> upstream df names)
+    upstream_lookup: dict[str, list[str]] = {}
     for wired_cell in wiring_plan.cells:
-        if wired_cell.role == "sink" and wired_cell.cell_type == "code":
-            wired_sinks.add(wired_cell.processor_name)
+        if wired_cell.cell_type == "code":
+            if wired_cell.role == "sink":
+                wired_sinks.add(wired_cell.processor_name)
+            if wired_cell.upstream_df_names:
+                upstream_lookup[wired_cell.processor_name] = wired_cell.upstream_df_names
 
     # Build processor property lookup
     proc_props: dict[str, dict] = {}
@@ -387,8 +392,13 @@ def _build_sink_cells(
         proc_name = mapping.name
         safe_name = _safe_var(proc_name)
 
-        # Determine the upstream DataFrame from the wiring plan
-        upstream_df = wiring_plan.df_registry.get(proc_name, f"df_{safe_name}")
+        # Determine the upstream DataFrame: prefer the wiring plan's resolved
+        # upstream over the sink's own df_registry entry
+        upstreams = upstream_lookup.get(proc_name, [])
+        if upstreams:
+            upstream_df = upstreams[0]
+        else:
+            upstream_df = wiring_plan.df_registry.get(proc_name, f"df_{safe_name}")
 
         # If the wirer already produced code for this sink, check if we need
         # a dedicated write cell (the wirer may have produced the transform

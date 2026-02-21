@@ -268,6 +268,36 @@ def _check_imports_resolve(all_code: str) -> CheckResult:
 # Check 3: data_flows_end_to_end  (critical)
 # ---------------------------------------------------------------------------
 
+def _strip_comments(source: str) -> str:
+    """Remove comment lines and inline comments from Python source.
+
+    Preserves string literals by only stripping ``#`` outside of quotes.
+    For simplicity, strips full-line comments and trailing ``# ...`` segments.
+    """
+    lines: list[str] = []
+    for line in source.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue  # skip full-line comments
+        # Strip trailing inline comments (simple heuristic: outside of strings)
+        in_str: str | None = None
+        clean = []
+        for ch in line:
+            if in_str:
+                clean.append(ch)
+                if ch == in_str:
+                    in_str = None
+            elif ch in ('"', "'"):
+                clean.append(ch)
+                in_str = ch
+            elif ch == "#":
+                break  # rest is comment
+            else:
+                clean.append(ch)
+        lines.append("".join(clean))
+    return "\n".join(lines)
+
+
 def _check_data_flows_end_to_end(code_cells: list[dict]) -> CheckResult:
     """Every df_X variable referenced in a cell must be defined in a prior cell."""
     df_assign_re = re.compile(r'^(df_\w+)\s*=', re.MULTILINE)
@@ -277,7 +307,7 @@ def _check_data_flows_end_to_end(code_cells: list[dict]) -> CheckResult:
     undefined_refs: list[str] = []
 
     for i, cell in enumerate(code_cells):
-        source = cell["source"]
+        source = _strip_comments(cell["source"])
         label = cell.get("label", f"cell_{i}")
 
         # Collect references that are NOT on the LHS of an assignment in this cell
