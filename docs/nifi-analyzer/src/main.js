@@ -491,7 +491,7 @@ document.addEventListener('DOMContentLoaded', () => {
             vh += `<div class="expander ${p === 0 ? 'open' : ''}"><div class="expander-header" data-expander-toggle><span>${title}</span><span class="expander-arrow">\u25B6</span></div><div class="expander-body">`;
             vh += '<ul style="margin:0;padding-left:20px;font-size:0.85rem">';
             result.allGaps.slice(s, e).forEach(g => {
-              vh += '<li style="margin:4px 0"><strong>' + escapeHTML(g.processor || g.name || '') + '</strong>: ' + escapeHTML(g.gap || g.reason || g.message || '') + '</li>';
+              vh += '<li style="margin:4px 0"><strong>' + escapeHTML(g.proc || g.processor || g.name || '') + '</strong>: ' + escapeHTML(g.issue || g.gap || g.reason || g.message || '') + '</li>';
             });
             vh += '</ul></div></div>';
           }

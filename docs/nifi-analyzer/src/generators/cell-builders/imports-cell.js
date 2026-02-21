@@ -16,7 +16,7 @@ const _STDLIB_MODULES = new Set([
   'pyspark.sql.window', 'pyspark.sql', 'pyspark',
   'datetime', 'json', 'logging', 'os', 're', 'hashlib', 'base64',
   'subprocess', 'mimetypes', 'socket', 'smtplib', 'email', 'functools',
-  'xml.etree', 'csv', 'io', 'collections', 'math', 'sys', 'time',
+  'xml.etree', 'xml', 'csv', 'io', 'collections', 'math', 'sys', 'time',
   'typing', 'uuid', 'pathlib', 'struct', 'itertools', 'urllib',
 ]);
 
