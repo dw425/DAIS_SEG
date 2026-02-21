@@ -35,7 +35,8 @@ export function generateAutoRecovery(m, qualifiedSchema, lineage) {
   if (m.role === 'source') {
     return '\n        # RECOVERY: Try relaxed schema\n' +
       '        try:\n' +
-      '            ' + outputVar + ' = spark.read.option("mode","PERMISSIVE").option("inferSchema","true").option("header","true").csv(VOLUMES_BASE + "/fallback")\n' +
+      '            _recovery_base = globals().get("VOLUMES_BASE", "/Volumes/main/nifi_migration")\n' +
+      '            ' + outputVar + ' = spark.read.option("mode","PERMISSIVE").option("inferSchema","true").option("header","true").csv(_recovery_base + "/fallback")\n' +
       '            _cell_status_' + varName + ' = "RECOVERED"\n' +
       '            print(f"[RECOVERED] ' + safeName + '")\n' +
       '        except Exception as _e2:\n' +

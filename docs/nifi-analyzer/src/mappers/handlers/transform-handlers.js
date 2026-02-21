@@ -200,7 +200,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
     if (isAES) {
       code = `# Encryption: ${p.name}\n# Algorithm: ${algo}\nfrom pyspark.sql.functions import col, lit, base64, aes_encrypt\n\n# Retrieve encryption key from Databricks secret scope (never hardcode keys)\n_enc_key = dbutils.secrets.get(scope="encryption", key="aes-key")\n\ndf_${varName} = df_${inputVar}\nfor _col in df_${inputVar}.columns:\n    if _col not in ["id", "key", "timestamp"]:\n        df_${varName} = df_${varName}.withColumn(_col,\n            base64(aes_encrypt(col(_col).cast("string"), lit(_enc_key), lit("GCM"), lit("DEFAULT"))))\nprint(f"[ENCRYPT] AES-GCM encryption applied via aes_encrypt() with secret scope key")`;
     } else {
-      code = `# Encryption: ${p.name}\n# Algorithm: ${algo}\nfrom cryptography.fernet import Fernet\nfrom pyspark.sql.functions import udf, col\nfrom pyspark.sql.types import StringType\n\n_key = dbutils.secrets.get(scope="encryption", key="fernet-key")\n_fernet = Fernet(_key.encode() if isinstance(_key, str) else _key)\n\n@udf(StringType())\ndef encrypt_value(val):\n    if val is None: return None\n    return _fernet.encrypt(val.encode()).decode()\n\ndf_${varName} = df_${inputVar}\nfor _col in df_${inputVar}.columns:\n    if _col not in ["id", "key", "timestamp"]:\n        df_${varName} = df_${varName}.withColumn(_col, encrypt_value(col(_col)))\nprint(f"[ENCRYPT] ${algo} encryption applied")`;
+      code = `# Encryption: ${p.name}\n# Algorithm: ${algo}\nfrom pyspark.sql.functions import udf, col\nfrom pyspark.sql.types import StringType\n\n_key_str = dbutils.secrets.get(scope="encryption", key="fernet-key")\n\n@udf(StringType())\ndef encrypt_value(val):\n    if val is None: return None\n    from cryptography.fernet import Fernet as _F\n    return _F(_key_str.encode()).encrypt(val.encode()).decode()\n\ndf_${varName} = df_${inputVar}\nfor _col in df_${inputVar}.columns:\n    if _col not in ["id", "key", "timestamp"]:\n        df_${varName} = df_${varName}.withColumn(_col, encrypt_value(col(_col)))\nprint(f"[ENCRYPT] ${algo} encryption applied")`;
     }
     conf = 0.90;
     return { code, conf };
@@ -352,7 +352,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
   // -- ForkRecord --
   if (p.type === 'ForkRecord') {
     const field = props['Record Path'] || 'records';
-    code = `# Fork Record: ${p.name}\nfrom pyspark.sql.functions import explode, col\ndf_${varName} = df_${inputVar}.select(explode(col("${field}")).alias("record"), "*")`;
+    code = `# Fork Record: ${p.name}\nfrom pyspark.sql.functions import explode, col\ndf_${varName} = df_${inputVar}.withColumn("record", explode(col("${field}"))).drop("${field}")`;
     conf = 0.93;
     return { code, conf };
   }
@@ -397,7 +397,7 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
     return { code, conf };
   }
   if (p.type === 'DecryptContentPGP') {
-    code = `# PGP Decrypt: ${p.name}\nfrom pyspark.sql.functions import udf, col\nfrom pyspark.sql.types import StringType\nimport gnupg\n_gpg = gnupg.GPG()\n@udf(StringType())\ndef pgp_decrypt(data):\n    return str(_gpg.decrypt(data, passphrase=dbutils.secrets.get(scope="pgp", key="passphrase")))\ndf_${varName} = df_${inputVar}.withColumn("_decrypted", pgp_decrypt(col("value")))`;
+    code = `# PGP Decrypt: ${p.name}\nfrom pyspark.sql.functions import udf, col\nfrom pyspark.sql.types import StringType\nimport gnupg\n_pgp_pass = dbutils.secrets.get(scope="pgp", key="passphrase")\n\n@udf(StringType())\ndef pgp_decrypt(data):\n    import gnupg as _gnupg\n    _g = _gnupg.GPG()\n    return str(_g.decrypt(data, passphrase=_pgp_pass))\n\ndf_${varName} = df_${inputVar}.withColumn("_decrypted", pgp_decrypt(col("value")))`;
     conf = 0.90;
     return { code, conf };
   }

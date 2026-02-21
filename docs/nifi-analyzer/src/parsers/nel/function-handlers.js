@@ -62,9 +62,9 @@ export function applyNELFunction(base, call, mode) {
   if (name === 'trim') return mode === 'col' ? 'trim(' + base + ')' : base + '.strip()';
   if (name === 'length') return mode === 'col' ? 'length(' + base + ')' : 'len(' + base + ')';
   if (name === 'substring') {
-    var start = args[0] || '0'; var len = args[1];
-    if (mode === 'col') return len ? 'substring(' + base + ', ' + (parseInt(start)+1) + ', ' + len + ')' : 'substring(' + base + ', ' + (parseInt(start)+1) + ', 9999)';
-    return len ? base + '[' + start + ':' + (parseInt(start)+parseInt(len)) + ']' : base + '[' + start + ':]';
+    var start = args[0] || '0'; var end = args[1];
+    if (mode === 'col') return end ? 'substring(' + base + ', ' + (parseInt(start)+1) + ', ' + (parseInt(end)-parseInt(start)) + ')' : 'substring(' + base + ', ' + (parseInt(start)+1) + ', 9999)';
+    return end ? base + '[' + start + ':' + end + ']' : base + '[' + start + ':]';
   }
   if (name === 'replace') {
     var search = unquoteArg(args[0] || ''); var repl = unquoteArg(args[1] || '');
