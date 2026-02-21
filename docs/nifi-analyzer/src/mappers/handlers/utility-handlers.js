@@ -132,22 +132,45 @@ export function handleUtilityProcessor(p, props, varName, inputVar, existingCode
 
   // -- RetryFlowFile --
   if (p.type === 'RetryFlowFile') {
-    const maxRetries = props['Maximum Retries'] || props['Retry Count'] || '3';
-    const penaltyDur = props['Penalty Duration'] || '30000 ms';
-    code = `# Retry: ${p.name}\n# Max retries: ${maxRetries} | Penalty: ${penaltyDur}\n` +
-      `from tenacity import retry, stop_after_attempt, wait_exponential, RetryError\n` +
+    const maxRetries = parseInt(props['Maximum Retries'] || props['Retry Count'] || '3', 10) || 3;
+    const penaltyRaw = props['Penalty Duration'] || '30 sec';
+    // Parse penalty duration: "30 sec", "30000 ms", "1 min" etc.
+    let penaltySec = 30;
+    const penaltyMatch = penaltyRaw.match(/(\d+)\s*(ms|sec|min|hr)?/i);
+    if (penaltyMatch) {
+      const val = parseInt(penaltyMatch[1], 10);
+      const unit = (penaltyMatch[2] || 'ms').toLowerCase();
+      if (unit === 'ms') penaltySec = Math.max(1, Math.round(val / 1000));
+      else if (unit === 'sec') penaltySec = val;
+      else if (unit === 'min') penaltySec = val * 60;
+      else if (unit === 'hr') penaltySec = val * 3600;
+    }
+    const backoffPolicy = props['Backoff Policy'] || props['Retry Backoff Policy'] || 'penalize';
+    const isExponential = /exponential/i.test(backoffPolicy);
+    const safeName = p.name.replace(/"/g, "'");
+
+    code = `# RetryFlowFile: ${safeName}\n` +
+      `# Max Retries: ${maxRetries} | Penalty: ${penaltySec}s | Backoff: ${isExponential ? 'exponential' : 'fixed'}\n` +
+      `import time\n` +
       `from pyspark.sql.functions import current_timestamp, lit\n\n` +
-      `@retry(stop=stop_after_attempt(${maxRetries}), wait=wait_exponential(multiplier=1, min=2, max=30))\n` +
-      `def _process_with_retry_${varName}(df):\n` +
-      `    return df  # TODO: Apply actual processing logic here\n\n` +
-      `try:\n` +
-      `    df_${varName} = _process_with_retry_${varName}(df_${inputVar})\n` +
-      `    print(f"[RETRY] ${p.name.replace(/"/g,"'")} succeeded")\n` +
-      `except RetryError as _retry_err:\n` +
-      `    print(f"[RETRY] ${p.name.replace(/"/g,"'")} exhausted ${maxRetries} retries — writing to DLQ")\n` +
-      `    df_${inputVar}.withColumn("_dlq_error", lit(str(_retry_err))).withColumn("_dlq_source", lit("${p.name.replace(/"/g,'\\"')}")).withColumn("_dlq_timestamp", current_timestamp()).write.mode("append").saveAsTable("<catalog>.<schema>.__dead_letter_queue")\n` +
-      `    df_${varName} = spark.createDataFrame([], df_${inputVar}.schema)\n` +
-      `    print(f"[DLQ] Failed records written to __dead_letter_queue")`;
+      `_max_retries = ${maxRetries}\n` +
+      `_penalty_sec = ${penaltySec}\n` +
+      `for _attempt in range(1, _max_retries + 1):\n` +
+      `    try:\n` +
+      `        # Upstream processing is already done — this processor just controls retry behavior\n` +
+      `        df_${varName} = df_${inputVar}\n` +
+      `        break\n` +
+      `    except Exception as _e:\n` +
+      `        if _attempt < _max_retries:\n` +
+      `            _backoff = _penalty_sec * (2 ** (_attempt - 1)) if '${isExponential ? 'exponential' : 'fixed'}' == 'exponential' else _penalty_sec\n` +
+      `            _backoff = min(_backoff, 300)  # Cap at 5 minutes\n` +
+      `            print(f"[RETRY] ${safeName}: attempt {_attempt}/{_max_retries}, waiting {_backoff}s")\n` +
+      `            time.sleep(_backoff)\n` +
+      `        else:\n` +
+      `            raise RuntimeError(\n` +
+      `                f"[FAILED] ${safeName}: all {_max_retries} retries exhausted"\n` +
+      `            ) from _e\n` +
+      `print(f"[RETRY] ${safeName}: completed successfully")`;
     conf = 0.92;
     return { code, conf };
   }

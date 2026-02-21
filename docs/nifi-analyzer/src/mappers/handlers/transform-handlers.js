@@ -206,28 +206,62 @@ export function handleTransformProcessor(p, props, varName, inputVar, existingCo
     return { code, conf };
   }
 
-  // -- ExecuteScript (GAP FIX: Groovy/Python script translation patterns) --
+  // -- ExecuteScript (real script embedding + explicit NotImplementedError) --
   if (p.type === 'ExecuteScript') {
     const engine = props['Script Engine'] || 'python';
     const body = props['Script Body'] || '';
-    const bodyPreview = body.substring(0, 200).replace(/\n/g, ' ').replace(/"/g, "'");
-    // Detect common patterns in the script body
-    const hasGroovy = /groovy/i.test(engine);
-    const hasFlowFile = /flowFile|session\.get|session\.transfer/i.test(body);
-    if (hasGroovy && hasFlowFile) {
-      code = `# ExecuteScript (Groovy->Python): ${p.name}\nfrom pyspark.sql.functions import udf, col, struct\nfrom pyspark.sql.types import StringType\nimport json\n\n# Migrated from Groovy NiFi script\n# Original pattern: session.get() -> process -> session.transfer()\n# Groovy: ${bodyPreview}\ndef _nifi_groovy_logic(row_dict):\n    """Migrated from Groovy ExecuteScript.\n    Common patterns:\n    - session.get() -> DataFrame row\n    - flowFile.getAttribute() -> row_dict[key]\n    - session.transfer(flowFile, REL_SUCCESS) -> return\n    """\n    try:\n        data = row_dict\n        # TODO: Port Groovy logic to Python\n        data["_migrated_from"] = "groovy"\n        return json.dumps(data)\n    except Exception as e:\n        return json.dumps({"_error": str(e), **row_dict})\n\n_script_udf = udf(lambda row: _nifi_groovy_logic(row.asDict()), StringType())\ndf_${varName} = df_${inputVar}.withColumn("_result", _script_udf(struct("*")))\nprint(f"[SCRIPT] Executed migrated Groovy logic")`;
-    } else {
-      code = `# ExecuteScript (${engine}): ${p.name}\nfrom pyspark.sql.functions import udf, col, struct\nfrom pyspark.sql.types import StringType\nimport json\n\ndef _nifi_script_logic(row_dict):\n    """Migrated from NiFi ExecuteScript. Engine: ${engine}\n    Original: ${bodyPreview}"""\n    try:\n        data = row_dict\n        data["_processed"] = True\n        return json.dumps(data)\n    except Exception as e:\n        return json.dumps({"_error": str(e), **row_dict})\n\n_script_udf = udf(lambda row: _nifi_script_logic(row.asDict()), StringType())\ndf_${varName} = df_${inputVar}.withColumn("_result", _script_udf(struct("*")))\nprint(f"[SCRIPT] Executed migrated ${engine} logic")`;
+    const scriptFile = props['Script File'] || '';
+    const scriptLen = body.length || 0;
+    const safeName = p.name.replace(/"/g, "'");
+
+    // Build commented script preview (first 20 lines)
+    const bodyLines = body.split(/\r?\n/);
+    const previewLines = bodyLines.slice(0, 20).map(l => `# ${l}`);
+    if (bodyLines.length > 20) {
+      previewLines.push(`# ... (${bodyLines.length - 20} more lines)`);
     }
-    conf = 0.90;
+    const scriptComment = previewLines.join('\n');
+    const scriptSource = body ? `Script Body (${scriptLen} chars)` : `Script File: ${scriptFile}`;
+
+    code = `# ExecuteScript: ${safeName}\n` +
+      `# Engine: ${engine} | ${scriptSource}\n` +
+      `# Original ${engine} script (${scriptLen} chars):\n` +
+      `${scriptComment}\n\n` +
+      `raise NotImplementedError(\n` +
+      `    f"ExecuteScript '${safeName}' contains ${engine} logic that requires manual porting to PySpark. "\n` +
+      `    f"See the commented script above (${scriptLen} chars). "\n` +
+      `    f"Consider using a PySpark UDF or pandas_udf for the equivalent logic."\n` +
+      `)`;
+    conf = 0.15;
     return { code, conf };
   }
 
-  // -- ExecuteGroovyScript (GAP FIX: Groovy translation) --
+  // -- ExecuteGroovyScript (real script embedding + explicit NotImplementedError) --
   if (p.type === 'ExecuteGroovyScript') {
-    const body = (props['Script Body'] || '').substring(0, 200).replace(/"/g, "'").replace(/\n/g, ' ');
-    code = `# Groovy->Python: ${p.name}\nfrom pyspark.sql.functions import udf, col, struct\nfrom pyspark.sql.types import StringType\nimport json\n@udf(StringType())\ndef groovy_migrated(row_json):\n    """Migrated from Groovy: ${body}"""\n    data = json.loads(row_json)\n    data["_migrated"] = True\n    return json.dumps(data)\ndf_${varName} = df_${inputVar}.withColumn("_result", groovy_migrated(col("value")))`;
-    conf = 0.25;
+    const body = props['Script Body'] || '';
+    const scriptFile = props['Script File'] || '';
+    const scriptLen = body.length || 0;
+    const safeName = p.name.replace(/"/g, "'");
+
+    // Build commented script preview (first 20 lines)
+    const bodyLines = body.split(/\r?\n/);
+    const previewLines = bodyLines.slice(0, 20).map(l => `# ${l}`);
+    if (bodyLines.length > 20) {
+      previewLines.push(`# ... (${bodyLines.length - 20} more lines)`);
+    }
+    const scriptComment = previewLines.join('\n');
+    const scriptSource = body ? `Script Body (${scriptLen} chars)` : `Script File: ${scriptFile}`;
+
+    code = `# ExecuteGroovyScript: ${safeName}\n` +
+      `# Engine: Groovy | ${scriptSource}\n` +
+      `# Original Groovy script (${scriptLen} chars):\n` +
+      `${scriptComment}\n\n` +
+      `raise NotImplementedError(\n` +
+      `    f"ExecuteGroovyScript '${safeName}' contains Groovy logic that requires manual porting to PySpark. "\n` +
+      `    f"See the commented script above (${scriptLen} chars). "\n` +
+      `    f"Consider using a PySpark UDF or pandas_udf for the equivalent logic."\n` +
+      `)`;
+    conf = 0.15;
     return { code, conf };
   }
 

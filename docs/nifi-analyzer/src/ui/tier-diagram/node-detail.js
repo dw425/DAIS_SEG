@@ -23,6 +23,10 @@ export function showNodeDetail(node, detailEl, diagramType) {
 
   if (diagramType === 'nifi_flow' && node.type === 'process_group' && node.detail) {
     const d = node.detail;
+    // Stage badge
+    if (node.stageLabel) {
+      h += `<div style="margin-bottom:6px"><span class="ns" style="background:${escapeHTML(node.stageColor || '#6366F1')};color:white;font-size:0.7rem">${escapeHTML(node.stageLabel)}</span></div>`;
+    }
     h += `<p><strong>Processors:</strong> ${node.procCount} &middot; <strong>Internal Connections:</strong> ${d.intraConns || 0}</p>`;
     // Role breakdown
     h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">';
@@ -33,6 +37,36 @@ export function showNodeDetail(node, detailEl, diagramType) {
     if (node.sinkCount) h += `<span class="ns" style="background:#21C354;color:white">${node.sinkCount} sinks</span>`;
     if (node.utilityCount) h += `<span class="ns" style="background:#808495;color:white">${node.utilityCount} utility</span>`;
     h += '</div>';
+    // Subcategory tags
+    if (node.subcategories && node.subcategories.length) {
+      h += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin:4px 0">';
+      node.subcategories.forEach(sub => {
+        h += `<span class="ns ns-sub" style="font-size:0.65rem">${escapeHTML(sub)}</span>`;
+      });
+      h += '</div>';
+    }
+    // Action types
+    if (node.actionTypes && node.actionTypes.length) {
+      h += '<p style="margin:4px 0;font-size:0.75rem"><strong>Actions:</strong> ' + node.actionTypes.map(escapeHTML).join(', ') + '</p>';
+    }
+    // Attribute flow
+    if ((node.attrCreates && node.attrCreates.length) || (node.attrReads && node.attrReads.length)) {
+      h += '<div style="margin:8px 0;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:0.75rem">';
+      h += '<strong>Attribute Flow</strong>';
+      if (node.attrCreates && node.attrCreates.length) {
+        h += `<div style="margin-top:4px"><span style="color:#21C354">\u2191 Creates (${node.attrCreates.length}):</span> `;
+        h += node.attrCreates.slice(0, 8).map(a => `<code class="attr-chip attr-chip-create" data-attr-name="${escapeHTML(a)}">${escapeHTML(a)}</code>`).join(' ');
+        if (node.attrCreates.length > 8) h += ` <em>+${node.attrCreates.length - 8} more</em>`;
+        h += '</div>';
+      }
+      if (node.attrReads && node.attrReads.length) {
+        h += `<div style="margin-top:4px"><span style="color:#3B82F6">\u2193 Reads (${node.attrReads.length}):</span> `;
+        h += node.attrReads.slice(0, 8).map(a => `<code class="attr-chip attr-chip-read" data-attr-name="${escapeHTML(a)}">${escapeHTML(a)}</code>`).join(' ');
+        if (node.attrReads.length > 8) h += ` <em>+${node.attrReads.length - 8} more</em>`;
+        h += '</div>';
+      }
+      h += '</div>';
+    }
     // Processor type breakdown
     if (d.typeCount) {
       const types = Object.entries(d.typeCount).sort((a, b) => b[1] - a[1]);

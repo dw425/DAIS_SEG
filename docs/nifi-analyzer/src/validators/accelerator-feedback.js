@@ -21,11 +21,25 @@ export function generateFeedback({ intentGaps, lineGapItems, nifiDatabricksMap }
   const allGaps = [...intentGaps];
   lineGapItems.forEach(lg => {
     if (!allGaps.some(g => g.proc === lg.name)) {
+      const shortType = (lg.type || '').split('.').pop() || 'Unknown';
+      const missingProps = (lg.propsMissing || []).slice(0, 3).join(', ');
+      const covPct = typeof lg.propCoverage === 'number' ? Math.round(lg.propCoverage) : 0;
+      let issue;
+      if (lg.status === 'missing') {
+        issue = `No Databricks mapping found for ${shortType}`;
+      } else if (lg.status === 'no-cell') {
+        issue = `Mapped but no notebook cell generated for this processor`;
+      } else {
+        issue = `Low property coverage (${covPct}%)${missingProps ? ' — missing: ' + missingProps : ''}`;
+      }
       allGaps.push({
-        proc: lg.name,
-        type: lg.type,
+        proc: lg.name || 'Unknown',
+        type: lg.type || '',
         intent: '',
-        issue: lg.status === 'missing' ? 'No mapping' : lg.status === 'no-cell' ? 'No cell' : 'Low prop coverage'
+        role: lg.role || '',
+        confidence: lg.confidence,
+        propCoverage: lg.propCoverage,
+        issue,
       });
     }
   });

@@ -102,7 +102,7 @@
         Reverse-engineer your NiFi flow into a Databricks Python notebook with PySpark equivalents,
         Unity Catalog definitions, and a Databricks workflow.
       </p>
-      <div class="expander" id="dbxConfigExpander"><div class="expander-header" id="dbxConfigExpanderHeader"><span>Databricks Configuration</span><span class="expander-arrow">&#9654;</span></div><div class="expander-body">
+      <div class="expander" id="dbxConfigExpander"><div class="expander-header" data-expander-toggle id="dbxConfigExpanderHeader"><span>Databricks Configuration</span><span class="expander-arrow">&#9654;</span></div><div class="expander-body">
         <p style="font-size:0.82rem;color:var(--text2);margin-bottom:12px">Configure these to generate a runnable notebook with resolved placeholders. Leave blank for generic templates.</p>
         <div class="row">
           <div class="col"><label>Unity Catalog</label><input type="text" id="cfgCatalog" placeholder="e.g. main"></div>
@@ -111,14 +111,15 @@
         </div>
         <div class="row" style="margin-top:8px">
           <div class="col"><label>Cloud Provider</label><select id="cfgCloud"><option value="azure">Azure</option><option value="aws">AWS</option><option value="gcp">GCP</option></select></div>
-          <div class="col"><label>Spark Version</label><input type="text" id="cfgSparkVersion" value="14.3.x-scala2.12"></div>
-          <div class="col"><label>Node Type</label><input type="text" id="cfgNodeType" value="Standard_DS3_v2"></div>
+          <div class="col"><label>Compute Type</label><select id="cfgComputeType"><option value="cluster">All-Purpose Cluster</option><option value="serverless">Serverless Compute</option><option value="sql-warehouse">SQL Warehouse</option></select></div>
+          <div class="col"><label>Runtime Version</label><select id="cfgRuntimeVersion"><option value="14.3">14.3 LTS</option><option value="15.4">15.4 LTS</option><option value="16.0">16.0</option></select></div>
         </div>
         <div class="row" style="margin-top:8px">
+          <div class="col"><label>Node Type</label><select id="cfgNodeType"><option value="Standard_DS3_v2">Standard_DS3_v2 (4 vCPU, 14 GB)</option><option value="Standard_DS4_v2">Standard_DS4_v2 (8 vCPU, 28 GB)</option><option value="Standard_DS5_v2">Standard_DS5_v2 (16 vCPU, 56 GB)</option><option value="Standard_E4ds_v5">Standard_E4ds_v5 (4 vCPU, 32 GB, memory-opt)</option><option value="Standard_NC6s_v3">Standard_NC6s_v3 (6 vCPU, 112 GB, GPU)</option></select></div>
           <div class="col"><label>Workers</label><input type="number" id="cfgWorkers" value="2" min="1" max="100"></div>
-          <div class="col" style="flex:2"><label>Workspace Path</label><input type="text" id="cfgWorkspacePath" value="/Workspace/Migrations/NiFi"></div>
+          <div class="col"><label>Workspace Path</label><input type="text" id="cfgWorkspacePath" value="/Workspace/Migrations/NiFi"></div>
         </div>
-        <div style="margin-top:8px"><button class="btn" id="saveDbxConfigBtn">Save Configuration</button></div>
+        <div style="margin-top:8px;display:flex;gap:8px"><button class="btn" id="cfgSaveBtn">Save Configuration</button><button class="btn btn-secondary" id="cfgResetBtn">Reset to Defaults</button></div>
       </div></div>
       <div style="margin-top:12px"><button class="btn btn-primary" id="generateNotebookBtn">Generate Notebook</button></div>
       <div id="notebookResults"></div>

@@ -10,7 +10,7 @@ import { renderNodes } from './render-nodes.js';
 import { renderConnections } from './render-connections.js';
 import { clearRouteTrace } from './route-trace.js';
 import { applySidebarFilter, clearSidebarFilter } from './sidebar-filter.js';
-import { tierFilter, resetTierFilterState } from './filter-toolbar.js';
+import { tierFilter, resetTierFilterState, ACTION_FILTER_OPTIONS } from './filter-toolbar.js';
 import { escapeHTML } from '../../security/html-sanitizer.js';
 
 /** Module-level escape handler reference for cleanup between renders. */
@@ -53,7 +53,16 @@ export function renderTierDiagram(tierData, containerId, detailId, legendId) {
   [{ k: 'all', l: 'All', s: '' }, { k: 'high', l: 'High', s: 'border-color:var(--green);color:var(--green)' }, { k: 'med', l: 'Med', s: 'border-color:var(--amber);color:var(--amber)' }, { k: 'low', l: 'Low', s: 'border-color:var(--red);color:var(--red)' }].forEach(c => {
     _tbHtml += '<button class="filter-btn' + (c.k === 'all' ? ' active' : '') + '"' + (c.s ? ' style="' + c.s + '"' : '') + ' data-filter-conf="' + c.k + '">' + c.l + '</button>';
   });
-  _tbHtml += '</div><div class="filter-group"><input class="filter-search" type="text" placeholder="Search processors..."></div>';
+  _tbHtml += '</div>';
+  // Action filter dropdown (NiFi flows only)
+  if (diagramType === 'nifi_flow') {
+    _tbHtml += '<div class="filter-group"><label>Action:</label><select class="filter-action-select">';
+    ACTION_FILTER_OPTIONS.forEach(opt => {
+      _tbHtml += `<option value="${opt.value}">${opt.label}</option>`;
+    });
+    _tbHtml += '</select></div>';
+  }
+  _tbHtml += '<div class="filter-group"><input class="filter-search" type="text" placeholder="Search processors..."></div>';
   _tb.innerHTML = _tbHtml;
 
   // FIX CRIT: Use addEventListener instead of inline onclick
@@ -71,6 +80,12 @@ export function renderTierDiagram(tierData, containerId, detailId, legendId) {
       tierFilter(_tb, 'conf', btn.dataset.filterConf);
     });
   });
+  const actionSelect = _tb.querySelector('.filter-action-select');
+  if (actionSelect) {
+    actionSelect.addEventListener('change', () => {
+      tierFilter(_tb, 'action', actionSelect.value);
+    });
+  }
   const searchInput = _tb.querySelector('.filter-search');
   if (searchInput) {
     searchInput.addEventListener('input', () => {
@@ -220,7 +235,9 @@ export function renderTierDiagram(tierData, containerId, detailId, legendId) {
         '<span><span class="leg-line" style="background:#6366F1"></span> Process</span>',
         '<span><span class="leg-line" style="background:#21C354"></span> Sink</span>',
         '<span><span class="leg-line" style="background:#EF4444;border-top:2px dashed #EF4444"></span> Cycle Edge</span>',
-        '<span style="color:var(--text2);font-size:0.7rem">Click nodes to trace route &middot; Esc to clear</span>',
+        '<span><span class="leg-line" style="background:#06B6D4"></span> Attr Create</span>',
+        '<span><span class="leg-line" style="background:#F59E0B"></span> Attr Read</span>',
+        '<span style="color:var(--text2);font-size:0.7rem">Click nodes to trace route &middot; Click attribute to trace flow &middot; Esc to clear</span>',
       ].join('');
     } else if (diagramType === 'sql_tables') {
       legendEl.innerHTML = [

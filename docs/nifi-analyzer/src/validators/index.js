@@ -13,6 +13,7 @@ import { validateLines } from './line-validator.js';
 import { checkReverseEngineering } from './reverse-engineering.js';
 import { mapFunctions } from './function-mapper.js';
 import { generateFeedback } from './accelerator-feedback.js';
+import { handleError, AppError } from '../core/errors.js';
 
 /**
  * Run the full validation engine across all four dimensions.
@@ -67,42 +68,72 @@ export async function runValidationEngine({
     connMap[c.sourceName].push(c);
   });
 
+  const validationErrors = [];
+
   // ── ANALYSIS 1: Intent ──
+  let intentResult;
   progress(8, 'Running intent analysis (' + nifi.processors.length + ' processors)...');
-  const intentResult = await analyzeIntent({
-    processors: nifi.processors,
-    mappings,
-    mappingByName,
-    allCellTextLower,
-    onProgress: progress,
-  });
+  try {
+    intentResult = await analyzeIntent({
+      processors: nifi.processors,
+      mappings,
+      mappingByName,
+      allCellTextLower,
+      onProgress: progress,
+    });
+  } catch (err) {
+    handleError(new AppError('Intent analysis failed: ' + err.message, { code: 'VALIDATE_INTENT_MISMATCH', phase: 'validate', severity: 'high', cause: err }));
+    validationErrors.push({ phase: 'intent', message: err.message });
+    intentResult = { nifiIntents: [], intentMatched: 0, intentPartial: 0, intentMissing: 0, intentGaps: [], intentScore: 0 };
+  }
 
   // ── ANALYSIS 2: Line Validation ──
+  let lineResult;
   progress(30, 'Running line validation (' + mappings.length + ' mappings)...');
-  const lineResult = await validateLines({
-    mappings,
-    procByName,
-    cellTextsLower,
-    findCellsWithVar,
-    onProgress: progress,
-  });
+  try {
+    lineResult = await validateLines({
+      mappings,
+      procByName,
+      cellTextsLower,
+      findCellsWithVar,
+      onProgress: progress,
+    });
+  } catch (err) {
+    handleError(new AppError('Line validation failed: ' + err.message, { code: 'VALIDATE_SCHEMA_VIOLATION', phase: 'validate', severity: 'high', cause: err }));
+    validationErrors.push({ phase: 'line', message: err.message });
+    lineResult = { lineResults: [], lineMatched: 0, lineGaps: 0, lineScore: 0 };
+  }
 
   // ── ANALYSIS 3: Reverse Engineering ──
+  let reResult;
   progress(58, 'Running reverse engineering readiness checks...');
-  const reResult = await checkReverseEngineering({
-    nifi,
-    systems,
-    allCellTextLower,
-    onProgress: progress,
-  });
+  try {
+    reResult = await checkReverseEngineering({
+      nifi,
+      systems,
+      allCellTextLower,
+      onProgress: progress,
+    });
+  } catch (err) {
+    handleError(new AppError('Reverse engineering check failed: ' + err.message, { code: 'VALIDATE_SCHEMA_VIOLATION', phase: 'validate', severity: 'high', cause: err }));
+    validationErrors.push({ phase: 'reverse-engineering', message: err.message });
+    reResult = { reChecks: [], reScore: 0 };
+  }
 
   // ── ANALYSIS 4: Function Mapping ──
+  let funcResult;
   progress(78, 'Running function mapping analysis...');
-  const funcResult = await mapFunctions({
-    mappings,
-    procByName,
-    onProgress: progress,
-  });
+  try {
+    funcResult = await mapFunctions({
+      mappings,
+      procByName,
+      onProgress: progress,
+    });
+  } catch (err) {
+    handleError(new AppError('Function mapping failed: ' + err.message, { code: 'VALIDATE_INTENT_MISMATCH', phase: 'validate', severity: 'high', cause: err }));
+    validationErrors.push({ phase: 'function-mapping', message: err.message });
+    funcResult = { funcResults: [], funcMapped: 0, funcPartial: 0, funcMissing: 0, funcScore: 0 };
+  }
 
   // ── Overall Score ──
   progress(95, 'Computing overall score...');
@@ -149,6 +180,7 @@ export async function runValidationEngine({
     gapsByType: feedback.gapsByType,
     connMap,
     missingImports,
+    validationErrors,
     timestamp: new Date().toISOString(),
   };
 }

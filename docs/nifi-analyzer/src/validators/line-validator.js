@@ -64,7 +64,9 @@ export async function validateLines({
         });
       }
 
-      const propCoverage = importantProps.length > 0 ? Math.round((propsInCode / importantProps.length) * 100) : 100;
+      const safePropCoverage = importantProps.length > 0 ? Math.round((propsInCode / importantProps.length) * 100) : 100;
+      const propCoverage = safePropCoverage || 0;
+      if (!propsMissing) propsMissing = [];
       const status = !m.mapped ? 'missing' : matchedCellIndices.length === 0 ? 'no-cell' : propCoverage >= PROP_COVERAGE_GOOD ? 'good' : propCoverage >= PROP_COVERAGE_PARTIAL ? 'partial' : 'weak';
 
       if (status === 'good') lineMatched++;
@@ -73,7 +75,7 @@ export async function validateLines({
       lineResults.push({
         name: m.name, type: m.type, role: m.role, mapped: m.mapped,
         cellCount: matchedCellIndices.length, cellIndices: matchedCellIndices,
-        propTotal: importantProps.length, propsInCode, propCoverage, propsMissing, status,
+        propTotal: importantProps.length, propsInCode, propCoverage: propCoverage || 0, propsMissing: propsMissing || [], status,
         confidence: m.confidence, desc: m.desc
       });
     });

@@ -50,7 +50,7 @@ import { generateMigrationReport } from '../reporters/migration-report.js';
 import { NIFI_DATABRICKS_MAP } from '../constants/nifi-databricks-map.js';
 import { CONFIDENCE_THRESHOLDS } from '../constants/confidence-thresholds.js';
 import { ROLE_TIER_COLORS } from '../constants/nifi-role-map.js';
-import { getProcessorPackages } from '../constants/package-map.js';
+import { getProcessorPackages, PACKAGE_MAP, PROC_PACKAGE_KEYS } from '../constants/package-map.js';
 
 // Config
 import { getDbxConfig } from '../core/config.js';
@@ -58,6 +58,221 @@ import { getDbxConfig } from '../core/config.js';
 // HTML builders (metricsHTML, tableHTML, expanderHTML) imported from
 // ../utils/dom-helpers.js — the canonical, XSS-safe implementations.
 // Expander toggle click delegation is also handled in dom-helpers.
+
+// ================================================================
+// PARSE HELPERS — Format detection, file size, warnings
+// ================================================================
+
+/**
+ * Detect file format from filename and content for display purposes.
+ * @param {string} filename
+ * @param {string} raw - raw text content
+ * @param {Uint8Array|null} bytes - binary content
+ * @returns {{ format: string, cssClass: string }}
+ */
+function detectFileFormat(filename, raw, bytes) {
+  const lower = (filename || '').toLowerCase();
+  if (/\.(xml|xml\.gz)$/i.test(lower)) return { format: 'XML', cssClass: 'fmt-xml' };
+  if (/\.(json|json\.gz)$/i.test(lower)) return { format: 'JSON', cssClass: 'fmt-json' };
+  if (/\.sql$/i.test(lower)) return { format: 'SQL', cssClass: 'fmt-sql' };
+  if (/\.(gz|zip|nar|jar|tgz|tar\.gz|tar)$/i.test(lower)) return { format: 'Archive', cssClass: 'fmt-archive' };
+  if (/\.(docx|xlsx)$/i.test(lower)) return { format: 'Document', cssClass: 'fmt-document' };
+  // Sniff content
+  if (bytes && bytes.length >= 2) {
+    if (bytes[0] === 0x1f && bytes[1] === 0x8b) return { format: 'Archive (GZip)', cssClass: 'fmt-archive' };
+    if (bytes[0] === 0x50 && bytes[1] === 0x4b) return { format: 'Archive (ZIP)', cssClass: 'fmt-archive' };
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const t = raw.trimStart();
+    if (t.startsWith('<') || t.startsWith('<?xml')) return { format: 'XML', cssClass: 'fmt-xml' };
+    if (t.startsWith('{') || t.startsWith('[')) return { format: 'JSON', cssClass: 'fmt-json' };
+  }
+  return { format: 'Unknown', cssClass: 'fmt-unknown' };
+}
+
+/**
+ * Format file size in human-readable units.
+ * @param {number} sizeBytes
+ * @returns {string}
+ */
+function formatFileSize(sizeBytes) {
+  if (sizeBytes < 1024) return sizeBytes + ' B';
+  if (sizeBytes < 1024 * 1024) return (sizeBytes / 1024).toFixed(1) + ' KB';
+  return (sizeBytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+/**
+ * Generate parse error diagnostic HTML with line numbers and suggestions.
+ * @param {Error} error
+ * @param {string} raw - original content
+ * @returns {string} HTML string
+ */
+function buildParseErrorDiagnostics(error, raw) {
+  let h = '<div class="parse-error-detail">';
+  const msg = error.message || String(error);
+
+  // Try to extract line number from error
+  const lineMatch = msg.match(/line\s+(\d+)/i) || msg.match(/position\s+(\d+)/i);
+  if (lineMatch && typeof raw === 'string') {
+    const lineNum = parseInt(lineMatch[1], 10);
+    const lines = raw.split('\n');
+    const start = Math.max(0, lineNum - 3);
+    const end = Math.min(lines.length, lineNum + 2);
+    h += '<div style="font-size:0.78rem;color:var(--text2);margin-bottom:6px">Near line ' + escapeHTML(String(lineNum)) + ':</div>';
+    h += '<pre style="margin:0;padding:8px;background:var(--bg);border-radius:4px;font-size:0.75rem;overflow-x:auto">';
+    for (let i = start; i < end; i++) {
+      const ln = i + 1;
+      const isErrorLine = ln === lineNum;
+      const prefix = isErrorLine ? '>>> ' : '    ';
+      const style = isErrorLine ? 'color:#fca5a5;font-weight:700' : 'color:var(--text2)';
+      h += '<span style="' + style + '">' + escapeHTML(prefix + ln + ' | ' + (lines[i] || '').substring(0, 120)) + '</span>\n';
+    }
+    h += '</pre>';
+  }
+
+  // Suggest common fixes
+  const suggestions = [];
+  if (/xml/i.test(msg)) {
+    if (/unexpected.*eof|premature.*end/i.test(msg)) suggestions.push('File appears truncated. Re-export from NiFi and try again.');
+    if (/encoding/i.test(msg)) suggestions.push('Try saving the file as UTF-8 without BOM.');
+    if (/entity/i.test(msg)) suggestions.push('Check for unescaped special characters (&, <, >) in property values.');
+    if (!suggestions.length) suggestions.push('Ensure this is a valid NiFi template XML or flow.xml.gz export.');
+  }
+  if (/json/i.test(msg)) {
+    if (/unexpected.*token/i.test(msg)) suggestions.push('Check for trailing commas or missing quotes in the JSON.');
+    if (/unexpected.*end/i.test(msg)) suggestions.push('File appears truncated. Re-export and try again.');
+    if (!suggestions.length) suggestions.push('Ensure this is a valid NiFi Registry JSON export.');
+  }
+  if (/version/i.test(msg)) {
+    suggestions.push('This file may be from an unsupported NiFi version. Supported: NiFi 1.x templates and NiFi Registry JSON.');
+  }
+
+  if (suggestions.length) {
+    h += '<div class="error-suggestion"><strong>Suggestions:</strong><ul style="margin:4px 0 0 16px">';
+    suggestions.forEach(s => { h += '<li>' + escapeHTML(s) + '</li>'; });
+    h += '</ul></div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+/**
+ * Build a flow summary preview card after successful parse.
+ * @param {object} nifi - parsed _nifi object
+ * @param {string} sourceName
+ * @param {function} classifyFn
+ * @returns {string} HTML string
+ */
+function buildFlowSummaryCard(nifi, sourceName, classifyFn) {
+  // Count processors by role
+  const roleCounts = {};
+  const ROLES = ['source', 'route', 'transform', 'process', 'sink', 'utility'];
+  ROLES.forEach(r => { roleCounts[r] = 0; });
+  nifi.processors.forEach(p => {
+    const role = classifyFn(p.type);
+    roleCounts[role] = (roleCounts[role] || 0) + 1;
+  });
+  const maxRoleCount = Math.max(1, ...Object.values(roleCounts));
+
+  // Top 5 processor types
+  const typeCounts = {};
+  nifi.processors.forEach(p => { typeCounts[p.type] = (typeCounts[p.type] || 0) + 1; });
+  const top5 = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // Detect NiFi version from metadata if available
+  let nifiVersion = '';
+  if (nifi.version) nifiVersion = nifi.version;
+  else if (nifi.flowEncodingVersion) nifiVersion = 'Encoding v' + nifi.flowEncodingVersion;
+
+  let h = '<div class="flow-summary-card">';
+  h += '<div class="fsc-header">';
+  h += '<span class="fsc-title">' + escapeHTML(sourceName) + '</span>';
+  if (nifiVersion) h += '<span class="fsc-version">NiFi ' + escapeHTML(nifiVersion) + '</span>';
+  h += '</div>';
+
+  // Role distribution mini bars
+  h += '<div class="fsc-roles">';
+  ROLES.forEach(role => {
+    const count = roleCounts[role] || 0;
+    if (count === 0) return;
+    const color = ROLE_TIER_COLORS[role] || '#808495';
+    const pct = Math.round((count / maxRoleCount) * 100);
+    h += '<div class="fsc-role-bar">';
+    h += '<span style="color:' + color + ';min-width:62px;text-transform:uppercase;font-weight:600">' + role + '</span>';
+    h += '<div style="flex:1;min-width:40px;max-width:80px;background:var(--surface2);border-radius:3px;height:6px">';
+    h += '<div class="fsc-role-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
+    h += '<span style="color:var(--text2);min-width:20px">' + count + '</span>';
+    h += '</div>';
+  });
+  h += '</div>';
+
+  // Top 5 processor type chips
+  if (top5.length) {
+    h += '<div class="fsc-chips">';
+    top5.forEach(([type, count]) => {
+      const role = classifyFn(type);
+      const color = ROLE_TIER_COLORS[role] || '#808495';
+      h += '<span class="fsc-chip" style="border-color:' + color + '44;color:' + color + '">' + escapeHTML(type) + ' <span style="opacity:0.6">x' + count + '</span></span>';
+    });
+    h += '</div>';
+  }
+
+  // External system count
+  if (nifi.clouderaTools && nifi.clouderaTools.length) {
+    h += '<div style="margin-top:8px;font-size:0.8rem;color:var(--text2)">External Systems: <strong style="color:var(--amber)">' + nifi.clouderaTools.length + '</strong></div>';
+  }
+
+  h += '</div>';
+  return h;
+}
+
+/**
+ * Categorize and render parse warnings with severity grouping.
+ * @param {string[]} warnings
+ * @returns {string} HTML string
+ */
+function buildCategorizedWarnings(warnings) {
+  if (!warnings || !warnings.length) return '';
+
+  const categories = { critical: [], warning: [], info: [] };
+  warnings.forEach(w => {
+    const lower = w.toLowerCase();
+    if (/error|fail|corrupt|invalid|unsupported|missing required/i.test(lower)) {
+      categories.critical.push(w);
+    } else if (/warn|deprecated|unknown|unrecognized|skipped|ignored/i.test(lower)) {
+      categories.warning.push(w);
+    } else {
+      categories.info.push(w);
+    }
+  });
+
+  const severityConfig = {
+    critical: { label: 'Critical', icon: '&#x26D4;', css: 'severity-critical' },
+    warning: { label: 'Warning', icon: '&#x26A0;', css: 'severity-warning' },
+    info: { label: 'Info', icon: '&#x2139;', css: 'severity-info' }
+  };
+
+  let h = '<div style="margin-top:12px">';
+  h += '<h3 style="margin-bottom:8px">Parse Warnings (' + warnings.length + ')</h3>';
+
+  for (const [sev, items] of Object.entries(categories)) {
+    if (!items.length) continue;
+    const cfg = severityConfig[sev];
+    h += '<div class="parse-warning-group' + (sev === 'critical' ? ' open' : '') + '">';
+    h += '<div class="parse-warning-header ' + cfg.css + '" data-expander-toggle>';
+    h += '<span>' + cfg.icon + ' ' + cfg.label + '</span>';
+    h += '<span class="pw-count">' + items.length + ' item' + (items.length !== 1 ? 's' : '') + '</span>';
+    h += '<span class="expander-arrow" style="margin-left:8px">&#9654;</span>';
+    h += '</div>';
+    h += '<div class="parse-warning-body">';
+    items.forEach(w => {
+      h += '<div class="parse-warning-item">' + escapeHTML(w) + '</div>';
+    });
+    h += '</div></div>';
+  }
+  h += '</div>';
+  return h;
+}
 
 // ================================================================
 // PARSE INPUT — NiFi XML Only
@@ -94,18 +309,61 @@ export async function parseInput() {
     if (status) status.textContent = msg;
   };
 
-  updateProg(10, 'Cleaning & parsing input...');
+  // 1.1 File Format Detection & Validation
+  const uploadedName = getUploadedName();
+  const fileFormat = detectFileFormat(uploadedName, raw, uploadedBytesData);
+  const rawSize = typeof raw === 'string' ? new Blob([raw]).size : (uploadedBytesData ? uploadedBytesData.byteLength : 0);
+
+  updateProg(5, 'Detected format: ' + fileFormat.format + '...');
+  await new Promise(r => setTimeout(r, 20));
+
+  // Show format badge and file size in parseResults immediately
+  {
+    const parseResultsEl = document.getElementById('parseResults');
+    if (parseResultsEl) {
+      let previewH = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0">';
+      if (uploadedName) previewH += '<span style="font-size:0.9rem">' + escapeHTML(uploadedName) + '</span>';
+      previewH += '<span class="format-badge ' + fileFormat.cssClass + '">' + escapeHTML(fileFormat.format) + '</span>';
+      if (rawSize > 0) {
+        const sizeStr = formatFileSize(rawSize);
+        if (rawSize > 50 * 1024 * 1024) {
+          previewH += '<span class="file-size-warn">&#x26A0; ' + escapeHTML(sizeStr) + ' (exceeds 50MB limit)</span>';
+        } else if (rawSize > 10 * 1024 * 1024) {
+          previewH += '<span class="file-size-warn">&#x26A0; ' + escapeHTML(sizeStr) + ' (large file, may be slow)</span>';
+        } else {
+          previewH += '<span class="file-size-info">' + escapeHTML(sizeStr) + '</span>';
+        }
+      }
+      previewH += '</div>';
+      parseResultsEl.innerHTML = previewH;
+    }
+  }
+
+  // 1.3 Archive Extraction Progress — show extraction status for archive formats
+  const isArchive = /archive/i.test(fileFormat.format);
+  if (isArchive) {
+    updateProg(10, 'Extracting archive contents...');
+  } else {
+    updateProg(10, 'Cleaning & parsing input...');
+  }
   await new Promise(r => setTimeout(r, 20));
 
   let parsed;
-  const uploadedName = getUploadedName();
 
   try {
     parsed = await parseFlow(raw, uploadedName || 'NiFi Flow', { bytes: uploadedBytesData });
   } catch (e) {
     rollbackState(snapshot);
     handleError(new AppError('Parse failed: ' + e.message, { code: 'PARSE_FAILED', phase: 'parse', severity: 'high', cause: e }));
-    showStepError('parseResults', 'Failed to parse: ' + e.message);
+    // 1.2 Parse Error Diagnostics — show error with line numbers and suggestions
+    let errorH = '<div class="alert alert-error">Failed to parse: ' + escapeHTML(e.message) + '</div>';
+    errorH += buildParseErrorDiagnostics(e, raw);
+    // 1.3 Show partial results if any processors were parsed before failure
+    if (parsed && parsed._nifi && parsed._nifi.processors && parsed._nifi.processors.length > 0) {
+      errorH += '<div class="alert alert-warn" style="margin-top:8px">Partial parse: found ' + parsed._nifi.processors.length + ' processor(s) before failure.</div>';
+    }
+    const parseResultsEl = document.getElementById('parseResults');
+    if (parseResultsEl) parseResultsEl.innerHTML = (parseResultsEl.innerHTML || '') + errorH;
     if (btn) btn.disabled = false;
     setTabStatus('load', 'ready');
     if (prog) prog.style.display = 'none';
@@ -128,10 +386,16 @@ export async function parseInput() {
     try {
       const work = parsed._deferredProcessorWork;
       const batchSize = 50;
-      for (let i = 0; i < work.processors.length; i += batchSize) {
+      const totalProcs = work.processors.length;
+      for (let i = 0; i < totalProcs; i += batchSize) {
         work.batchFn(work.processors.slice(i, i + batchSize));
-        const pct = 50 + Math.round((i / work.processors.length) * 30);
-        updateProg(pct, 'Analyzing processor ' + (i + 1) + '/' + work.processors.length + '...');
+        const pct = 50 + Math.round((i / totalProcs) * 30);
+        // 1.3 Archive extraction progress — show real-time extraction count
+        if (isArchive) {
+          updateProg(pct, 'Extracting... ' + Math.min(i + batchSize, totalProcs) + '/' + totalProcs + ' files');
+        } else {
+          updateProg(pct, 'Analyzing processor ' + (i + 1) + '/' + totalProcs + '...');
+        }
         await new Promise(r => setTimeout(r, 0));
       }
       work.finalize();
@@ -149,7 +413,18 @@ export async function parseInput() {
   const nifi = parsed._nifi;
   const classifyFn = classifyNiFiProcessor;
 
-  let h = '<div class="alert alert-success" style="margin-top:16px">Successfully parsed NiFi flow: <strong>' + escapeHTML(parsed.source_name) + '</strong></div>';
+  // 1.1 Format badge + success message
+  let h = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0">';
+  if (uploadedName) h += '<span style="font-size:0.9rem">' + escapeHTML(uploadedName) + '</span>';
+  h += '<span class="format-badge ' + fileFormat.cssClass + '">' + escapeHTML(fileFormat.format) + '</span>';
+  if (rawSize > 0) h += '<span class="file-size-info">' + escapeHTML(formatFileSize(rawSize)) + '</span>';
+  h += '</div>';
+
+  h += '<div class="alert alert-success" style="margin-top:8px">Successfully parsed NiFi flow: <strong>' + escapeHTML(parsed.source_name) + '</strong></div>';
+
+  // 1.4 Flow Summary Preview Card
+  h += buildFlowSummaryCard(nifi, parsed.source_name, classifyFn);
+
   h += metricsHTML([
     { label: 'Processors', value: nifi.processors.length },
     { label: 'Connections', value: nifi.connections.length },
@@ -167,8 +442,9 @@ export async function parseInput() {
   });
   h += expanderHTML('Processor Types (' + Object.keys(typeCounts).length + ' unique)', tableHTML(['Type', 'Count', 'Role'], typeRows));
 
+  // 1.5 Parse Warnings Enhancement — categorized with severity
   if (parsed.parse_warnings.length) {
-    h += parsed.parse_warnings.map(w => '<div class="alert alert-warn" style="margin:4px 0;font-size:0.85rem">' + escapeHTML(w) + '</div>').join('');
+    h += buildCategorizedWarnings(parsed.parse_warnings);
   }
 
   const parseResultsEl = document.getElementById('parseResults');
@@ -437,22 +713,159 @@ export async function runAssessment() {
   if (unsPctBar > 0) h += '<div class="effort-seg" style="width:' + unsPctBar + '%;background:var(--red)">' + unsupportedProcs.length + ' unsupported</div>';
   h += '</div>';
 
-  // Per-Processor Confidence table
+  // 3.2 Risk-Weighted Effort Scoring — compute risk per processor
+  // Build fan-in / fan-out from depGraph
+  const riskMap = {};
+  mappings.forEach(m => {
+    const fanIn = (depGraph.fullUpstream[m.name] || []).length;
+    const fanOut = (depGraph.fullDownstream[m.name] || []).length;
+    const connectivity = fanIn * fanOut;
+    let risk = 'Low';
+    let riskCss = 'risk-low';
+    if (connectivity >= 12 || (fanIn >= 4 && fanOut >= 4)) { risk = 'Critical'; riskCss = 'risk-critical'; }
+    else if (connectivity >= 6 || fanIn >= 3 || fanOut >= 3) { risk = 'High'; riskCss = 'risk-high'; }
+    else if (connectivity >= 2 || fanIn >= 2 || fanOut >= 2) { risk = 'Med'; riskCss = 'risk-med'; }
+    riskMap[m.name] = { risk, riskCss, fanIn, fanOut, connectivity };
+  });
+
+  // 3.3 Migration Phase Suggestion — auto-assign phases from role
+  const phaseMap = {};
+  mappings.forEach(m => {
+    let phase, phaseCss;
+    if (m.role === 'source') { phase = 1; phaseCss = 'phase-1'; }
+    else if (m.role === 'sink') { phase = 3; phaseCss = 'phase-3'; }
+    else { phase = 2; phaseCss = 'phase-2'; }
+    phaseMap[m.name] = { phase, phaseCss };
+  });
+
+  // Per-Processor Confidence table with 3.1 score explanation, 3.2 risk, 3.3 phase, 3.4 justification
   h += '<hr class="divider"><h3>Per-Processor Confidence</h3>';
   const confRows = mappings.map(m => {
     const confCls = m.confidence >= CONFIDENCE_THRESHOLDS.MAPPED ? 'high' : m.confidence >= CONFIDENCE_THRESHOLDS.PARTIAL ? 'med' : 'low';
     const ups = depGraph.fullUpstream[m.name] || [];
     const downs = depGraph.fullDownstream[m.name] || [];
-    return [escapeHTML(m.name), '<span style="color:' + (ROLE_TIER_COLORS[m.role] || '#808495') + '">' + m.role + '</span>', escapeHTML(m.group), '<span class="conf-dot ' + confCls + '"></span>' + Math.round(m.confidence * 100) + '%', m.mapped ? escapeHTML((m.desc || '').substring(0, 50)) : '<em style="color:var(--red)">' + (m.gapReason || 'Unmapped').substring(0, 50) + '</em>', m.confidence >= CONFIDENCE_THRESHOLDS.MAPPED ? '0.5d' : m.confidence >= CONFIDENCE_THRESHOLDS.PARTIAL ? '2d' : '5d', ups.length + ' up / ' + downs.length + ' down'];
-  });
-  h += tableHTML(['Processor', 'Role', 'Group', 'Confidence', 'Approach', 'Effort', 'Deps'], confRows);
+    const mapEntry = NIFI_DATABRICKS_MAP[m.type];
+    const riskInfo = riskMap[m.name] || { risk: 'Low', riskCss: 'risk-low', fanIn: 0, fanOut: 0 };
+    const phaseInfo = phaseMap[m.name] || { phase: 2, phaseCss: 'phase-2' };
 
-  // Required Packages
+    // 3.1 Confidence Score Explanation tooltip
+    const templateConf = mapEntry ? Math.round(mapEntry.conf * 100) : 0;
+    const propCount = Object.keys((nifi.processors.find(p => p.name === m.name) || {}).properties || {}).length;
+    const propScore = Math.min(100, Math.round(propCount > 0 ? 80 : 50));
+    const roleScore = m.role === 'source' || m.role === 'sink' ? 90 : m.role === 'transform' ? 85 : 75;
+    let confCell = '<span class="conf-dot ' + confCls + '"></span>' + Math.round(m.confidence * 100) + '%';
+    confCell += '<span class="info-tooltip-trigger">?<span class="info-tooltip-content">';
+    confCell += '<strong>Confidence Breakdown</strong><br>';
+    confCell += 'Template: ' + templateConf + '%<br>';
+    confCell += 'Props Coverage: ' + propScore + '%<br>';
+    confCell += 'Role Match: ' + roleScore + '%';
+    confCell += '</span></span>';
+
+    // 3.4 Mapping Justification tooltip
+    let approachCell;
+    if (m.mapped) {
+      approachCell = escapeHTML((m.desc || '').substring(0, 50));
+      const justification = mapEntry
+        ? 'Mapped via ' + escapeHTML(mapEntry.cat) + ' template. ' + escapeHTML(mapEntry.notes || '')
+        : 'Role-based fallback template';
+      approachCell += '<span class="info-tooltip-trigger">?<span class="info-tooltip-content">';
+      approachCell += '<strong>Why this mapping</strong><br>' + justification;
+      approachCell += '</span></span>';
+    } else {
+      approachCell = '<em style="color:var(--red)">' + escapeHTML((m.gapReason || 'Unmapped').substring(0, 50)) + '</em>';
+    }
+
+    // 3.2 Risk column
+    const riskCell = '<span class="risk-badge ' + riskInfo.riskCss + '">' + riskInfo.risk + '</span>';
+
+    // 3.3 Phase column
+    const phaseCell = '<span class="phase-badge ' + phaseInfo.phaseCss + '">Phase ' + phaseInfo.phase + '</span>';
+
+    return [
+      escapeHTML(m.name),
+      '<span style="color:' + (ROLE_TIER_COLORS[m.role] || '#808495') + '">' + m.role + '</span>',
+      escapeHTML(m.group),
+      confCell,
+      approachCell,
+      riskCell,
+      phaseCell,
+      m.confidence >= CONFIDENCE_THRESHOLDS.MAPPED ? '0.5d' : m.confidence >= CONFIDENCE_THRESHOLDS.PARTIAL ? '2d' : '5d',
+      ups.length + ' up / ' + downs.length + ' down'
+    ];
+  });
+  h += tableHTML(['Processor', 'Role', 'Group', 'Confidence', 'Approach', 'Risk', 'Phase', 'Effort', 'Deps'], confRows);
+
+  // 3.3 Migration Phase Summary
+  const phaseCounts = { 1: 0, 2: 0, 3: 0 };
+  Object.values(phaseMap).forEach(p => { phaseCounts[p.phase]++; });
+  h += '<hr class="divider"><h3>Suggested Migration Phases</h3>';
+  h += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0">';
+  h += '<div style="flex:1;min-width:140px;padding:12px;background:var(--surface);border-radius:8px;border-left:3px solid #60a5fa">';
+  h += '<div style="font-weight:700;color:#60a5fa">Phase 1: Sources</div>';
+  h += '<div style="font-size:0.85rem;color:var(--text2)">' + phaseCounts[1] + ' processor' + (phaseCounts[1] !== 1 ? 's' : '') + '</div>';
+  h += '<div style="font-size:0.78rem;color:var(--text2);margin-top:4px">Ingestion endpoints, file readers, streaming consumers</div>';
+  h += '</div>';
+  h += '<div style="flex:1;min-width:140px;padding:12px;background:var(--surface);border-radius:8px;border-left:3px solid #c084fc">';
+  h += '<div style="font-weight:700;color:#c084fc">Phase 2: Transforms</div>';
+  h += '<div style="font-size:0.85rem;color:var(--text2)">' + phaseCounts[2] + ' processor' + (phaseCounts[2] !== 1 ? 's' : '') + '</div>';
+  h += '<div style="font-size:0.78rem;color:var(--text2);margin-top:4px">Routing, transformation, processing, enrichment</div>';
+  h += '</div>';
+  h += '<div style="flex:1;min-width:140px;padding:12px;background:var(--surface);border-radius:8px;border-left:3px solid #86efac">';
+  h += '<div style="font-weight:700;color:#86efac">Phase 3: Sinks</div>';
+  h += '<div style="font-size:0.85rem;color:var(--text2)">' + phaseCounts[3] + ' processor' + (phaseCounts[3] !== 1 ? 's' : '') + '</div>';
+  h += '<div style="font-size:0.78rem;color:var(--text2);margin-top:4px">Output writers, database sinks, notification endpoints</div>';
+  h += '</div>';
+  h += '</div>';
+
+  // 3.5 Package Dependency Intelligence — per-processor package tracking
+  const pkgToProcessors = {};  // pkg name -> Set of processor names
+  const pkgToInfo = {};        // pkg name -> PACKAGE_MAP entry
+  mappings.forEach(m => {
+    const pkgs = getProcessorPackages(m.type);
+    pkgs.forEach(pkgInfo => {
+      pkgInfo.pip.forEach(pipPkg => {
+        if (!pkgToProcessors[pipPkg]) pkgToProcessors[pipPkg] = new Set();
+        pkgToProcessors[pipPkg].add(m.name);
+        if (!pkgToInfo[pipPkg]) pkgToInfo[pipPkg] = pkgInfo;
+      });
+    });
+  });
+
   const allPkgs = new Set();
-  mappings.forEach(m => { getProcessorPackages(m.type).forEach(p => p.pip.forEach(pkg => allPkgs.add(pkg))); });
+  Object.keys(pkgToProcessors).forEach(p => allPkgs.add(p));
+
   if (allPkgs.size) {
-    h += '<hr class="divider"><h3>Required Packages</h3>';
-    h += '<pre style="background:var(--bg);padding:12px;border-radius:6px;font-size:0.8rem"># requirements.txt\n';
+    h += '<hr class="divider"><h3>Required Packages (' + allPkgs.size + ')</h3>';
+
+    // Check for potential version conflicts (packages that share base names)
+    const baseNames = {};
+    [...allPkgs].forEach(pkg => {
+      const base = pkg.replace(/[^a-zA-Z]/g, '').toLowerCase();
+      if (!baseNames[base]) baseNames[base] = [];
+      baseNames[base].push(pkg);
+    });
+    const conflicts = Object.values(baseNames).filter(v => v.length > 1);
+    if (conflicts.length) {
+      h += '<div class="pkg-warn">&#x26A0; Potential package conflicts detected: ';
+      h += conflicts.map(c => c.map(p => '<code>' + escapeHTML(p) + '</code>').join(' vs ')).join('; ');
+      h += '. Review versions carefully.</div>';
+    }
+
+    // Package cards showing which processors need each package
+    h += '<div class="pkg-grid">';
+    [...allPkgs].sort().forEach(pkg => {
+      const procs = pkgToProcessors[pkg];
+      const info = pkgToInfo[pkg];
+      h += '<div class="pkg-card">';
+      h += '<div class="pkg-name">' + escapeHTML(pkg) + '</div>';
+      if (info && info.desc) h += '<div style="font-size:0.72rem;color:var(--text2)">' + escapeHTML(info.desc) + '</div>';
+      if (info && info.dbx) h += '<div class="pkg-dbx">' + escapeHTML(info.dbx) + '</div>';
+      h += '<div class="pkg-procs">Used by: ' + [...procs].map(p => escapeHTML(p)).join(', ') + '</div>';
+      h += '</div>';
+    });
+    h += '</div>';
+
+    h += '<pre style="background:var(--bg);padding:12px;border-radius:6px;font-size:0.8rem;margin-top:8px"># requirements.txt\n';
     [...allPkgs].sort().forEach(pkg => { h += pkg + '\n'; });
     h += '</pre>';
   }
@@ -626,15 +1039,158 @@ export async function generateReport() {
     h += `</div>`;
   });
 
-  // Gap Analysis
-  if (report.gaps && report.gaps.length) {
-    h += '<hr class="divider"><h3>Gap Analysis \u2014 Unmapped Processors</h3>';
+  // Gap Analysis with Resolution Playbook (5.1)
+  if (report.gapPlaybook && report.gapPlaybook.length) {
+    h += '<hr class="divider"><h3>Gap Analysis &amp; Resolution Playbook</h3>';
+    report.gapPlaybook.forEach(g => {
+      h += `<div class="gap-card" style="margin-bottom:12px">`;
+      h += `<div class="gap-title">${escapeHTML(g.name)} <span class="gap-meta">${escapeHTML(g.type)} &middot; ${escapeHTML(g.group || 'ungrouped')}</span></div>`;
+      h += `<div class="gap-rec" style="margin-bottom:8px">${escapeHTML(g.recommendation || 'Manual implementation required')}</div>`;
+      if (g.alternatives && g.alternatives.length) {
+        h += `<div style="margin-top:8px;font-size:0.85rem"><strong>Resolution Alternatives:</strong></div>`;
+        g.alternatives.forEach((alt, idx) => {
+          const feasColor = alt.feasibility === 'High' ? '#4caf50' : alt.feasibility === 'Medium' ? '#ff9800' : '#f44336';
+          h += `<div style="margin:6px 0 6px 12px;padding:8px;background:var(--bg2);border-radius:6px;border-left:3px solid ${feasColor}">`;
+          h += `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">`;
+          h += `<strong>${idx + 1}. ${escapeHTML(alt.alternative)}</strong>`;
+          h += `<span style="font-size:0.8rem;color:${feasColor}">Feasibility: ${escapeHTML(alt.feasibility)} | Effort: ${escapeHTML(alt.effort)}</span>`;
+          h += `</div>`;
+          if (alt.snippet) {
+            h += `<pre style="margin:6px 0 0;padding:6px;background:var(--bg3);border-radius:4px;font-size:0.78rem;overflow-x:auto">${escapeHTML(alt.snippet)}</pre>`;
+          }
+          h += `</div>`;
+        });
+      }
+      h += `</div>`;
+    });
+  } else if (report.gaps && report.gaps.length) {
+    h += '<hr class="divider"><h3>Gap Analysis</h3>';
     report.gaps.forEach(g => {
       h += `<div class="gap-card">`;
       h += `<div class="gap-title">${escapeHTML(g.name)} <span class="gap-meta">${escapeHTML(g.type)} &middot; ${escapeHTML(g.group || 'ungrouped')}</span></div>`;
       h += `<div class="gap-rec">${escapeHTML(g.recommendation || 'Manual implementation required')}</div>`;
       h += `</div>`;
     });
+  }
+
+  // Per-Processor Migration Guides (5.2)
+  if (report.processorGuides && report.processorGuides.length) {
+    h += '<hr class="divider"><h3>Per-Processor Migration Guides</h3>';
+    report.processorGuides.forEach(pg => {
+      h += `<div style="margin:8px 0;padding:10px;background:var(--bg2);border-radius:8px;border:1px solid var(--border)">`;
+      h += `<div style="font-weight:700;font-size:0.95rem;margin-bottom:6px">${escapeHTML(pg.name)} <span style="color:var(--text2);font-weight:400">(${escapeHTML(pg.type)})</span></div>`;
+      h += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.85rem">`;
+      h += `<div><strong>NiFi Behavior:</strong><br>${escapeHTML(pg.nifiDescription)}</div>`;
+      h += `<div><strong>Databricks Approach:</strong><br>${escapeHTML(pg.databricksApproach)}</div>`;
+      h += `</div>`;
+      if (pg.keyDifferences && pg.keyDifferences.length) {
+        h += `<div style="margin-top:6px;font-size:0.82rem"><strong>Key Differences:</strong><ul style="margin:4px 0;padding-left:18px">`;
+        pg.keyDifferences.forEach(d => { h += `<li>${escapeHTML(d)}</li>`; });
+        h += `</ul></div>`;
+      }
+      if (pg.migrationSteps && pg.migrationSteps.length) {
+        h += `<div style="margin-top:4px;font-size:0.82rem"><strong>Migration Steps:</strong><ol style="margin:4px 0;padding-left:18px">`;
+        pg.migrationSteps.forEach(ms => { h += `<li>${escapeHTML(ms)}</li>`; });
+        h += `</ol></div>`;
+      }
+      h += `<div style="margin-top:4px;font-size:0.82rem;color:var(--text2)">Estimated effort: ${escapeHTML(pg.estimatedEffort)}</div>`;
+      h += `</div>`;
+    });
+  }
+
+  // Risk & Impact Matrix (5.3)
+  if (report.riskMatrix && report.riskMatrix.length) {
+    h += '<hr class="divider"><h3>Risk &amp; Impact Matrix</h3>';
+    h += `<div class="table-scroll"><table class="mapping-table"><thead><tr>`;
+    h += `<th>Processor</th><th>Type</th><th>Role</th><th>Criticality</th><th>Downstream</th><th>Complexity</th><th>Risk Score</th></tr></thead><tbody>`;
+    report.riskMatrix.forEach(r => {
+      const ratingColor = r.rating === 'red' ? '#f44336' : r.rating === 'amber' ? '#ff9800' : '#4caf50';
+      const ratingBg = r.rating === 'red' ? 'rgba(244,67,54,0.08)' : r.rating === 'amber' ? 'rgba(255,152,0,0.08)' : 'rgba(76,175,80,0.08)';
+      h += `<tr style="background:${ratingBg}">`;
+      h += `<td>${escapeHTML(r.name)}</td>`;
+      h += `<td>${escapeHTML(r.type)}</td>`;
+      h += `<td>${escapeHTML(r.role)}</td>`;
+      h += `<td style="text-align:center">${r.criticalityScore}/5</td>`;
+      h += `<td style="text-align:center">${escapeHTML(r.downstreamImpact)}</td>`;
+      h += `<td style="text-align:center">${r.complexityScore}/5</td>`;
+      h += `<td style="text-align:center;font-weight:700;color:${ratingColor}">${r.totalRiskScore}%</td>`;
+      h += `</tr>`;
+    });
+    h += `</tbody></table></div>`;
+    const redCount = report.riskMatrix.filter(r => r.rating === 'red').length;
+    const amberCount = report.riskMatrix.filter(r => r.rating === 'amber').length;
+    const greenCount = report.riskMatrix.filter(r => r.rating === 'green').length;
+    h += `<div style="margin-top:8px;font-size:0.85rem;display:flex;gap:16px">`;
+    h += `<span style="color:#f44336;font-weight:600">Critical: ${redCount}</span>`;
+    h += `<span style="color:#ff9800;font-weight:600">Moderate: ${amberCount}</span>`;
+    h += `<span style="color:#4caf50;font-weight:600">Low: ${greenCount}</span>`;
+    h += `</div>`;
+  }
+
+  // Timeline & Resource Estimation (5.4)
+  if (report.timeline) {
+    const tl = report.timeline;
+    h += '<hr class="divider"><h3>Timeline &amp; Resource Estimation</h3>';
+    h += metricsHTML([
+      ['Total Hours', tl.totalHours + 'h'],
+      ['Mapped Work', tl.mappedHours + 'h'],
+      ['Gap Work', tl.gapHours + 'h'],
+      ['Testing', tl.testingHours + 'h'],
+      ['Calendar Weeks', tl.totalWeeks + 'w'],
+      ['Team Size', tl.recommendedTeamSize],
+    ]);
+    h += `<div style="margin-top:12px">`;
+    const phaseColors = ['#2196F3', '#4CAF50', '#FF9800', '#9C27B0', '#F44336'];
+    tl.phases.forEach((phase, i) => {
+      const pctWidth = Math.round(phase.weeks / Math.max(tl.totalWeeks, 1) * 100);
+      h += `<div style="margin:8px 0">`;
+      h += `<div style="display:flex;justify-content:space-between;font-size:0.85rem;margin-bottom:2px">`;
+      h += `<strong>${escapeHTML(phase.name)}</strong>`;
+      h += `<span style="color:var(--text2)">${phase.weeks} week(s)</span>`;
+      h += `</div>`;
+      h += `<div class="progress-bar"><div class="progress-fill" style="width:${pctWidth}%;background:${phaseColors[i % phaseColors.length]}"></div></div>`;
+      h += `<ul style="margin:4px 0;padding-left:18px;font-size:0.82rem;color:var(--text2)">`;
+      phase.tasks.forEach(t => { h += `<li>${escapeHTML(t)}</li>`; });
+      h += `</ul></div>`;
+    });
+    h += `</div>`;
+    if (tl.teamComposition) {
+      h += `<div style="margin-top:8px;font-size:0.85rem"><strong>Recommended Team:</strong><ul style="margin:4px 0;padding-left:18px">`;
+      tl.teamComposition.forEach(tc => { h += `<li>${escapeHTML(tc)}</li>`; });
+      h += `</ul></div>`;
+    }
+  }
+
+  // Migration Success Criteria (5.5)
+  if (report.successCriteria) {
+    const sc = report.successCriteria;
+    h += '<hr class="divider"><h3>Migration Success Criteria</h3>';
+
+    h += `<div style="margin:8px 0"><strong style="font-size:0.9rem">Pipeline-Level Acceptance Criteria</strong></div>`;
+    h += `<div class="table-scroll"><table class="mapping-table"><thead><tr><th>Metric</th><th>Target</th><th>Description</th></tr></thead><tbody>`;
+    sc.pipelineCriteria.forEach(c => {
+      h += `<tr><td style="font-weight:600">${escapeHTML(c.metric)}</td><td>${escapeHTML(c.target)}</td><td style="font-size:0.85rem">${escapeHTML(c.description)}</td></tr>`;
+    });
+    h += `</tbody></table></div>`;
+
+    h += `<div style="margin:12px 0 8px"><strong style="font-size:0.9rem">Data Comparison Metrics</strong></div>`;
+    h += `<div class="table-scroll"><table class="mapping-table"><thead><tr><th>Metric</th><th>Method</th><th>Threshold</th></tr></thead><tbody>`;
+    sc.comparisonMetrics.forEach(c => {
+      h += `<tr><td style="font-weight:600">${escapeHTML(c.metric)}</td><td style="font-size:0.85rem">${escapeHTML(c.description)}</td><td>${escapeHTML(c.threshold)}</td></tr>`;
+    });
+    h += `</tbody></table></div>`;
+
+    const shownCriteria = sc.processorCriteria.slice(0, 8);
+    if (shownCriteria.length) {
+      h += `<div style="margin:12px 0 8px"><strong style="font-size:0.9rem">Processor-Level Acceptance Tests</strong> <span style="font-size:0.82rem;color:var(--text2)">(showing ${shownCriteria.length} of ${sc.processorCriteria.length})</span></div>`;
+      shownCriteria.forEach(pc => {
+        h += `<div style="margin:4px 0;padding:6px;background:var(--bg2);border-radius:4px;font-size:0.85rem">`;
+        h += `<strong>${escapeHTML(pc.name)}</strong> <span style="color:var(--text2)">(${escapeHTML(pc.type)})</span>`;
+        h += `<ul style="margin:2px 0;padding-left:16px">`;
+        pc.acceptanceTests.forEach(t => { h += `<li>${escapeHTML(t)}</li>`; });
+        h += `</ul></div>`;
+      });
+    }
   }
 
   // Recommendations

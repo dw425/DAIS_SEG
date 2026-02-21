@@ -26,6 +26,9 @@ export { generateAutoRecovery } from './auto-recovery.js';
 export { validateGeneratedCode } from './code-validator.js';
 export { resolveNotebookPlaceholders } from './placeholder-resolver.js';
 export { generateDLQWrapper } from './dlq-wrapper.js';
+export { validateNotebookCode } from './databricks-validator.js';
+export { scrubGeneratedCode } from './code-scrubber.js';
+export { checkRuntimeCompat, generateRuntimeCheck } from './runtime-compat.js';
 export { collectSmartImports } from './cell-builders/imports-cell.js';
 export { wrapWithErrorFramework } from './cell-builders/error-framework.js';
 export { generateExecutionReportCell } from './cell-builders/execution-report.js';
@@ -34,6 +37,7 @@ export { buildHeaderCell } from './cell-builders/header-cell.js';
 export { buildConfigCell } from './cell-builders/config-cell.js';
 export { buildSchemaCell } from './cell-builders/schema-cell.js';
 export { buildProcessorCell } from './cell-builders/processor-cell.js';
+export { buildPreflightCell } from './cell-builders/preflight-cell.js';
 
 /**
  * Generate both the Databricks notebook and workflow JSON from NiFi flow data.

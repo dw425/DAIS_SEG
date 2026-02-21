@@ -12,7 +12,7 @@ import { CONFIDENCE_THRESHOLDS } from '../../constants/confidence-thresholds.js'
 /**
  * Internal filter state.
  */
-let _tierFilterState = { role: 'all', conf: 'all', search: '' };
+let _tierFilterState = { role: 'all', conf: 'all', search: '', action: 'all' };
 
 /**
  * Apply tier filter to all nodes in the diagram.
@@ -32,12 +32,14 @@ function _applyTierFilter(toolbar, type, value) {
     const conf = parseFloat(el.dataset.conf || 0);
     const name = (el.dataset.name || '').toLowerCase();
     const tp = (el.dataset.type || '').toLowerCase();
+    const actions = (el.dataset.actions || '').toLowerCase();
     let show = true;
     if (_tierFilterState.role !== 'all' && role !== _tierFilterState.role) show = false;
     if (_tierFilterState.conf === 'high' && conf < CONFIDENCE_THRESHOLDS.MAPPED) show = false;
     if (_tierFilterState.conf === 'med' && (conf < CONFIDENCE_THRESHOLDS.PARTIAL || conf >= CONFIDENCE_THRESHOLDS.MAPPED)) show = false;
     if (_tierFilterState.conf === 'low' && conf >= CONFIDENCE_THRESHOLDS.PARTIAL) show = false;
     if (_tierFilterState.search && !name.includes(_tierFilterState.search.toLowerCase()) && !tp.includes(_tierFilterState.search.toLowerCase())) show = false;
+    if (_tierFilterState.action !== 'all' && !actions.includes(_tierFilterState.action)) show = false;
     el.style.opacity = show ? '1' : '0.15';
     el.style.pointerEvents = show ? '' : 'none';
   });
@@ -70,5 +72,20 @@ export function tierFilter(toolbar, type, value) {
  * Reset the filter state.
  */
 export function resetTierFilterState() {
-  _tierFilterState = { role: 'all', conf: 'all', search: '' };
+  _tierFilterState = { role: 'all', conf: 'all', search: '', action: 'all' };
 }
+
+/**
+ * Available action filter options for the toolbar.
+ */
+export const ACTION_FILTER_OPTIONS = [
+  { value: 'all', label: 'All Actions' },
+  { value: 'read', label: 'Read' },
+  { value: 'write', label: 'Write' },
+  { value: 'transform', label: 'Transform' },
+  { value: 'filter', label: 'Filter' },
+  { value: 'enrich', label: 'Enrich' },
+  { value: 'validate', label: 'Validate' },
+  { value: 'monitor', label: 'Monitor' },
+  { value: 'extract', label: 'Extract' },
+];

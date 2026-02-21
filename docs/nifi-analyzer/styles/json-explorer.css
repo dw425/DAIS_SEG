@@ -1,0 +1,115 @@
+/* ==========================================================================
+   json-explorer.css — Interactive JSON tree viewer styles
+   ========================================================================== */
+
+.json-explorer {
+  position: relative;
+  background: var(--bg, #0d1117);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.json-explorer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface, #161b22);
+  border-bottom: 1px solid var(--border);
+}
+
+.json-search-input {
+  flex: 1;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg, #0d1117);
+  color: var(--text);
+  font-size: 0.8rem;
+  outline: none;
+}
+.json-search-input:focus { border-color: var(--primary); }
+
+.json-search-count {
+  font-size: 0.75rem;
+  color: var(--text2);
+  white-space: nowrap;
+}
+
+.json-tree-container {
+  max-height: 500px;
+  overflow: auto;
+  padding: 12px;
+  font-family: var(--mono, 'Fira Code', monospace);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.json-toggle { cursor: pointer; user-select: none; }
+.json-toggle .json-arrow {
+  display: inline-block;
+  transition: transform 0.15s;
+  font-size: 0.65rem;
+  margin-right: 4px;
+  color: var(--text2);
+}
+.json-toggle.open .json-arrow { transform: rotate(90deg); }
+.json-toggle .json-count {
+  font-size: 0.7rem;
+  color: var(--text2);
+  margin-left: 6px;
+  font-style: italic;
+}
+.json-toggle.open .json-count { display: none; }
+
+.json-children.hidden { display: none; }
+.json-close-bracket.hidden { display: none; }
+
+.json-entry { padding: 1px 0; }
+
+.json-key {
+  color: #79c0ff;
+  cursor: pointer;
+}
+.json-key:hover { text-decoration: underline; }
+
+.json-string { color: #a5d6ff; cursor: pointer; }
+.json-string:hover { opacity: 0.8; }
+
+.json-number { color: #56d4dd; cursor: pointer; }
+.json-boolean { color: #ff7b72; cursor: pointer; }
+.json-null { color: #8b949e; font-style: italic; cursor: pointer; }
+.json-bracket { color: #c9d1d9; }
+.json-colon { color: #c9d1d9; }
+.json-comma { color: #8b949e; }
+.json-index { color: #8b949e; font-size: 0.75rem; }
+
+.json-path-toast {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%) translateY(10px);
+  background: var(--primary);
+  color: white;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-family: var(--mono, monospace);
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.json-path-toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.json-highlight {
+  background: rgba(234, 179, 8, 0.25);
+  border-radius: 2px;
+}

@@ -78,8 +78,10 @@ describe('generateDatabricksNotebook', () => {
 
     // First cell should be header
     expect(result.cells[0].label).toBe('Header');
-    // Second cell should be config
-    expect(result.cells[1].label).toBe('Config');
+    // Second cell should be notebook overview
+    expect(result.cells[1].label).toBe('Notebook Overview');
+    // Third cell should be environment parameters
+    expect(result.cells[2].label).toBe('Environment Parameters');
   });
 
   it('should handle empty mappings', () => {

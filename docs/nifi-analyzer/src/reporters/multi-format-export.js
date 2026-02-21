@@ -1,0 +1,207 @@
+/**
+ * reporters/multi-format-export.js — Multi-format report export
+ *
+ * Generates HTML, Markdown, and CSV exports from the final report data.
+ *
+ * @module reporters/multi-format-export
+ */
+
+/**
+ * Trigger a browser file download from a Blob.
+ * @param {Blob} blob
+ * @param {string} filename
+ */
+function triggerDownload(blob, filename) {
+  const a = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 100);
+}
+
+/**
+ * Generate a timestamped filename prefix.
+ * @param {object} [report]
+ * @returns {string}
+ */
+function filePrefix(report) {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 16);
+  const name = report?.meta?.flow_name || 'nifi_report';
+  const clean = name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 40);
+  return `${clean}_${ts}`;
+}
+
+/**
+ * Export the final report as a styled HTML document.
+ * @param {object} report - The final report JSON
+ */
+export function exportAsHTML(report) {
+  const r = report;
+  const readiness = r.assessment?.readiness_score || 'N/A';
+  let html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>NiFi Migration Report</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#333;line-height:1.6}
+h1{color:#1a73e8;border-bottom:2px solid #1a73e8;padding-bottom:8px}
+h2{color:#2c3e50;margin-top:24px}
+table{width:100%;border-collapse:collapse;margin:12px 0}
+th,td{padding:8px 12px;border:1px solid #ddd;text-align:left;font-size:0.9rem}
+th{background:#f5f5f5;font-weight:600}
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0}
+.metric-card{background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;padding:16px;text-align:center}
+.metric-value{font-size:1.8rem;font-weight:800;color:#1a73e8}
+.metric-label{font-size:0.85rem;color:#666}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:0.8rem;font-weight:600}
+.badge-green{background:#d4edda;color:#155724}
+.badge-amber{background:#fff3cd;color:#856404}
+.badge-red{background:#f8d7da;color:#721c24}
+.footer{margin-top:40px;padding-top:12px;border-top:1px solid #ddd;font-size:0.8rem;color:#999}
+</style></head><body>
+<h1>NiFi Flow Migration Report</h1>
+<p><strong>Flow:</strong> ${r.meta?.flow_name || 'Unknown'} | <strong>Generated:</strong> ${r.meta?.generated || new Date().toISOString()}</p>
+
+<h2>Summary</h2>
+<div class="metric-grid">
+<div class="metric-card"><div class="metric-value">${r.flow_summary?.processor_count || 0}</div><div class="metric-label">Processors</div></div>
+<div class="metric-card"><div class="metric-value">${r.flow_summary?.connection_count || 0}</div><div class="metric-label">Connections</div></div>
+<div class="metric-card"><div class="metric-value">${r.flow_summary?.external_system_count || 0}</div><div class="metric-label">External Systems</div></div>
+<div class="metric-card"><div class="metric-value">${readiness}${typeof readiness === 'number' ? '%' : ''}</div><div class="metric-label">Readiness Score</div></div>
+</div>`;
+
+  if (r.assessment) {
+    html += `<h2>Assessment</h2>
+<div class="metric-grid">
+<div class="metric-card"><div class="metric-value" style="color:#28a745">${r.assessment.auto_convertible || 0}</div><div class="metric-label">Auto-Convertible</div></div>
+<div class="metric-card"><div class="metric-value" style="color:#ffc107">${r.assessment.manual_conversion || 0}</div><div class="metric-label">Manual Conversion</div></div>
+<div class="metric-card"><div class="metric-value" style="color:#dc3545">${r.assessment.unsupported || 0}</div><div class="metric-label">Unsupported</div></div>
+</div>`;
+  }
+
+  if (r.processors && r.processors.length) {
+    html += `<h2>Processors (${r.processors.length})</h2>
+<table><thead><tr><th>Name</th><th>Type</th><th>Role</th><th>Group</th><th>State</th></tr></thead><tbody>`;
+    r.processors.forEach(p => {
+      html += `<tr><td>${p.name}</td><td><code>${p.type}</code></td><td>${p.role || '-'}</td><td>${p.group || '-'}</td><td>${p.state || '-'}</td></tr>`;
+    });
+    html += '</tbody></table>';
+  }
+
+  if (r.assessment?.mappings?.length) {
+    html += `<h2>Mapping Assessment</h2>
+<table><thead><tr><th>Processor</th><th>NiFi Type</th><th>Mapped?</th><th>Databricks Equivalent</th><th>Confidence</th></tr></thead><tbody>`;
+    r.assessment.mappings.forEach(m => {
+      const confCls = m.confidence >= 0.8 ? 'badge-green' : m.confidence >= 0.5 ? 'badge-amber' : 'badge-red';
+      html += `<tr><td>${m.name}</td><td><code>${m.nifi_type}</code></td><td>${m.mapped ? 'Yes' : 'No'}</td><td>${m.databricks || '-'}</td><td><span class="badge ${confCls}">${Math.round((m.confidence || 0) * 100)}%</span></td></tr>`;
+    });
+    html += '</tbody></table>';
+  }
+
+  html += `<div class="footer">Generated by NiFi Flow Analyzer v2.0.1 | ${new Date().toISOString()}</div>
+</body></html>`;
+
+  triggerDownload(new Blob([html], { type: 'text/html' }), filePrefix(report) + '_report.html');
+}
+
+/**
+ * Export the final report as Markdown.
+ * @param {object} report - The final report JSON
+ */
+export function exportAsMarkdown(report) {
+  const r = report;
+  let md = `# NiFi Flow Migration Report\n\n`;
+  md += `> **Flow:** ${r.meta?.flow_name || 'Unknown'} | **Generated:** ${r.meta?.generated || new Date().toISOString()}\n\n`;
+
+  md += `## Summary\n\n`;
+  md += `| Metric | Value |\n|--------|-------|\n`;
+  md += `| Processors | ${r.flow_summary?.processor_count || 0} |\n`;
+  md += `| Connections | ${r.flow_summary?.connection_count || 0} |\n`;
+  md += `| Process Groups | ${r.flow_summary?.process_group_count || 0} |\n`;
+  md += `| Controller Services | ${r.flow_summary?.controller_service_count || 0} |\n`;
+  md += `| External Systems | ${r.flow_summary?.external_system_count || 0} |\n\n`;
+
+  if (r.assessment) {
+    md += `## Assessment\n\n`;
+    md += `| Metric | Value |\n|--------|-------|\n`;
+    md += `| Readiness Score | ${r.assessment.readiness_score}% |\n`;
+    md += `| Auto-Convertible | ${r.assessment.auto_convertible} |\n`;
+    md += `| Manual Conversion | ${r.assessment.manual_conversion} |\n`;
+    md += `| Unsupported | ${r.assessment.unsupported} |\n\n`;
+  }
+
+  if (r.processors && r.processors.length) {
+    md += `## Processors (${r.processors.length})\n\n`;
+    md += `| Name | Type | Role | Group |\n|------|------|------|-------|\n`;
+    r.processors.forEach(p => {
+      md += `| ${p.name} | ${p.type} | ${p.role || '-'} | ${p.group || '-'} |\n`;
+    });
+    md += '\n';
+  }
+
+  if (r.assessment?.mappings?.length) {
+    md += `## Mapping Assessment\n\n`;
+    md += `| Processor | NiFi Type | Mapped | Databricks | Confidence |\n|-----------|-----------|--------|------------|------------|\n`;
+    r.assessment.mappings.forEach(m => {
+      md += `| ${m.name} | ${m.nifi_type} | ${m.mapped ? 'Yes' : 'No'} | ${m.databricks || '-'} | ${Math.round((m.confidence || 0) * 100)}% |\n`;
+    });
+    md += '\n';
+  }
+
+  md += `---\n*Generated by NiFi Flow Analyzer v2.0.1 | ${new Date().toISOString()}*\n`;
+
+  triggerDownload(new Blob([md], { type: 'text/markdown' }), filePrefix(report) + '_report.md');
+}
+
+/**
+ * Export processor list as CSV.
+ * @param {object} report - The final report JSON
+ */
+export function exportProcessorsCSV(report) {
+  const rows = [['Name', 'Type', 'Role', 'Group', 'State', 'Scheduling Strategy', 'Scheduling Period']];
+  (report.processors || []).forEach(p => {
+    rows.push([
+      csvEscape(p.name),
+      csvEscape(p.type),
+      csvEscape(p.role || ''),
+      csvEscape(p.group || ''),
+      csvEscape(p.state || ''),
+      csvEscape(p.scheduling?.strategy || ''),
+      csvEscape(p.scheduling?.period || ''),
+    ]);
+  });
+  const csv = rows.map(r => r.join(',')).join('\n');
+  triggerDownload(new Blob([csv], { type: 'text/csv' }), filePrefix(report) + '_processors.csv');
+}
+
+/**
+ * Export gap list as CSV.
+ * @param {object} report - The final report JSON
+ */
+export function exportGapsCSV(report) {
+  const rows = [['Processor', 'NiFi Type', 'Mapped', 'Databricks Equivalent', 'Confidence', 'Role']];
+  (report.assessment?.mappings || []).filter(m => !m.mapped).forEach(m => {
+    rows.push([
+      csvEscape(m.name),
+      csvEscape(m.nifi_type),
+      'No',
+      csvEscape(m.databricks || ''),
+      Math.round((m.confidence || 0) * 100) + '%',
+      csvEscape(m.role || ''),
+    ]);
+  });
+  const csv = rows.map(r => r.join(',')).join('\n');
+  triggerDownload(new Blob([csv], { type: 'text/csv' }), filePrefix(report) + '_gaps.csv');
+}
+
+/**
+ * Escape a CSV value.
+ * @param {string} s
+ * @returns {string}
+ */
+function csvEscape(s) {
+  s = String(s || '');
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}

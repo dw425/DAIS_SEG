@@ -25,6 +25,10 @@ import { generateValidationCell } from './cell-builders/validation-cell.js';
 import { generateLoopFromCycle } from './cycle-loop-generator.js';
 import { resolveNotebookPlaceholders } from './placeholder-resolver.js';
 import { validateGeneratedCode } from './code-validator.js';
+import { validateNotebookCode } from './databricks-validator.js';
+import { scrubGeneratedCode } from './code-scrubber.js';
+import { checkRuntimeCompat, generateRuntimeCheck } from './runtime-compat.js';
+import { buildPreflightCell } from './cell-builders/preflight-cell.js';
 
 /**
  * Generate a complete Databricks notebook from NiFi processor mappings.
@@ -68,6 +72,91 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
     qualifiedSchema
   }));
 
+  // IMPROVEMENT #11: Notebook Structure Overview Cell (4.2)
+  const overviewLines = [
+    `# Notebook Overview: ${flowName}`,
+    `# Generated: ${new Date().toISOString().split('T')[0]}`,
+    `# Processors: ${sortedMappings.length} total | ${mapCount} mapped | ${sortedMappings.length - mapCount} manual`,
+    `# Coverage: ${covPct}% | Target: ${qualifiedSchema}`,
+    '#',
+    '# Cell Structure:',
+    '#   1. Header & Overview          - Migration metadata and notebook map',
+    '#   2. Environment Parameters     - Widget-based dev/staging/prod config',
+    '#   3. Package Installation        - pip install for third-party libraries',
+    '#   4. Imports & Configuration     - PySpark imports, catalog/schema setup',
+    '#   5. Pre-flight Validation       - Verify cluster, packages, secrets',
+    '#   6. Execution Framework         - Tracking tables, dead letter queue',
+    '#   7. Schema DDL                  - Unity Catalog table definitions',
+    '#   8. DataFrame Lineage Map       - Variable dependency graph',
+  ];
+  let overviewCellIdx = 9;
+  const groupEntries = Object.entries(
+    (() => { const g = {}; sortedMappings.forEach(m => { const gn = m.group || '(root)'; if (!g[gn]) g[gn] = []; g[gn].push(m); }); return g; })()
+  );
+  groupEntries.forEach(([gName, procs]) => {
+    overviewLines.push(`#   ${overviewCellIdx}. Process Group: ${gName} (${procs.length} processors)`);
+    overviewCellIdx++;
+    procs.forEach(m => {
+      const status = m.mapped ? (m.confidence >= 0.8 ? 'AUTO' : 'PARTIAL') : 'MANUAL';
+      const deps = (lineage[m.name]?.inputVars || []).map(v => v.procName).join(', ') || 'none';
+      overviewLines.push(`#       ${overviewCellIdx}. [${status}] ${m.name} (${m.type}) -> deps: ${deps}`);
+      overviewCellIdx++;
+    });
+  });
+  overviewLines.push(`#   ${overviewCellIdx}. Execution Report`);
+  overviewLines.push(`#   ${overviewCellIdx + 1}. End-to-End Validation`);
+  overviewLines.push(`#   ${overviewCellIdx + 2}. Pipeline Complete`);
+  overviewLines.push('#');
+  overviewLines.push(`# Compute: ${cfg.computeType || 'cluster'} | Runtime: DBR ${cfg.runtimeVersion || '14.3'}`);
+  overviewLines.push(`# Cloud: ${cfg.cloudProvider || 'azure'} | Node: ${cfg.nodeType || 'Standard_DS3_v2'}`);
+  cells.push({
+    type: 'code', label: 'Notebook Overview',
+    source: overviewLines.join('\n') + '\nprint("[OVERVIEW] Notebook structure loaded")',
+    role: 'config'
+  });
+
+  // IMPROVEMENT #12: Environment Parameter Cell (4.3)
+  const envParamCode = [
+    '# Environment Parameters - Widget-based configuration',
+    '# Toggle between dev/staging/prod environments',
+    'dbutils.widgets.dropdown("environment", "dev", ["dev", "staging", "prod"], "Target Environment")',
+    'dbutils.widgets.text("catalog_override", "", "Catalog Override (blank=use default)")',
+    'dbutils.widgets.text("schema_override", "", "Schema Override (blank=use default)")',
+    'dbutils.widgets.dropdown("dry_run", "false", ["true", "false"], "Dry Run Mode")',
+    'dbutils.widgets.dropdown("log_level", "INFO", ["DEBUG", "INFO", "WARN", "ERROR"], "Log Level")',
+    '',
+    '_ENV = dbutils.widgets.get("environment")',
+    '_DRY_RUN = dbutils.widgets.get("dry_run") == "true"',
+    '_LOG_LEVEL = dbutils.widgets.get("log_level")',
+    '',
+    '# Environment-specific configuration',
+    '_ENV_CONFIG = {',
+    `    "dev":     {"catalog": "${catalogName || 'dev_catalog'}",     "schema": "${schemaName}_dev",     "parallel": 2},`,
+    `    "staging": {"catalog": "${catalogName || 'staging_catalog'}", "schema": "${schemaName}_staging", "parallel": 4},`,
+    `    "prod":    {"catalog": "${catalogName || catalogName}",       "schema": "${schemaName}",         "parallel": 8},`,
+    '}',
+    '',
+    '# Apply overrides',
+    '_active_cfg = _ENV_CONFIG[_ENV]',
+    '_cat_override = dbutils.widgets.get("catalog_override")',
+    '_sch_override = dbutils.widgets.get("schema_override")',
+    'if _cat_override: _active_cfg["catalog"] = _cat_override',
+    'if _sch_override: _active_cfg["schema"] = _sch_override',
+    '',
+    'ACTIVE_CATALOG = _active_cfg["catalog"]',
+    'ACTIVE_SCHEMA = _active_cfg["schema"]',
+    '',
+    'if _DRY_RUN:',
+    '    print(f"[DRY RUN] Environment: {_ENV} | Catalog: {ACTIVE_CATALOG} | Schema: {ACTIVE_SCHEMA}")',
+    'else:',
+    '    print(f"[LIVE] Environment: {_ENV} | Catalog: {ACTIVE_CATALOG} | Schema: {ACTIVE_SCHEMA}")',
+  ].join('\n');
+  cells.push({
+    type: 'code', label: 'Environment Parameters',
+    source: envParamCode,
+    role: 'config'
+  });
+
   // Pip install cell (if third-party packages are needed)
   if (smartImports.pipCell) {
     cells.push(smartImports.pipCell);
@@ -80,6 +169,23 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
     schemaName,
     secretScope: cfg.secretScope
   }));
+
+  // Pre-flight validation cell
+  const preflightPkgs = (smartImports.packages || []).filter(p => p !== 'pyspark');
+  const preflightSecrets = [];
+  // Scan mappings for dbutils.secrets.get references
+  sortedMappings.forEach(m => {
+    if (!m.code) return;
+    const secretMatches = m.code.matchAll(/dbutils\.secrets\.get\s*\(\s*scope\s*=\s*["']([^"']+)["']\s*,\s*key\s*=\s*["']([^"']+)["']/g);
+    for (const sm of secretMatches) {
+      preflightSecrets.push(sm[2]);
+    }
+  });
+  cells.push(buildPreflightCell(
+    { catalog: catalogName, schema: schemaName, secretScope: cfg.secretScope },
+    preflightPkgs,
+    [...new Set(preflightSecrets)]
+  ));
 
   // Execution tracking tables (IMPROVEMENT #5)
   cells.push({
@@ -127,6 +233,116 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
         cellIndex
       }));
     });
+  });
+
+  // IMPROVEMENT #13: Data Validation Cells (4.4) — input/output schema checks, null flags, checkpoints
+  const sourceProcsForValidation = sortedMappings.filter(m => m.role === 'source' && m.mapped);
+  const sinkProcsForValidation = sortedMappings.filter(m => m.role === 'sink' && m.mapped);
+
+  if (sourceProcsForValidation.length > 0) {
+    const inputValLines = [
+      '# Input Data Validation',
+      '# Verify schema, record counts, and null rates for source DataFrames',
+      'from pyspark.sql.functions import col, count, when, lit',
+      '',
+      '_input_validation_results = []',
+    ];
+    sourceProcsForValidation.slice(0, 15).forEach(m => {
+      const vn = 'df_' + sanitizeVarName(m.name);
+      inputValLines.push(
+        `try:`,
+        `    _df = ${vn}`,
+        `    _row_count = _df.count()`,
+        `    _col_count = len(_df.columns)`,
+        `    _null_counts = {c: _df.where(col(c).isNull()).count() for c in _df.columns[:20]}`,
+        `    _null_pct = {c: round(n / max(_row_count, 1) * 100, 1) for c, n in _null_counts.items()}`,
+        `    _high_nulls = [c for c, p in _null_pct.items() if p > 50]`,
+        `    _result = {"processor": "${m.name}", "rows": _row_count, "columns": _col_count, "high_null_cols": _high_nulls, "schema": _df.dtypes[:10]}`,
+        `    _input_validation_results.append(_result)`,
+        `    _status = "WARN" if _high_nulls else "OK"`,
+        `    print(f"[{_status}] ${m.name}: {_row_count} rows, {_col_count} cols" + (f", HIGH NULLS: {_high_nulls}" if _high_nulls else ""))`,
+        `except NameError:`,
+        `    print(f"[SKIP] ${m.name}: DataFrame not yet defined")`,
+        `except Exception as _e:`,
+        `    print(f"[FAIL] ${m.name}: {_e}")`,
+        '',
+      );
+    });
+    inputValLines.push('print(f"[INPUT VALIDATION] {len(_input_validation_results)} source(s) checked")');
+    cells.push({
+      type: 'code', label: 'Input Data Validation',
+      source: inputValLines.join('\n'),
+      role: 'utility', processor: 'InputValidation', procType: 'Internal', confidence: 1.0, mapped: true
+    });
+  }
+
+  if (sinkProcsForValidation.length > 0) {
+    const outputValLines = [
+      '# Output Data Validation',
+      '# Verify schema consistency, record counts, and checkpoint for sink DataFrames',
+      'from pyspark.sql.functions import col, count, when, lit',
+      '',
+      '_output_validation_results = []',
+    ];
+    sinkProcsForValidation.slice(0, 15).forEach(m => {
+      const vn = 'df_' + sanitizeVarName(m.name);
+      outputValLines.push(
+        `try:`,
+        `    _df = ${vn}`,
+        `    _row_count = _df.count()`,
+        `    _col_count = len(_df.columns)`,
+        `    _null_counts = {c: _df.where(col(c).isNull()).count() for c in _df.columns[:20]}`,
+        `    _null_pct = {c: round(n / max(_row_count, 1) * 100, 1) for c, n in _null_counts.items()}`,
+        `    _high_nulls = [c for c, p in _null_pct.items() if p > 50]`,
+        `    _result = {"processor": "${m.name}", "rows": _row_count, "columns": _col_count, "high_null_cols": _high_nulls}`,
+        `    _output_validation_results.append(_result)`,
+        `    _status = "WARN" if _high_nulls else "OK"`,
+        `    print(f"[{_status}] ${m.name}: {_row_count} rows, {_col_count} cols" + (f", HIGH NULLS: {_high_nulls}" if _high_nulls else ""))`,
+        `except NameError:`,
+        `    print(f"[SKIP] ${m.name}: DataFrame not yet defined")`,
+        `except Exception as _e:`,
+        `    print(f"[FAIL] ${m.name}: {_e}")`,
+        '',
+      );
+    });
+    outputValLines.push('print(f"[OUTPUT VALIDATION] {len(_output_validation_results)} sink(s) checked")');
+    cells.push({
+      type: 'code', label: 'Output Data Validation',
+      source: outputValLines.join('\n'),
+      role: 'utility', processor: 'OutputValidation', procType: 'Internal', confidence: 1.0, mapped: true
+    });
+  }
+
+  // Checkpoint cell
+  cells.push({
+    type: 'code', label: 'Pipeline Checkpoint',
+    source: [
+      '# Pipeline Checkpoint',
+      '# Persist intermediate state for recovery and auditing',
+      'import json',
+      'from datetime import datetime',
+      '',
+      '_checkpoint_data = {',
+      '    "pipeline": "' + qualifiedSchema + '",',
+      '    "checkpoint_time": datetime.now().isoformat(),',
+      '    "environment": _ENV if "_ENV" in dir() else "unknown",',
+      '    "dry_run": _DRY_RUN if "_DRY_RUN" in dir() else False,',
+      '    "source_validations": len(_input_validation_results) if "_input_validation_results" in dir() else 0,',
+      '    "sink_validations": len(_output_validation_results) if "_output_validation_results" in dir() else 0,',
+      '}',
+      '',
+      'try:',
+      '    _ckpt_df = spark.createDataFrame([{',
+      '        "checkpoint_json": json.dumps(_checkpoint_data),',
+      '        "checkpoint_time": datetime.now().isoformat(),',
+      '        "pipeline": "' + qualifiedSchema + '"',
+      '    }])',
+      '    _ckpt_df.write.mode("append").saveAsTable("' + qualifiedSchema + '.__pipeline_checkpoints")',
+      '    print(f"[CHECKPOINT] State saved at {_checkpoint_data[\'checkpoint_time\']}")',
+      'except Exception as _e:',
+      '    print(f"[CHECKPOINT] Save failed (non-fatal): {_e}")',
+    ].join('\n'),
+    role: 'utility', processor: 'Checkpoint', procType: 'Internal', confidence: 1.0, mapped: true
   });
 
   // IMPROVEMENT #9: Execution Report cell
@@ -202,7 +418,58 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
     }
   });
 
-  // Validate generated code
+  // Code scrubbing: remove stubs, fix bare except, replace deprecated paths
+  scrubGeneratedCode(cells);
+
+  // Runtime compatibility check
+  const targetDBR = cfg.runtimeVersion || '14.3';
+  const compatResult = checkRuntimeCompat(cells, targetDBR);
+  if (parseFloat(compatResult.minRequired) > 0) {
+    // Insert runtime check cell near the top (after config cells)
+    const runtimeCheckCode = generateRuntimeCheck(compatResult.minRequired);
+    const configEndIdx = cells.findIndex(c => c.role !== 'config' && c.type !== 'md') || 3;
+    cells.splice(configEndIdx, 0, {
+      type: 'code', label: 'Runtime Version Check',
+      source: runtimeCheckCode,
+      role: 'config', processor: '__runtime_check', procType: 'RuntimeCheck',
+      confidence: 1.0, mapped: true
+    });
+  }
+  if (compatResult.issues.length > 0) {
+    cells.push({
+      type: 'code', label: 'Runtime Compatibility Warnings',
+      source: '# Runtime Compatibility Warnings\n' +
+        compatResult.issues.map(i =>
+          `# Cell ${i.cell}: "${i.feature}" requires DBR ${i.minDBR}+ (target: ${targetDBR})`
+        ).join('\n') +
+        `\nprint("[COMPAT] ${compatResult.issues.length} feature(s) may require DBR ${compatResult.minRequired}+")`,
+      role: 'utility', processor: 'CompatCheck', procType: 'Internal', confidence: 1.0, mapped: true
+    });
+  }
+
+  // Databricks-specific validation (comprehensive)
+  const dbxValidation = validateNotebookCode(cells);
+  if (dbxValidation.issues.length > 0) {
+    const issuesByGroup = {};
+    dbxValidation.issues.forEach(i => {
+      if (!issuesByGroup[i.severity]) issuesByGroup[i.severity] = [];
+      issuesByGroup[i.severity].push(i);
+    });
+    const reportLines = ['# Databricks Code Validation Report',
+      `# Score: ${dbxValidation.score}/100`,
+      `# Issues: ${dbxValidation.issues.length} (${Object.keys(issuesByGroup).map(s => `${s}: ${issuesByGroup[s].length}`).join(', ')})`];
+    dbxValidation.issues.forEach(i => {
+      reportLines.push(`# [${i.severity.toUpperCase()}] Cell ${i.cell}: ${i.code} - ${i.message}`);
+      reportLines.push(`#   Fix: ${i.fix}`);
+    });
+    cells.push({
+      type: 'code', label: 'Databricks Validation Report',
+      source: reportLines.join('\n') + `\nprint("[VALIDATION] Score: ${dbxValidation.score}/100, ${dbxValidation.issues.length} issues found")`,
+      role: 'utility', processor: 'DbxValidator', procType: 'Internal', confidence: 1.0, mapped: true
+    });
+  }
+
+  // Legacy validation (original code validator)
   const _codeValidation = validateGeneratedCode(cells.map(c => c.source || ''));
   const _validationIssues = _codeValidation.filter(v => !v.valid);
   if (_validationIssues.length > 0) {

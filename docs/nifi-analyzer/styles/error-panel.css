@@ -1,0 +1,25 @@
+/* ==========================================================================
+   error-panel.css — Fixed-bottom error & warning panel
+   ========================================================================== */
+
+/* Error Panel */
+.error-panel { position:fixed; bottom:0; left:0; right:0; z-index:1000; background:var(--bg, #0e1117); border-top:2px solid var(--red, #EF4444); max-height:40vh; transition:max-height 0.3s; }
+.error-panel.collapsed { max-height:36px; overflow:hidden; }
+.error-panel-header { display:flex; align-items:center; gap:8px; padding:8px 16px; cursor:pointer; font-weight:600; font-size:0.85rem; }
+.error-panel-arrow { margin-left:auto; transition:transform 0.3s; }
+.error-panel.collapsed .error-panel-arrow { transform:rotate(180deg); }
+.error-badge { background:var(--red, #EF4444); color:white; border-radius:10px; padding:1px 7px; font-size:0.75rem; font-weight:700; }
+.error-badge.hidden { display:none; }
+.error-panel-body { overflow-y:auto; max-height:calc(40vh - 36px); padding:0 16px 12px; }
+.error-panel-toolbar { display:flex; gap:6px; margin-bottom:8px; }
+.error-list { font-size:0.8rem; }
+.error-item { padding:6px 8px; border-bottom:1px solid var(--surface2, #262730); display:flex; gap:8px; align-items:flex-start; cursor:pointer; }
+.error-item:hover { background:var(--surface, #1a1d27); }
+.error-severity { flex-shrink:0; }
+.error-phase { font-size:0.7rem; padding:1px 5px; border-radius:3px; background:var(--surface2, #262730); color:var(--text2, #808495); flex-shrink:0; }
+.error-message { flex:1; }
+.error-timestamp { font-size:0.7rem; color:var(--text2, #808495); flex-shrink:0; }
+.error-fix { font-size:0.75rem; color:var(--text2, #808495); margin-top:3px; font-style:italic; }
+.error-stack { font-size:0.7rem; color:var(--text2, #808495); margin-top:4px; white-space:pre-wrap; font-family:var(--mono, monospace); display:none; }
+.error-item.expanded .error-stack { display:block; }
+.btn-sm { font-size:0.75rem; padding:3px 8px; }

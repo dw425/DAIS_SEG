@@ -34,26 +34,32 @@ export async function analyzeIntent({
   const nifiIntents = [];
 
   processors.forEach(p => {
-    const role = classifyNiFiProcessor(p.type);
-    let intent = '';
-    const props = p.properties || {};
-    if (role === 'source') {
-      const targets = Object.values(props).filter(v => v && typeof v === 'string').join(' ');
-      const sysMatch = targets.match(/\b(s3|hdfs|kafka|jdbc|file|ftp|sftp|http)/i);
-      intent = 'INGEST data' + (sysMatch ? ' from ' + sysMatch[0].toUpperCase() : '');
-    } else if (role === 'sink') {
-      intent = 'WRITE/OUTPUT data' + (props['Directory'] ? ' to ' + props['Directory'] : '') + (props['Topic Name'] ? ' to Kafka:' + props['Topic Name'] : '');
-    } else if (role === 'transform') {
-      intent = 'TRANSFORM data' + (p.type.includes('JSON') ? ' (JSON)' : p.type.includes('SQL') ? ' (SQL)' : p.type.includes('Attribute') ? ' (attributes)' : '');
-    } else if (role === 'route') {
-      const routeCount = Object.keys(props).filter(k => k !== 'Routing Strategy').length;
-      intent = 'ROUTE/BRANCH' + (routeCount > 0 ? ' (' + routeCount + ' conditions)' : '');
-    } else if (role === 'process') {
-      intent = 'PROCESS data (' + p.type.replace(/^org\.apache\.nifi\.processors?\.\w+\./, '') + ')';
-    } else {
-      intent = 'UTILITY (' + p.type.replace(/^org\.apache\.nifi\.processors?\.\w+\./, '') + ')';
+    try {
+      const role = classifyNiFiProcessor(p.type);
+      let intent = '';
+      const props = p.properties || {};
+      if (role === 'source') {
+        const targets = Object.values(props).filter(v => v && typeof v === 'string').join(' ');
+        const sysMatch = targets.match(/\b(s3|hdfs|kafka|jdbc|file|ftp|sftp|http)/i);
+        intent = 'INGEST data' + (sysMatch ? ' from ' + sysMatch[0].toUpperCase() : '');
+      } else if (role === 'sink') {
+        intent = 'WRITE/OUTPUT data' + (props['Directory'] ? ' to ' + props['Directory'] : '') + (props['Topic Name'] ? ' to Kafka:' + props['Topic Name'] : '');
+      } else if (role === 'transform') {
+        intent = 'TRANSFORM data' + (p.type.includes('JSON') ? ' (JSON)' : p.type.includes('SQL') ? ' (SQL)' : p.type.includes('Attribute') ? ' (attributes)' : '');
+      } else if (role === 'route') {
+        const routeCount = Object.keys(props).filter(k => k !== 'Routing Strategy').length;
+        intent = 'ROUTE/BRANCH' + (routeCount > 0 ? ' (' + routeCount + ' conditions)' : '');
+      } else if (role === 'process') {
+        intent = 'PROCESS data (' + p.type.replace(/^org\.apache\.nifi\.processors?\.\w+\./, '') + ')';
+      } else {
+        intent = 'UTILITY (' + p.type.replace(/^org\.apache\.nifi\.processors?\.\w+\./, '') + ')';
+      }
+      nifiIntents.push({ name: p.name, type: p.type, role, intent, props });
+    } catch (err) {
+      // Log and skip this processor rather than failing the entire analysis
+      console.warn('[intent-analyzer] Error processing ' + (p.name || 'unknown') + ':', err);
+      nifiIntents.push({ name: p.name || 'unknown', type: p.type || 'unknown', role: 'unknown', intent: 'ERROR: could not classify', props: p.properties || {} });
     }
-    nifiIntents.push({ name: p.name, type: p.type, role, intent, props });
   });
 
   let intentMatched = 0, intentPartial = 0, intentMissing = 0;

@@ -161,7 +161,23 @@ export function renderNodes(container, tierData, nodeEls, _ms, detailEl, diagram
         el.style.borderTopColor = roleColor;
         el.style.borderTopWidth = '3px';
         el.style.minWidth = '160px';
-        el.style.maxWidth = '240px';
+        el.style.maxWidth = '260px';
+        // Store action types for filtering
+        if (node.actionTypes && node.actionTypes.length) {
+          el.dataset.actions = node.actionTypes.join(',');
+        }
+        if (node.stage) {
+          el.dataset.stage = node.stage;
+        }
+        // Stage label (top-left corner)
+        if (node.stageLabel) {
+          const stageEl = document.createElement('div');
+          stageEl.className = 'node-stage-label';
+          stageEl.style.color = node.stageColor || '#6366F1';
+          stageEl.style.borderColor = node.stageColor || '#6366F1';
+          stageEl.textContent = node.stageLabel;
+          el.appendChild(stageEl);
+        }
         // Cycle badge
         if (node.inCycle) {
           const cyBadge = document.createElement('div');
@@ -182,6 +198,24 @@ export function renderNodes(container, tierData, nodeEls, _ms, detailEl, diagram
         badge.textContent = node.procCount || 0;
         badge.title = (node.procCount || 0) + ' processors';
         el.appendChild(badge);
+        // Subcategory badges (top 3)
+        if (node.subcategories && node.subcategories.length) {
+          const subDiv = document.createElement('div');
+          subDiv.className = 'node-subcategories';
+          node.subcategories.slice(0, 3).forEach(sub => {
+            const chip = document.createElement('span');
+            chip.className = 'ns ns-sub';
+            chip.textContent = sub;
+            subDiv.appendChild(chip);
+          });
+          if (node.subcategories.length > 3) {
+            const more = document.createElement('span');
+            more.className = 'ns ns-sub-more';
+            more.textContent = '+' + (node.subcategories.length - 3);
+            subDiv.appendChild(more);
+          }
+          el.appendChild(subDiv);
+        }
         // Colored stat badges
         const statsDiv = document.createElement('div');
         statsDiv.className = 'node-stats';
@@ -193,6 +227,26 @@ export function renderNodes(container, tierData, nodeEls, _ms, detailEl, diagram
         if (node.utilityCount) statsHtml += `<span class="ns" style="background:#808495;color:white">${node.utilityCount} util</span>`;
         statsDiv.innerHTML = statsHtml;
         el.appendChild(statsDiv);
+        // Attribute indicators
+        if ((node.attrCreates && node.attrCreates.length) || (node.attrReads && node.attrReads.length)) {
+          const attrDiv = document.createElement('div');
+          attrDiv.className = 'node-attr-indicators';
+          if (node.attrCreates.length) {
+            const cBadge = document.createElement('span');
+            cBadge.className = 'ns ns-attr-create';
+            cBadge.textContent = node.attrCreates.length + ' attr\u2191';
+            cBadge.title = 'Creates: ' + node.attrCreates.slice(0, 5).join(', ') + (node.attrCreates.length > 5 ? '...' : '');
+            attrDiv.appendChild(cBadge);
+          }
+          if (node.attrReads.length) {
+            const rBadge = document.createElement('span');
+            rBadge.className = 'ns ns-attr-read';
+            rBadge.textContent = node.attrReads.length + ' attr\u2193';
+            rBadge.title = 'Reads: ' + node.attrReads.slice(0, 5).join(', ') + (node.attrReads.length > 5 ? '...' : '');
+            attrDiv.appendChild(rBadge);
+          }
+          el.appendChild(attrDiv);
+        }
         // Expand indicator
         const expandInd = document.createElement('div');
         expandInd.className = 'expand-indicator';

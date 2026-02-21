@@ -17,9 +17,9 @@ export const ROLE_FALLBACK_TEMPLATES = {
     conf: 0.70
   },
   route: {
-    tpl: '# Route processor: {type}\n# Conditional DataFrame routing via filter\nfrom pyspark.sql.functions import col\n_condition = "1=1"  # TODO: translate NiFi routing rules\ndf_{v}_matched = df_{in}.filter(_condition)\ndf_{v}_unmatched = df_{in}.filter(f"NOT ({_condition})")\ndf_{v} = df_{v}_matched\nprint(f"[ROUTE] {v}: matched={{df_{v}_matched.count()}}, unmatched={{df_{v}_unmatched.count()}}")',
-    desc: 'Route - DataFrame filter routing',
-    conf: 0.70
+    tpl: '# Route processor: {type}\n# Conditional DataFrame routing via filter\nfrom pyspark.sql.functions import col, lit\n\n# Parse routing conditions from processor properties\n_route_conditions = {routeConditions}\nif _route_conditions:\n    for _route_name, _route_expr in _route_conditions.items():\n        try:\n            globals()[f"df_{v}_{_route_name}"] = df_{in}.filter(_route_expr)\n        except Exception as _route_err:\n            raise NotImplementedError(\n                f"Route condition for {type}/{_route_name} requires manual translation: "\n                f"{_route_expr} (error: {_route_err})"\n            )\n    # Default: rows not matching any named route\n    _matched_union = None\n    for _rn in _route_conditions:\n        _rdf = globals().get(f"df_{v}_{_rn}")\n        if _rdf is not None:\n            _matched_union = _rdf if _matched_union is None else _matched_union.union(_rdf)\n    df_{v}_unmatched = df_{in}.subtract(_matched_union) if _matched_union is not None else df_{in}\n    df_{v} = df_{in}  # Pass all through; downstream uses named route DataFrames\nelse:\n    raise NotImplementedError(\n        f"Route processor {type} has no translatable routing conditions. "\n        f"Review NiFi processor properties and add manual PySpark filter expressions."\n    )\nprint(f"[ROUTE] {v}: routing applied with {{len(_route_conditions)}} condition(s)")',
+    desc: 'Route - DataFrame filter routing with parsed conditions',
+    conf: 0.65
   },
   process: {
     tpl: '# Process processor: {type}\n# Custom processing step\nfrom pyspark.sql.functions import col, expr, current_timestamp\ndf_{in}.createOrReplaceTempView("tmp_{v}")\ndf_{v} = spark.sql("SELECT *, current_timestamp() AS _processed_at FROM tmp_{v}")\nprint(f"[PROCESS] {v}: processed {{df_{v}.count()}} rows")',

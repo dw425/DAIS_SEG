@@ -6,7 +6,9 @@
  */
 
 import { detectCyclesSCC } from '../../analyzers/cycle-detection.js';
-import { classifyNiFiProcessor } from '../../mappers/processor-classifier.js';
+import { classifyNiFiProcessor, classifyNiFiProcessorFull } from '../../mappers/processor-classifier.js';
+import { classifyGroupStages, getStageDef } from '../../analyzers/stage-classifier.js';
+import { analyzeAttributeFlow, getGroupAttrCreates, getGroupAttrReads } from '../../analyzers/attribute-flow.js';
 
 /**
  * Role-based tier ordering (source to utility).
@@ -94,6 +96,33 @@ export function buildNiFiTierData(nifi, blueprint) {
     groupStats[g].typeCount[p.type] = (groupStats[g].typeCount[p.type] || 0) + 1;
   });
 
+  // Step 1b: Stage classification and attribute flow analysis
+  const groupStages = classifyGroupStages(groupStats);
+  const attrFlowData = analyzeAttributeFlow(processors, conns);
+
+  // Build per-processor full metadata for subcategory/action enrichment
+  const procFullMeta = {};
+  processors.forEach(p => {
+    procFullMeta[p.name] = classifyNiFiProcessorFull(p.type);
+  });
+
+  // Collect unique subcategories and action types per group
+  const groupSubcategories = {};
+  const groupActionTypes = {};
+  Object.entries(groupStats).forEach(([gn, stats]) => {
+    const subs = new Set();
+    const actions = new Set();
+    stats.processors.forEach(p => {
+      const meta = procFullMeta[p.name];
+      if (meta) {
+        if (meta.subcategory) subs.add(meta.subcategory);
+        if (meta.action) actions.add(meta.action);
+      }
+    });
+    groupSubcategories[gn] = [...subs];
+    groupActionTypes[gn] = [...actions];
+  });
+
   // Step 2: Build inter-group connections
   const procToGroup = {};
   processors.forEach(p => { procToGroup[p.name] = p.group || '(root)'; });
@@ -173,6 +202,10 @@ export function buildNiFiTierData(nifi, blueprint) {
             .map(([k, v]) => { const [f, t] = k.split('|'); return { from: f, to: t, count: v }; })
         : [];
 
+      const stageDef = getStageDef(groupStages[gn]);
+      const attrCreates = getGroupAttrCreates(stats.processors, attrFlowData.processorAttributes);
+      const attrReads = getGroupAttrReads(stats.processors, attrFlowData.processorAttributes);
+
       nodes.push({
         id: 'pg_' + gn, name: gn, tier: tierNum,
         type: 'process_group', dominantRole: groupDominantRole[gn],
@@ -183,9 +216,17 @@ export function buildNiFiTierData(nifi, blueprint) {
         processCount: stats.processes, utilityCount: stats.utilities,
         intraConns: intraGroupConns[gn] || 0,
         topTypes, inCycle, sccMembers, cycleEdges, expandable: true,
+        // New: stage, subcategory, action, and attribute data
+        stage: groupStages[gn],
+        stageLabel: stageDef ? stageDef.label : '',
+        stageColor: stageDef ? stageDef.color : '#6366F1',
+        subcategories: groupSubcategories[gn] || [],
+        actionTypes: groupActionTypes[gn] || [],
+        attrCreates, attrReads,
         detail: {
           processors: stats.processors, typeCount: stats.typeCount,
-          intraConns: intraGroupConns[gn] || 0
+          intraConns: intraGroupConns[gn] || 0,
+          procFullMeta, // expose per-processor metadata for expanded view
         }
       });
     });
@@ -221,5 +262,8 @@ export function buildNiFiTierData(nifi, blueprint) {
     }).length
   }));
 
-  return { nodes, connections, tierLabels, diagramType: 'nifi_flow', densityData, cycleData };
+  return {
+    nodes, connections, tierLabels, diagramType: 'nifi_flow', densityData, cycleData,
+    stageData: groupStages, attrFlowData,
+  };
 }

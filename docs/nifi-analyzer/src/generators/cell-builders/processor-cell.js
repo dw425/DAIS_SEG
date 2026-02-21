@@ -42,6 +42,29 @@ export function buildProcessorCell(m, { lineage, qualifiedSchema, nifi, fullProp
     ? '\n# Unused NiFi properties:\n' + Object.entries(fp.unused).slice(0, 8).map(([k, v]) => '#   ' + k + ': ' + String(v).substring(0, 80)).join('\n')
     : '';
 
+  // IMPROVEMENT #14 (4.5): Enhanced code comments — processor intent and original NiFi properties
+  const intentMap = {
+    source: 'DATA INGESTION - Reads data from an external system into the pipeline',
+    sink: 'DATA OUTPUT - Writes processed data to a target system or storage',
+    transform: 'DATA TRANSFORMATION - Modifies, enriches, or reshapes data in transit',
+    route: 'FLOW CONTROL - Routes data to different paths based on conditions',
+    process: 'DATA PROCESSING - Performs computation or business logic on data',
+    utility: 'UTILITY - Provides supporting functionality (logging, monitoring, etc.)',
+  };
+  const intentComment = `# INTENT: ${intentMap[m.role] || 'PROCESSING - ' + m.type}`;
+  const nifiTypeComment = `# NiFi Processor: ${m.type} (${m.name})`;
+  const confidenceComment = `# Migration Confidence: ${Math.round((m.confidence || 0) * 100)}% | Status: ${m.mapped ? 'Mapped' : 'MANUAL IMPLEMENTATION REQUIRED'}`;
+
+  // Original NiFi properties reference
+  const allProps = { ...(fp.used || {}), ...(fp.unused || {}) };
+  const propsEntries = Object.entries(allProps).slice(0, 12);
+  const nifiPropsComment = propsEntries.length > 0
+    ? '\n# Original NiFi Properties:\n' + propsEntries.map(([k, v]) => {
+        const val = String(v).substring(0, 100);
+        return `#   ${k} = ${val}`;
+      }).join('\n')
+    : '';
+
   // IMPROVEMENT #8: Relationship routing
   const routing = generateRelationshipRouting(m, nifi, lineage);
 
@@ -61,7 +84,7 @@ export function buildProcessorCell(m, { lineage, qualifiedSchema, nifi, fullProp
     cellCode = `# ${lbl}\n# ${m.desc}${m.notes ? '  |  ' + m.notes : ''}\n# Input: ${inputInfo}\n${code}`;
   }
 
-  cellCode = `# Input lineage: ${inputInfo}\n# Output: ${li.outputVar || 'df_' + sanitizeVarName(m.name)}${unusedComment}\n${cellCode}${routing}`;
+  cellCode = `${intentComment}\n${nifiTypeComment}\n${confidenceComment}${nifiPropsComment}\n# Input lineage: ${inputInfo}\n# Output: ${li.outputVar || 'df_' + sanitizeVarName(m.name)}${unusedComment}\n${cellCode}${routing}`;
 
   return {
     type: 'code',
