@@ -106,7 +106,7 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
 
   // IMPROVEMENT #3: Process in topological order, grouped
   const groups = {};
-  sortedMappings.forEach(m => { if (!groups[m.group]) groups[m.group] = []; groups[m.group].push(m); });
+  sortedMappings.forEach(m => { const g = m.group || '(root)'; if (!groups[g]) groups[g] = []; groups[g].push(m); });
 
   let cellIndex = cells.length;
   Object.entries(groups).forEach(([gName, procs]) => {

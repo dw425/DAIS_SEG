@@ -36,7 +36,7 @@ export function buildConfigCell({ smartImportsCode, catalogName, schemaName, sec
     : DBX_CONFIG_DEFAULTS.workspacePath + '/checkpoints';
   configCode += `\n\n# Config-driven paths (no hardcoded /tmp/ or /mnt/)`;
   configCode += `\nCHECKPOINT_BASE = "${checkpointBase}"`;
-  configCode += `\nVOLUMES_BASE = "${catalogName ? `/Volumes/${catalogName}/${schemaName}` : '/Volumes/main/default'}"`;
+  configCode += `\nVOLUMES_BASE = "${catalogName ? `/Volumes/${catalogName}/${schemaName}` : `/Volumes/main/${schemaName}`}"`;
 
   configCode += '\nprint(f"Notebook initialized \u2014 Spark version: {spark.version}")';
   return { type: 'code', label: 'Imports & Config', source: configCode, role: 'config' };

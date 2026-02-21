@@ -92,7 +92,7 @@ export function generateDLQWrapper(code, procName, varName, inputVar, qualifiedS
     '        # Write failed records to Dead Letter Queue\n' +
     dlqWriteCode + '\n\n' +
     '        if _success_records:\n' +
-    '            return spark.createDataFrame(_success_records, schema=df_input.schema)\n' +
+    '            return spark.createDataFrame(_success_records)\n' +
     '        else:\n' +
     '            return spark.createDataFrame([], schema=df_input.schema)\n\n' +
     'df_' + varName + ' = _process_' + safeProc + '(df_' + inputVar + ')\n' +

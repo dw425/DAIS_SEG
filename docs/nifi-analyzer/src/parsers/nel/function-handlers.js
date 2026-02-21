@@ -119,6 +119,18 @@ export function applyNELFunction(base, call, mode) {
       ? 'when(locate("' + pyEscape(sa) + '", ' + base + ') > 0, substring(' + base + ', locate("' + pyEscape(sa) + '", ' + base + ') + ' + saLen + ')).otherwise(lit(""))'
       : '"' + pyEscape(sa) + '".join(' + base + '.split("' + pyEscape(sa) + '")[1:])';
   }
+  if (name === 'substringbeforelast') {
+    var sbl = unquoteArg(args[0] || '');
+    return mode === 'col'
+      ? 'when(locate("' + pyEscape(sbl) + '", ' + base + ') > 0, substring_index(' + base + ', "' + pyEscape(sbl) + '", -1 + size(split(' + base + ', "' + pyEscape(sbl) + '")))).otherwise(' + base + ')'
+      : '("' + pyEscape(sbl) + '".join(' + base + '.rsplit("' + pyEscape(sbl) + '")[:-1]) if "' + pyEscape(sbl) + '" in ' + base + ' else ' + base + ')';
+  }
+  if (name === 'substringafterlast') {
+    var sal = unquoteArg(args[0] || '');
+    return mode === 'col'
+      ? 'when(locate("' + pyEscape(sal) + '", ' + base + ') > 0, element_at(split(' + base + ', "' + pyEscape(sal) + '"), -1)).otherwise(lit(""))'
+      : '(' + base + '.rsplit("' + pyEscape(sal) + '", 1)[-1] if "' + pyEscape(sal) + '" in ' + base + ' else "")';
+  }
   if (name === 'padleft' || name === 'leftpad') {
     var plLen = args[0] || '10'; var plChar = unquoteArg(args[1] || ' ');
     return mode === 'col' ? 'lpad(' + base + ', ' + plLen + ', "' + pyEscape(plChar) + '")' : base + '.rjust(' + plLen + ', "' + pyEscape(plChar) + '")';
@@ -255,8 +267,9 @@ export function applyNELFunction(base, call, mode) {
   }
   if (name === 'unescapecsv') {
     // Strip surrounding quotes and unescape internal doubled quotes
+    // Use substring() SQL function (accepts Column args) instead of Column.substr() (requires int args)
     return mode === 'col'
-      ? 'when(' + base + '.startsWith(\'"\') & ' + base + '.endsWith(\'"\'), regexp_replace(' + base + '.substr(lit(2), length(' + base + ') - lit(2)), \'""\', \'"\')' + ').otherwise(' + base + ')'
+      ? 'when(' + base + '.startsWith(\'"\') & ' + base + '.endsWith(\'"\'), regexp_replace(substring(' + base + ', 2, length(' + base + ') - 2), \'""\', \'"\')' + ').otherwise(' + base + ')'
       : base + '[1:-1].replace(\'"\' * 2, \'"\') if ' + base + '.startswith(\'"\') and ' + base + '.endswith(\'"\') else ' + base;
   }
   if (name === 'escapejson') {
