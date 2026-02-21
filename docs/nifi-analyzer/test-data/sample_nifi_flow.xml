@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<template encoding-version="1.3">
+  <description>Sample ETL flow: ingest CSV from S3, transform, write to database</description>
+  <snippet>
+    <processGroups/>
+    <connections>
+      <id>conn-001</id>
+      <source>
+        <id>proc-001</id>
+        <name>Fetch_S3_Files</name>
+      </source>
+      <destination>
+        <id>proc-002</id>
+        <name>Parse_CSV</name>
+      </destination>
+      <selectedRelationships>success</selectedRelationships>
+      <backPressureObjectThreshold>10000</backPressureObjectThreshold>
+      <backPressureDataSizeThreshold>1 GB</backPressureDataSizeThreshold>
+    </connections>
+    <connections>
+      <id>conn-002</id>
+      <source>
+        <id>proc-002</id>
+        <name>Parse_CSV</name>
+      </source>
+      <destination>
+        <id>proc-003</id>
+        <name>Transform_Records</name>
+      </destination>
+      <selectedRelationships>success</selectedRelationships>
+      <backPressureObjectThreshold>10000</backPressureObjectThreshold>
+      <backPressureDataSizeThreshold>1 GB</backPressureDataSizeThreshold>
+    </connections>
+    <connections>
+      <id>conn-003</id>
+      <source>
+        <id>proc-003</id>
+        <name>Transform_Records</name>
+      </source>
+      <destination>
+        <id>proc-004</id>
+        <name>Route_By_Priority</name>
+      </destination>
+      <selectedRelationships>success</selectedRelationships>
+      <backPressureObjectThreshold>10000</backPressureObjectThreshold>
+      <backPressureDataSizeThreshold>1 GB</backPressureDataSizeThreshold>
+    </connections>
+    <connections>
+      <id>conn-004</id>
+      <source>
+        <id>proc-004</id>
+        <name>Route_By_Priority</name>
+      </source>
+      <destination>
+        <id>proc-005</id>
+        <name>Write_To_Database</name>
+      </destination>
+      <selectedRelationships>matched</selectedRelationships>
+      <backPressureObjectThreshold>10000</backPressureObjectThreshold>
+      <backPressureDataSizeThreshold>1 GB</backPressureDataSizeThreshold>
+    </connections>
+    <connections>
+      <id>conn-005</id>
+      <source>
+        <id>proc-004</id>
+        <name>Route_By_Priority</name>
+      </source>
+      <destination>
+        <id>proc-006</id>
+        <name>Write_To_S3_Archive</name>
+      </destination>
+      <selectedRelationships>unmatched</selectedRelationships>
+      <backPressureObjectThreshold>10000</backPressureObjectThreshold>
+      <backPressureDataSizeThreshold>1 GB</backPressureDataSizeThreshold>
+    </connections>
+    <connections>
+      <id>conn-006</id>
+      <source>
+        <id>proc-005</id>
+        <name>Write_To_Database</name>
+      </source>
+      <destination>
+        <id>proc-007</id>
+        <name>Log_Success</name>
+      </destination>
+      <selectedRelationships>success</selectedRelationships>
+      <backPressureObjectThreshold>10000</backPressureObjectThreshold>
+      <backPressureDataSizeThreshold>1 GB</backPressureDataSizeThreshold>
+    </connections>
+    <connections>
+      <id>conn-007</id>
+      <source>
+        <id>proc-005</id>
+        <name>Write_To_Database</name>
+      </source>
+      <destination>
+        <id>proc-008</id>
+        <name>Handle_Failure</name>
+      </destination>
+      <selectedRelationships>failure</selectedRelationships>
+      <backPressureObjectThreshold>10000</backPressureObjectThreshold>
+      <backPressureDataSizeThreshold>1 GB</backPressureDataSizeThreshold>
+    </connections>
+    <processors>
+      <id>proc-001</id>
+      <name>Fetch_S3_Files</name>
+      <type>org.apache.nifi.processors.aws.s3.FetchS3Object</type>
+      <state>RUNNING</state>
+      <config>
+        <schedulingPeriod>5 min</schedulingPeriod>
+        <schedulingStrategy>TIMER_DRIVEN</schedulingStrategy>
+        <properties>
+          <entry><key>Bucket</key><value>my-data-lake-raw</value></entry>
+          <entry><key>Region</key><value>us-east-1</value></entry>
+          <entry><key>Object Key</key><value>${filename}</value></entry>
+          <entry><key>Access Key ID</key><value>AKIAIOSFODNN7EXAMPLE</value></entry>
+          <entry><key>Secret Access Key</key><value>wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY</value></entry>
+        </properties>
+      </config>
+    </processors>
+    <processors>
+      <id>proc-002</id>
+      <name>Parse_CSV</name>
+      <type>org.apache.nifi.processors.standard.ConvertRecord</type>
+      <state>RUNNING</state>
+      <config>
+        <schedulingPeriod>0 sec</schedulingPeriod>
+        <schedulingStrategy>EVENT_DRIVEN</schedulingStrategy>
+        <properties>
+          <entry><key>Record Reader</key><value>CSVReader</value></entry>
+          <entry><key>Record Writer</key><value>JsonRecordSetWriter</value></entry>
+        </properties>
+      </config>
+    </processors>
+    <processors>
+      <id>proc-003</id>
+      <name>Transform_Records</name>
+      <type>org.apache.nifi.processors.standard.UpdateRecord</type>
+      <state>RUNNING</state>
+      <config>
+        <schedulingPeriod>0 sec</schedulingPeriod>
+        <schedulingStrategy>EVENT_DRIVEN</schedulingStrategy>
+        <properties>
+          <entry><key>Record Reader</key><value>JsonTreeReader</value></entry>
+          <entry><key>Record Writer</key><value>JsonRecordSetWriter</value></entry>
+          <entry><key>/priority</key><value>${field.value:toUpper()}</value></entry>
+          <entry><key>/processed_at</key><value>${now():format('yyyy-MM-dd HH:mm:ss')}</value></entry>
+        </properties>
+      </config>
+    </processors>
+    <processors>
+      <id>proc-004</id>
+      <name>Route_By_Priority</name>
+      <type>org.apache.nifi.processors.standard.RouteOnAttribute</type>
+      <state>RUNNING</state>
+      <config>
+        <schedulingPeriod>0 sec</schedulingPeriod>
+        <schedulingStrategy>EVENT_DRIVEN</schedulingStrategy>
+        <properties>
+          <entry><key>Routing Strategy</key><value>Route to Property name</value></entry>
+          <entry><key>high_priority</key><value>${priority:equals('HIGH')}</value></entry>
+        </properties>
+      </config>
+    </processors>
+    <processors>
+      <id>proc-005</id>
+      <name>Write_To_Database</name>
+      <type>org.apache.nifi.processors.standard.PutDatabaseRecord</type>
+      <state>RUNNING</state>
+      <config>
+        <schedulingPeriod>0 sec</schedulingPeriod>
+        <schedulingStrategy>EVENT_DRIVEN</schedulingStrategy>
+        <properties>
+          <entry><key>Record Reader</key><value>JsonTreeReader</value></entry>
+          <entry><key>Database Connection Pooling Service</key><value>DBCPConnectionPool</value></entry>
+          <entry><key>Database Type</key><value>PostgreSQL</value></entry>
+          <entry><key>Schema Name</key><value>public</value></entry>
+          <entry><key>Table Name</key><value>events</value></entry>
+          <entry><key>Statement Type</key><value>INSERT</value></entry>
+        </properties>
+      </config>
+    </processors>
+    <processors>
+      <id>proc-006</id>
+      <name>Write_To_S3_Archive</name>
+      <type>org.apache.nifi.processors.aws.s3.PutS3Object</type>
+      <state>RUNNING</state>
+      <config>
+        <schedulingPeriod>0 sec</schedulingPeriod>
+        <schedulingStrategy>EVENT_DRIVEN</schedulingStrategy>
+        <properties>
+          <entry><key>Bucket</key><value>my-data-lake-archive</value></entry>
+          <entry><key>Region</key><value>us-east-1</value></entry>
+          <entry><key>Object Key</key><value>archive/${now():format('yyyy/MM/dd')}/${filename}</value></entry>
+        </properties>
+      </config>
+    </processors>
+    <processors>
+      <id>proc-007</id>
+      <name>Log_Success</name>
+      <type>org.apache.nifi.processors.standard.LogAttribute</type>
+      <state>RUNNING</state>
+      <config>
+        <schedulingPeriod>0 sec</schedulingPeriod>
+        <schedulingStrategy>EVENT_DRIVEN</schedulingStrategy>
+        <properties>
+          <entry><key>Log Level</key><value>info</value></entry>
+          <entry><key>Log Payload</key><value>false</value></entry>
+        </properties>
+      </config>
+    </processors>
+    <processors>
+      <id>proc-008</id>
+      <name>Handle_Failure</name>
+      <type>org.apache.nifi.processors.standard.PutEmail</type>
+      <state>RUNNING</state>
+      <config>
+        <schedulingPeriod>0 sec</schedulingPeriod>
+        <schedulingStrategy>EVENT_DRIVEN</schedulingStrategy>
+        <properties>
+          <entry><key>SMTP Hostname</key><value>smtp.example.com</value></entry>
+          <entry><key>SMTP Port</key><value>587</value></entry>
+          <entry><key>From</key><value>alerts@example.com</value></entry>
+          <entry><key>To</key><value>ops-team@example.com</value></entry>
+          <entry><key>Subject</key><value>Pipeline Failure: ${filename}</value></entry>
+        </properties>
+      </config>
+    </processors>
+    <controllerServices>
+      <id>cs-001</id>
+      <name>DBCPConnectionPool</name>
+      <type>org.apache.nifi.dbcp.DBCPConnectionPool</type>
+      <properties>
+        <entry><key>Database Connection URL</key><value>jdbc:postgresql://db.example.com:5432/analytics</value></entry>
+        <entry><key>Database Driver Class Name</key><value>org.postgresql.Driver</value></entry>
+        <entry><key>Database User</key><value>etl_user</value></entry>
+        <entry><key>Password</key><value>sup3rS3cret!</value></entry>
+      </properties>
+    </controllerServices>
+    <controllerServices>
+      <id>cs-002</id>
+      <name>CSVReader</name>
+      <type>org.apache.nifi.csv.CSVReader</type>
+      <properties>
+        <entry><key>Schema Access Strategy</key><value>Infer Schema</value></entry>
+        <entry><key>Date Format</key><value>yyyy-MM-dd</value></entry>
+      </properties>
+    </controllerServices>
+    <controllerServices>
+      <id>cs-003</id>
+      <name>JsonRecordSetWriter</name>
+      <type>org.apache.nifi.json.JsonRecordSetWriter</type>
+      <properties>
+        <entry><key>Schema Write Strategy</key><value>Set 'avro.schema' Attribute</value></entry>
+      </properties>
+    </controllerServices>
+    <controllerServices>
+      <id>cs-004</id>
+      <name>JsonTreeReader</name>
+      <type>org.apache.nifi.json.JsonTreeReader</type>
+      <properties>
+        <entry><key>Schema Access Strategy</key><value>Infer Schema</value></entry>
+      </properties>
+    </controllerServices>
+  </snippet>
+</template>

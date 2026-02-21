@@ -17,10 +17,8 @@ logger = logging.getLogger(__name__)
 
 def validate_notebook(parse_result: ParseResult, notebook: NotebookResult) -> ValidationResult:
     """Run all validators and return combined ValidationResult."""
-    if not parse_result or not parse_result.processors:
-        return ValidationResult(overall_score=0, scores=[], gaps=["No parse result"], errors=["No processors found"])
     if not notebook or not notebook.cells:
-        return ValidationResult(overall_score=0, scores=[], gaps=["No notebook"], errors=["No notebook cells"])
+        return ValidationResult(overall_score=0, scores=[], gaps=[{"type": "no_input", "message": "No notebook"}], errors=["No notebook cells"])
 
     logger.info("Validating notebook: %d cells against %d processors", len(notebook.cells), len(parse_result.processors))
     scores: list[ValidationScore] = []
