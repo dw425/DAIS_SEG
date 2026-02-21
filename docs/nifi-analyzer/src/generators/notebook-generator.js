@@ -194,6 +194,7 @@ export function generateDatabricksNotebook(mappings, nifi, blueprint, cfg) {
       // No-catalog mode: strip "<catalog>." prefix and resolve <schema> to schemaName.
       c.source = c.source
         .replace(/<catalog>\./g, '')
+        .replace(/\/Volumes\/<catalog>\//g, '/Volumes/')
         .replace(/\/<catalog>\//g, '/')
         .replace(/<catalog>/g, '')
         .replace(/<schema>/g, schemaName)

@@ -150,13 +150,13 @@ export function evaluateNiFiEL(expr, attributes) {
         const arg = fn.match(/format\(["']([^"']*)["']\)/);
         if (arg) { try { const d = new Date(val); if (!isNaN(d)) { val = arg[1].replace('yyyy', d.getFullYear()).replace('MM', String(d.getMonth()+1).padStart(2,'0')).replace('dd', String(d.getDate()).padStart(2,'0')).replace('HH', String(d.getHours()).padStart(2,'0')).replace('mm', String(d.getMinutes()).padStart(2,'0')).replace('ss', String(d.getSeconds()).padStart(2,'0')); } } catch(e) {} }
       } else if (fn.startsWith('minus(')) {
-        const arg = fn.match(/minus\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n - parseInt(arg[1])); }
+        const arg = fn.match(/minus\(([\d.]+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n - parseFloat(arg[1])); }
       } else if (fn.startsWith('plus(')) {
-        const arg = fn.match(/plus\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n + parseInt(arg[1])); }
+        const arg = fn.match(/plus\(([\d.]+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n + parseFloat(arg[1])); }
       } else if (fn.startsWith('multiply(')) {
-        const arg = fn.match(/multiply\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n * parseInt(arg[1])); }
+        const arg = fn.match(/multiply\(([\d.]+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n * parseFloat(arg[1])); }
       } else if (fn.startsWith('divide(')) {
-        const arg = fn.match(/divide\((\d+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n / parseInt(arg[1])); }
+        const arg = fn.match(/divide\(([\d.]+)\)/); if (arg) { const n = parseFloat(val); if (!isNaN(n)) val = String(n / parseFloat(arg[1])); }
       } else if (fn.startsWith('literal(')) {
         const arg = fn.match(/literal\(["']([^"']*)["']\)/); if (arg) val = arg[1];
       } else if (fn === 'not()') { val = String(val === 'false' || val === '0' || val === '' || val === 'null'); }

@@ -102,7 +102,7 @@ export function applyNELFunction(base, call, mode) {
   }
   if (name === 'split') {
     var sp = unquoteArg(args[0] || ',');
-    return mode === 'col' ? 'split(' + base + ', "' + pyEscape(sp) + '")' : base + '.split("' + pyEscape(sp) + '")';
+    return mode === 'col' ? 'split(' + base + ', "' + pyEscape(regexEscape(sp)) + '")' : base + '.split("' + pyEscape(sp) + '")';
   }
   if (name === 'substringbefore') {
     var sb = unquoteArg(args[0] || '');
@@ -122,13 +122,13 @@ export function applyNELFunction(base, call, mode) {
   if (name === 'substringbeforelast') {
     var sbl = unquoteArg(args[0] || '');
     return mode === 'col'
-      ? 'when(locate("' + pyEscape(sbl) + '", ' + base + ') > 0, substring_index(' + base + ', "' + pyEscape(sbl) + '", -1 + size(split(' + base + ', "' + pyEscape(sbl) + '")))).otherwise(' + base + ')'
+      ? 'when(locate("' + pyEscape(sbl) + '", ' + base + ') > 0, substring_index(' + base + ', "' + pyEscape(sbl) + '", -1 + size(split(' + base + ', "' + pyEscape(regexEscape(sbl)) + '")))).otherwise(' + base + ')'
       : '("' + pyEscape(sbl) + '".join(' + base + '.rsplit("' + pyEscape(sbl) + '")[:-1]) if "' + pyEscape(sbl) + '" in ' + base + ' else ' + base + ')';
   }
   if (name === 'substringafterlast') {
     var sal = unquoteArg(args[0] || '');
     return mode === 'col'
-      ? 'when(locate("' + pyEscape(sal) + '", ' + base + ') > 0, element_at(split(' + base + ', "' + pyEscape(sal) + '"), -1)).otherwise(lit(""))'
+      ? 'when(locate("' + pyEscape(sal) + '", ' + base + ') > 0, element_at(split(' + base + ', "' + pyEscape(regexEscape(sal)) + '"), -1)).otherwise(lit(""))'
       : '(' + base + '.rsplit("' + pyEscape(sal) + '", 1)[-1] if "' + pyEscape(sal) + '" in ' + base + ' else "")';
   }
   if (name === 'padleft' || name === 'leftpad') {
@@ -141,11 +141,11 @@ export function applyNELFunction(base, call, mode) {
   }
   if (name === 'indexof') {
     var io = unquoteArg(args[0] || '');
-    return mode === 'col' ? 'locate("' + pyEscape(io) + '", ' + base + ')' : base + '.find("' + pyEscape(io) + '")';
+    return mode === 'col' ? '(locate("' + pyEscape(io) + '", ' + base + ') - 1)' : base + '.find("' + pyEscape(io) + '")';
   }
   if (name === 'getdelimitedfield') {
     var idx = args[0] || '1'; var delim = unquoteArg(args[1] || ',');
-    return mode === 'col' ? 'split(' + base + ', "' + pyEscape(delim) + '")[' + (parseInt(idx)-1) + ']' : base + '.split("' + pyEscape(delim) + '")[' + (parseInt(idx)-1) + ']';
+    return mode === 'col' ? 'split(' + base + ', "' + pyEscape(regexEscape(delim)) + '")[' + (parseInt(idx)-1) + ']' : base + '.split("' + pyEscape(delim) + '")[' + (parseInt(idx)-1) + ']';
   }
   if (name === 'append') {
     var av = unquoteArg(args[0] || '');
@@ -290,7 +290,7 @@ export function applyNELFunction(base, call, mode) {
   }
   if (name === 'base64encode') {
     return mode === 'col'
-      ? "base64(" + base + ")"
+      ? "base64(encode(" + base + ", 'UTF-8'))"
       : "base64.b64encode(str(" + base + ").encode()).decode()";
   }
   if (name === 'base64decode') {

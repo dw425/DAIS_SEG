@@ -17,7 +17,7 @@ const _STDLIB_MODULES = new Set([
   'datetime', 'json', 'logging', 'os', 're', 'hashlib', 'base64',
   'subprocess', 'mimetypes', 'socket', 'smtplib', 'email', 'functools',
   'xml.etree', 'csv', 'io', 'collections', 'math', 'sys', 'time',
-  'typing', 'uuid', 'pathlib', 'struct', 'itertools',
+  'typing', 'uuid', 'pathlib', 'struct', 'itertools', 'urllib',
 ]);
 
 /**
@@ -57,6 +57,7 @@ export function collectSmartImports(mappings, nifi) {
       if (m.code.includes('os.')) imports.python.add('import os');
       if (m.code.includes('hashlib')) imports.python.add('import hashlib');
       if (m.code.includes('base64')) imports.python.add('import base64');
+      if (m.code.includes('urllib.parse')) imports.python.add('import urllib.parse');
       if (m.code.includes('xml.etree')) imports.python.add('import xml.etree.ElementTree as ET');
       if (m.code.includes('readStream') || m.code.includes('writeStream'))
         imports.pyspark.add('from pyspark.sql.streaming import StreamingQuery');
