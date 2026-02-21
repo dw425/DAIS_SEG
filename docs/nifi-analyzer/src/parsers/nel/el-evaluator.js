@@ -106,6 +106,7 @@ export function evaluateNiFiEL(expr, attributes) {
     } else {
       val = attributes[attrName] !== undefined ? attributes[attrName] : undefined;
     }
+    const _attrMissing = val === undefined;
     if (val === undefined || val === null) val = fullMatch;
     for (let i = 1; i < parts.length; i++) {
       const fn = parts[i].trim();
@@ -162,8 +163,8 @@ export function evaluateNiFiEL(expr, attributes) {
       } else if (fn === 'not()') { val = String(val === 'false' || val === '0' || val === '' || val === 'null'); }
       else if (fn === 'toNumber()') { const n = parseFloat(val); val = isNaN(n) ? '0' : String(n); }
       else if (fn === 'toString()') { val = String(val); }
-      else if (fn === 'isNull()') { val = String(val === null || val === undefined || val === ''); }
-      else if (fn === 'notNull()') { val = String(val !== null && val !== undefined && val !== ''); }
+      else if (fn === 'isNull()') { val = String(_attrMissing); }
+      else if (fn === 'notNull()') { val = String(!_attrMissing); }
       else if (fn.startsWith('padLeft(')) { const args = fn.match(/padLeft\((\d+)\s*,\s*['"]([^'"]*)['"]/); if (args) val = String(val).padStart(parseInt(args[1]), args[2]); }
       else if (fn.startsWith('padRight(')) { const args = fn.match(/padRight\((\d+)\s*,\s*['"]([^'"]*)['"]/); if (args) val = String(val).padEnd(parseInt(args[1]), args[2]); }
       else if (fn.startsWith('substringBefore(')) { const args = fn.match(/substringBefore\(['"]([^'"]*)['"]/); if (args) { const idx = String(val).indexOf(args[1]); val = idx >= 0 ? String(val).substring(0, idx) : val; } }

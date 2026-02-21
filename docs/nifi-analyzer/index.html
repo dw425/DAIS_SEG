@@ -3401,7 +3401,7 @@ except Exception as _e:
 `}))}),s}function nc(e,{lineage:n,qualifiedSchema:t,nifi:r,fullProps:a,cellIndex:o}){const i=`[${e.role.toUpperCase()}] ${e.name} → ${e.category}`,s=n[e.name]||{},c=(s.inputVars||[]).map(m=>`${m.varName} (${m.relationship})`).join(", ")||"none";let l=Xi(e);const d=a||{unused:{}},u=Object.keys(d.unused).length>0?`
 # Unused NiFi properties:
 `+Object.entries(d.unused).slice(0,8).map(([m,f])=>"#   "+m+": "+String(f).substring(0,80)).join(`
-`):"",h=tc(e,r);let p;if(e.mapped&&e.code&&!e.code.startsWith("# TODO")){const m=l!==e.code?{...e,code:l}:e;p=Yi(m,t,o,n);const f=ec(m,t,n);f&&(p=p.replace(/(\s+raise _e)$/,f+"$1"))}else p=`# ${i}
+`):"",h=tc(e,r);let p;if(e.mapped&&e.code&&!e.code.startsWith("# TODO")){const m=l!==e.code?{...e,code:l}:e;p=Yi(m,t,o,n);const f=ec(m,t,n);f&&(p=p.replace(/(\s+raise _e)$/,(g,_)=>f+_))}else p=`# ${i}
 # ${e.desc}${e.notes?"  |  "+e.notes:""}
 # Input: ${c}
 ${l}`;return p=`# Input lineage: ${c}

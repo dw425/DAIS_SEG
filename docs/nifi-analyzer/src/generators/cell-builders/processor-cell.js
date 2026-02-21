@@ -55,7 +55,7 @@ export function buildProcessorCell(m, { lineage, qualifiedSchema, nifi, fullProp
     const recoveryCode = generateAutoRecovery(mWithAdaptive, qualifiedSchema, lineage);
     if (recoveryCode) {
       // Insert recovery code before 'raise _e' so it executes before re-throwing
-      cellCode = cellCode.replace(/(\s+raise _e)$/, recoveryCode + '$1');
+      cellCode = cellCode.replace(/(\s+raise _e)$/, (match, p1) => recoveryCode + p1);
     }
   } else {
     cellCode = `# ${lbl}\n# ${m.desc}${m.notes ? '  |  ' + m.notes : ''}\n# Input: ${inputInfo}\n${code}`;
