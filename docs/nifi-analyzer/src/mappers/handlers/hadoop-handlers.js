@@ -108,7 +108,7 @@ export function handleHadoopProcessor(p, props, varName, inputVar, existingCode,
   // -- Iceberg --
   if (/^PutIceberg$/.test(p.type)) {
     const table = props['Table Name'] || 'iceberg_table';
-    code = `# Iceberg Write: ${p.name}\n(df_${inputVar}.writeTo("${table}")\n  .using("iceberg")\n  .append()\n)\nprint(f"[ICEBERG] Wrote to ${table}")`;
+    code = `# Iceberg Write: ${p.name}\n(df_${inputVar}.write\n  .format("iceberg")\n  .mode("append")\n  .save("${table}")\n)\nprint(f"[ICEBERG] Wrote to ${table}")`;
     conf = 0.92;
     return { code, conf };
   }

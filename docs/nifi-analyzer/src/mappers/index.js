@@ -227,7 +227,8 @@ export function mapNiFiToDatabricks(nifi, deps) {
       const _penalty = props['Penalty Duration'] || '30 sec';
       const _yield = props['Yield Duration'] || '1 sec';
       const _retries = props['Max Retries'] || props['Retry Count'] || '3';
-      code = generateRetryWrapper(p.name, p.type, code, _penalty, _yield, parseInt(_retries) || 3);
+      const _retriesParsed = parseInt(_retries, 10);
+      code = generateRetryWrapper(p.name, p.type, code, _penalty, _yield, isNaN(_retriesParsed) ? 3 : _retriesParsed);
 
       // GAP #10: Convert per-row subprocess.run() to Pandas UDF
       code = wrapSubprocessAsPandasUDF(code, p.name, varName, inputVar, props);

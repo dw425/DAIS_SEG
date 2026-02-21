@@ -95,7 +95,8 @@ export function handleSourceProcessor(p, props, varName, inputVar, existingCode,
       code = `# SQL Query: ${p.name}\n# Pool: ${dbPool} | Table: ${table || '(custom query)'}\ndf_${varName} = (spark.read\n  .format("jdbc")\n  .option("url", "${jdbcUrl}")\n  .option("dbtable", ${sqlOrTable})\n  .option("driver", "${driver}")\n  .option("user", dbutils.secrets.get(scope="db", key="user"))\n  .option("password", dbutils.secrets.get(scope="db", key="pass"))` + (maxRows !== '0' ? `\n  .option("fetchsize", "${maxRows}")` : '') + `\n  .load()\n)\nprint(f"[SQL] Read from ${table || 'query'}")`;
     } else {
       const sqlText = query || 'SELECT * FROM ' + table;
-      code = `# SQL Query: ${p.name} (via Hive/Spark SQL)\ndf_${varName} = spark.sql(f"${sqlText}")\nprint(f"[SQL] Read from Hive/Spark SQL")`;
+      const safeSqlText = sqlText.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ');
+      code = `# SQL Query: ${p.name} (via Hive/Spark SQL)\ndf_${varName} = spark.sql("${safeSqlText}")\nprint("[SQL] Read from Hive/Spark SQL")`;
     }
     conf = 0.92;
     return { code, conf };
