@@ -1,5 +1,6 @@
 """Detect file format by extension + content sniffing and route to correct parser."""
 
+import gzip
 import json
 import logging
 import zipfile
@@ -22,6 +23,7 @@ _EXT_MAP: dict[str, str] = {
     ".sql": "_detect_sql",
     ".py": "_detect_python",
     ".zip": "_detect_zip",
+    ".gz": "_detect_gz",
     ".yml": "dbt",
     ".yaml": "dbt",
     ".item": "talend",
@@ -34,7 +36,13 @@ def parse_flow(content: bytes, filename: str) -> ParseResult:
         raise ValueError("Empty file content")
     if not filename:
         raise ValueError("Filename is required")
-    ext = Path(filename).suffix.lower()
+
+    # Handle double extensions like .json.gz
+    name_lower = filename.lower()
+    if name_lower.endswith(".json.gz"):
+        ext = ".gz"
+    else:
+        ext = Path(filename).suffix.lower()
     handler_key = _EXT_MAP.get(ext)
 
     if handler_key is None:
@@ -87,6 +95,51 @@ def _detect_xml(content: bytes, filename: str) -> str:
     return "nifi_xml"
 
 
+def _detect_gz(content: bytes, filename: str) -> str:
+    """Detect gzip-compressed file contents."""
+    try:
+        decompressed = gzip.decompress(content)
+    except (gzip.BadGzipFile, OSError):
+        raise UnsupportedFormatError("Invalid gzip file")
+
+    # Check if decompressed content is JSON (likely NiFi 2.x flow.json.gz)
+    stripped = decompressed[:100].strip()
+    if stripped.startswith(b"{") or stripped.startswith(b"["):
+        try:
+            data = json.loads(decompressed)
+            if isinstance(data, dict) and _is_nifi_v2_json(data):
+                return "nifi_v2_json"
+            # Fall through to standard JSON detection
+            return _detect_json(decompressed, filename)
+        except json.JSONDecodeError:
+            pass
+
+    # Could be gzipped XML
+    if stripped.startswith(b"<?xml") or stripped.startswith(b"<"):
+        return _detect_xml(decompressed, filename)
+
+    raise UnsupportedFormatError("Unrecognized gzip content")
+
+
+def _is_nifi_v2_json(data: dict) -> bool:
+    """Check if JSON data matches NiFi 2.x flow format."""
+    # NiFi 2.x has rootGroup with nested processGroups
+    if "rootGroup" in data:
+        root = data["rootGroup"]
+        if isinstance(root, dict) and ("processGroups" in root or "processors" in root):
+            return True
+    # Check for encodingVersion (NiFi 2.x marker)
+    if "encodingVersion" in data:
+        return True
+    # Check for header with niFiVersion 2.x
+    header = data.get("header", {})
+    if isinstance(header, dict):
+        version = header.get("niFiVersion", "")
+        if version.startswith("2."):
+            return True
+    return False
+
+
 def _detect_json(content: bytes, filename: str) -> str:
     """Determine JSON sub-type."""
     try:
@@ -95,6 +148,9 @@ def _detect_json(content: bytes, filename: str) -> str:
         raise UnsupportedFormatError("Invalid JSON")
 
     if isinstance(data, dict):
+        # NiFi 2.x JSON (check before 1.x to prioritize)
+        if _is_nifi_v2_json(data):
+            return "nifi_v2_json"
         # NiFi Registry JSON
         if "flowContents" in data or "versionedFlowSnapshot" in data:
             return "nifi_json"
@@ -174,6 +230,7 @@ def _dispatch(parser_key: str, content: bytes, filename: str) -> ParseResult:
     parsers = {
         "nifi_xml": lambda c, f: _import("app.engines.parsers.nifi_xml", "parse_nifi_xml")(c, f),
         "nifi_json": lambda c, f: _import("app.engines.parsers.nifi_json", "parse_nifi_json")(c, f),
+        "nifi_v2_json": lambda c, f: _import("app.engines.parsers.nifi_v2_json_parser", "parse_nifi_v2_json")(c, f),
         "ssis": lambda c, f: _import("app.engines.parsers.ssis_parser", "parse_ssis")(c, f),
         "informatica": lambda c, f: _import("app.engines.parsers.informatica_parser", "parse_informatica")(c, f),
         "talend": lambda c, f: _import("app.engines.parsers.talend_parser", "parse_talend")(c, f),

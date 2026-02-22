@@ -74,7 +74,11 @@ def deep_analyze(req: AnalyzeRequest) -> dict:
 
         # Combine: return standard analysis + deep analysis overlay
         response = standard_result.model_dump(by_alias=True)
-        response["deepAnalysis"] = dataclasses.asdict(deep_result)
+        deep_dict = dataclasses.asdict(deep_result)
+        # Convert lint report to serializable dict
+        if deep_result.lint is not None:
+            deep_dict["lint"] = deep_result.lint.to_dict()
+        response["deepAnalysis"] = deep_dict
         return response
     except Exception as exc:
         processing_status.finish()

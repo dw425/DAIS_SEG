@@ -24,6 +24,7 @@ from app.routers import health as health_router
 from app.routers import history, pipeline as pipeline_router
 from app.routers import projects as projects_router
 from app.routers import lineage as lineage_router
+from app.routers import nifi_connect as nifi_connect_router
 from app.routers import schedules, shares, tags, versions, webhooks, ws
 from app.utils.logging import setup_logging
 
@@ -112,6 +113,7 @@ app.include_router(tags.router, prefix="/api", tags=["tags"])
 app.include_router(favorites.router, prefix="/api", tags=["favorites"])
 app.include_router(shares.router, prefix="/api", tags=["shares"])
 app.include_router(lineage_router.router, prefix="/api", tags=["lineage"])
+app.include_router(nifi_connect_router.router, prefix="/api", tags=["nifi-connect"])
 app.include_router(ws.router, tags=["websocket"])
 
 # Enterprise routers

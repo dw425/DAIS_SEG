@@ -24,10 +24,24 @@ class ImpactRequest(CamelModel):
 
 @router.post("/lineage")
 async def get_lineage(req: LineageRequest) -> dict:
-    """Build data lineage graph from a parsed flow."""
+    """Build data lineage graph from a parsed flow.
+
+    Returns a LineageGraph-compatible response with nodes, edges,
+    criticalPath, maxDepth, and optional mermaidMarkdown.
+    """
     try:
         result = track_lineage(req.parsed)
-        return result
+        # Reshape for frontend LineageGraph type
+        return {
+            "nodes": result.get("lineageNodes", []),
+            "edges": result.get("lineageEdges", []),
+            "criticalPath": result.get("criticalPath", []),
+            "maxDepth": result.get("maxDepth", 0),
+            "mermaidMarkdown": result.get("mermaidMarkdown", ""),
+            "sources": result.get("sources", []),
+            "sinks": result.get("sinks", []),
+            "orphans": result.get("orphans", []),
+        }
     except Exception as exc:
         logger.exception("Lineage tracking error")
         raise HTTPException(status_code=500, detail=f"Lineage tracking failed: {exc}") from exc

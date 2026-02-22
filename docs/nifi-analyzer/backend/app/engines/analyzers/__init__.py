@@ -28,6 +28,7 @@ from app.engines.analyzers.transaction_analyzer import analyze_transactions
 from app.engines.generators.attribute_translator import translate_attributes
 from app.engines.generators.cicd_generator import generate_cicd
 from app.engines.generators.connection_generator import generate_connections
+from app.engines.analyzers.sql_pattern_analyzer import analyze_sql_patterns
 from app.models.pipeline import AnalysisResult, ParseResult
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,9 @@ def run_analysis(parse_result: ParseResult) -> AnalysisResult:
     connection_generation = _safe_run("connection_generator", generate_connections, parse_result)
     cicd_generation = _safe_run("cicd_generator", generate_cicd, parse_result)
 
+    # SQL pattern analysis with dialect detection and transpilation
+    sql_transpilation = _safe_run("sql_pattern_analyzer", lambda pr: analyze_sql_patterns(pr).to_dict(), parse_result)
+
     return AnalysisResult(
         dependency_graph=graph,
         external_systems=ext_systems,
@@ -108,6 +112,7 @@ def run_analysis(parse_result: ParseResult) -> AnalysisResult:
         attribute_translation=attribute_translation,
         connection_generation=connection_generation,
         cicd_generation=cicd_generation,
+        sql_transpilation=sql_transpilation,
     )
 
 

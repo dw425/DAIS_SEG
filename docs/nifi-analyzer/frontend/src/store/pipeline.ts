@@ -9,6 +9,7 @@ import type {
   ValidationResult,
   ValueAnalysis,
   DeepAnalysisResult,
+  LineageGraph,
 } from '../types/pipeline';
 import type { FullROIReport } from '../types/roi';
 import { useUIStore } from './ui';
@@ -25,6 +26,7 @@ export interface PipelineState {
   validation: ValidationResult | null;
   valueAnalysis: ValueAnalysis | null;
   roiReport: FullROIReport | null;
+  lineage: LineageGraph | null;
   fileName: string | null;
   fileSize: number;
 
@@ -40,6 +42,7 @@ export interface PipelineState {
   setValidation: (validation: ValidationResult | null) => void;
   setValueAnalysis: (valueAnalysis: ValueAnalysis | null) => void;
   setROIReport: (roiReport: FullROIReport | null) => void;
+  setLineage: (lineage: LineageGraph | null) => void;
   setFile: (name: string, size: number) => void;
   resetAll: () => void;
 }
@@ -56,6 +59,7 @@ const initialState = {
   validation: null,
   valueAnalysis: null,
   roiReport: null,
+  lineage: null,
   fileName: null,
   fileSize: 0,
 };
@@ -74,6 +78,7 @@ export const usePipelineStore = create<PipelineState>((set) => ({
   setValidation: (validation) => set({ validation }),
   setValueAnalysis: (valueAnalysis) => set({ valueAnalysis }),
   setROIReport: (roiReport) => set({ roiReport }),
+  setLineage: (lineage) => set({ lineage }),
   setFile: (name, size) => set({ fileName: name, fileSize: size }),
   resetAll: () => {
     set(initialState);

@@ -178,6 +178,49 @@ export async function getAdminLogs() {
   return request<{ logs: string[] }>('/admin/logs');
 }
 
+// ── NiFi Live Connection ──
+
+export async function nifiStatus() {
+  return request<{ available: boolean }>('/nifi/status');
+}
+
+export async function nifiConnect(data: unknown) {
+  return request('/nifi/connect', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function nifiExtract(data: unknown) {
+  return request('/nifi/extract', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function nifiListGroups(data: unknown) {
+  return request<{ processGroups: unknown[] }>('/nifi/process-groups', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// ── Lineage ──
+
+export async function getLineage(parsed: unknown) {
+  return request('/lineage', {
+    method: 'POST',
+    body: JSON.stringify({ parsed }),
+  });
+}
+
+export async function getLineageImpact(parsed: unknown, target: string) {
+  return request('/lineage/impact', {
+    method: 'POST',
+    body: JSON.stringify({ parsed, target }),
+  });
+}
+
 // ── Versioning ──
 
 export async function saveVersion(projectId: string, data: unknown) {

@@ -1,8 +1,10 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { usePipelineStore } from '../../store/pipeline';
 import { useUIStore } from '../../store/ui';
 import { usePipeline } from '../../hooks/usePipeline';
 import FileUpload from '../shared/FileUpload';
+import NiFiConnectModal from '../shared/NiFiConnectModal';
+import type { ParseResult } from '../../types/pipeline';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -17,12 +19,26 @@ export default function Step1Parse() {
   const platform = usePipelineStore((s) => s.platform);
   const status = useUIStore((s) => s.stepStatuses[0]);
   const { runAll } = usePipeline();
+  const [showNiFiModal, setShowNiFiModal] = useState(false);
 
   const handleFile = useCallback(
     (file: File) => {
       runAll(file);
     },
     [runAll],
+  );
+
+  const handleNiFiExtract = useCallback(
+    (extractedParsed: unknown) => {
+      // Set the parsed result directly from NiFi live extraction
+      const p = extractedParsed as ParseResult;
+      usePipelineStore.getState().setParsed(p);
+      usePipelineStore.getState().setFile('nifi-live-extraction', 0);
+      if (p.platform) usePipelineStore.getState().setPlatform(p.platform);
+      useUIStore.getState().setStepStatus(0, 'done');
+      useUIStore.getState().setActiveStep(1);
+    },
+    [],
   );
 
   return (
@@ -38,8 +54,34 @@ export default function Step1Parse() {
         </p>
       </div>
 
-      {/* Upload zone */}
-      <FileUpload onFile={handleFile} disabled={status === 'running'} />
+      {/* Upload zone + NiFi connect */}
+      <div className="space-y-3">
+        <FileUpload onFile={handleFile} disabled={status === 'running'} />
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-px bg-border" />
+          <span className="text-xs text-gray-500">or</span>
+          <div className="flex-1 h-px bg-border" />
+        </div>
+        <button
+          onClick={() => setShowNiFiModal(true)}
+          disabled={status === 'running'}
+          className="w-full px-4 py-3 rounded-lg border border-dashed border-green-500/30 bg-green-500/5
+            text-sm text-green-400 font-medium hover:bg-green-500/10 hover:border-green-500/50
+            disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          Connect to Live NiFi Instance
+        </button>
+      </div>
+
+      {/* NiFi Connect Modal */}
+      <NiFiConnectModal
+        open={showNiFiModal}
+        onClose={() => setShowNiFiModal(false)}
+        onExtract={handleNiFiExtract}
+      />
 
       {/* Loading */}
       {status === 'running' && (

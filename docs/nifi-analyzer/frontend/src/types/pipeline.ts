@@ -254,6 +254,33 @@ export interface LineByLineReport {
   properties: PropertyAnalysis[];
 }
 
+// ── Flow Lint Types ──
+
+export interface LintFinding {
+  ruleId: string;
+  ruleName: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  category: string;
+  message: string;
+  processor: string;
+  suggestion: string;
+}
+
+export interface LintReport {
+  findings: LintFinding[];
+  rulesChecked: number;
+  rulesTriggered: number;
+  summary: string;
+  counts: {
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    info: number;
+    total: number;
+  };
+}
+
 export interface DeepAnalysisResult {
   functional: FunctionalReport;
   processors: ProcessorReport;
@@ -261,6 +288,7 @@ export interface DeepAnalysisResult {
   upstream: UpstreamReport;
   downstream: DownstreamReport;
   line_by_line: LineByLineReport;
+  lint?: LintReport | null;
   duration_ms: number;
   summary: string;
 }
@@ -329,4 +357,82 @@ export interface ValueAnalysis {
   complexityBreakdown: Record<string, number>;
   roiEstimate: { costSavings: number; timeSavings: number; riskReduction: number };
   implementationRoadmap: { phase: string; tasks: string[]; weeks: number }[];
+}
+
+// ── Enhanced Reporting Types (E6) ──
+
+export interface CompatibilityEntry {
+  processorType: string;
+  sourceCategory: string;
+  targetEquivalent: string;
+  compatibilityLevel: 'native' | 'partial' | 'manual' | 'unsupported';
+  gapDetails: string;
+  manualSteps: string[];
+}
+
+export interface CompatibilityMatrix {
+  entries: CompatibilityEntry[];
+  summary: {
+    native: number;
+    partial: number;
+    manual: number;
+    unsupported: number;
+  };
+  byCategory: Record<string, { native: number; partial: number; manual: number; unsupported: number }>;
+}
+
+export interface EffortEntry {
+  processorName: string;
+  processorType: string;
+  hoursEstimate: number;
+  complexity: 'low' | 'medium' | 'high' | 'critical';
+  requiredSkills: string[];
+  isOnCriticalPath: boolean;
+}
+
+export interface EffortEstimate {
+  entries: EffortEntry[];
+  totalHours: number;
+  criticalPathHours: number;
+  skillRequirements: Record<string, number>;
+  teamSizeRecommendation: number;
+  estimatedWeeks: number;
+}
+
+// ── SQL Transpilation Types (E1) ──
+
+export interface SqlTranspileResult {
+  originalSql: string;
+  transpiledSql: string;
+  sourceDialect: string;
+  targetDialect: string;
+  confidence: number;
+  warnings: string[];
+  columnLineage: Record<string, string[]>;
+}
+
+// ── Data Lineage Types (E4) ──
+
+export interface LineageNode {
+  id: string;
+  name: string;
+  type: 'source' | 'transform' | 'sink';
+  processorType: string;
+  confidence: number;
+  columns?: string[];
+}
+
+export interface LineageEdge {
+  source: string;
+  target: string;
+  relationship: string;
+  columnMappings?: Record<string, string>;
+}
+
+export interface LineageGraph {
+  nodes: LineageNode[];
+  edges: LineageEdge[];
+  criticalPath: string[];
+  maxDepth: number;
+  mermaidMarkdown?: string;
 }

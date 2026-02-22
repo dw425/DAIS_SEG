@@ -1,0 +1,225 @@
+# Flow Linting Rules — NiFi flow checkstyle / best-practice rules
+# Each rule has: id, name, severity, category, description
+# severity: critical, high, medium, low, info
+# category: naming, security, performance, best-practice, deprecated, connectivity, error-handling
+
+rules:
+
+  # ── Naming conventions ──
+  - id: LINT-001
+    name: processor_naming_convention
+    severity: low
+    category: naming
+    description: "Processor names should be descriptive (not default names like 'GenerateFlowFile')"
+    check: default_name
+
+  - id: LINT-002
+    name: process_group_naming
+    severity: low
+    category: naming
+    description: "Process groups should have descriptive names (not 'root' or 'NiFi Flow')"
+    check: generic_group_name
+
+  - id: LINT-003
+    name: duplicate_processor_names
+    severity: medium
+    category: naming
+    description: "Multiple processors with identical names cause confusion in lineage tracking"
+    check: duplicate_names
+
+  # ── Security ──
+  - id: LINT-004
+    name: hardcoded_credentials
+    severity: critical
+    category: security
+    description: "Passwords, tokens, or secrets hardcoded in processor properties"
+    check: hardcoded_secrets
+
+  - id: LINT-005
+    name: sensitive_property_exposure
+    severity: high
+    category: security
+    description: "Sensitive properties (passwords, keys) not using parameter contexts or variable registry"
+    check: sensitive_not_parameterized
+
+  - id: LINT-006
+    name: insecure_protocol
+    severity: high
+    category: security
+    description: "Using HTTP instead of HTTPS, or unencrypted protocols for sensitive data"
+    check: insecure_protocol
+
+  # ── Performance ──
+  - id: LINT-007
+    name: unbounded_backpressure
+    severity: medium
+    category: performance
+    description: "Connections with no backpressure limits risk memory exhaustion"
+    check: unbounded_backpressure
+
+  - id: LINT-008
+    name: high_timer_frequency
+    severity: low
+    category: performance
+    description: "Processors scheduled at very high frequency (<100ms) may waste resources"
+    check: high_timer_frequency
+
+  - id: LINT-009
+    name: large_batch_size
+    severity: medium
+    category: performance
+    description: "Extremely large batch sizes may cause memory issues"
+    check: large_batch_size
+
+  # ── Best practices ──
+  - id: LINT-010
+    name: missing_failure_relationship
+    severity: high
+    category: error-handling
+    description: "Processors with unconnected 'failure' relationship lose data on errors"
+    check: missing_failure_connection
+
+  - id: LINT-011
+    name: missing_description
+    severity: info
+    category: best-practice
+    description: "Processors without comments/descriptions reduce maintainability"
+    check: missing_description
+
+  - id: LINT-012
+    name: disconnected_processor
+    severity: high
+    category: connectivity
+    description: "Processor has no incoming or outgoing connections (dead code)"
+    check: disconnected_processor
+
+  - id: LINT-013
+    name: orphan_process_group
+    severity: medium
+    category: connectivity
+    description: "Process group with no inter-group connections is isolated"
+    check: orphan_process_group
+
+  - id: LINT-014
+    name: single_thread_bottleneck
+    severity: medium
+    category: performance
+    description: "Processor configured with max concurrent tasks = 1 may be a bottleneck"
+    check: single_thread_bottleneck
+
+  - id: LINT-015
+    name: hardcoded_paths
+    severity: medium
+    category: best-practice
+    description: "Absolute file system paths should use variables or parameter contexts"
+    check: hardcoded_paths
+
+  # ── Deprecated ──
+  - id: LINT-016
+    name: deprecated_processor
+    severity: high
+    category: deprecated
+    description: "Using deprecated NiFi processors that have newer replacements"
+    check: deprecated_processor
+
+  - id: LINT-017
+    name: legacy_expression_language
+    severity: low
+    category: deprecated
+    description: "Using legacy NiFi Expression Language syntax"
+    check: legacy_nel
+
+  # ── Error handling ──
+  - id: LINT-018
+    name: no_error_handling_path
+    severity: high
+    category: error-handling
+    description: "Flow has no global error handling (no failure connections to LogMessage/PutFile)"
+    check: no_error_handling
+
+  - id: LINT-019
+    name: retry_without_limit
+    severity: medium
+    category: error-handling
+    description: "Retry loops without a maximum retry count risk infinite loops"
+    check: retry_without_limit
+
+  # ── Connectivity ──
+  - id: LINT-020
+    name: fan_out_too_wide
+    severity: medium
+    category: performance
+    description: "Processor with >10 outgoing connections may indicate design issues"
+    check: fan_out_too_wide
+
+  - id: LINT-021
+    name: fan_in_too_deep
+    severity: low
+    category: performance
+    description: "Processor with >10 incoming connections may be a bottleneck"
+    check: fan_in_too_deep
+
+  - id: LINT-022
+    name: self_loop
+    severity: high
+    category: connectivity
+    description: "Processor connected to itself creates a self-loop"
+    check: self_loop
+
+  # ── Data quality ──
+  - id: LINT-023
+    name: no_schema_validation
+    severity: medium
+    category: best-practice
+    description: "Flow processes structured data but has no schema validation step"
+    check: no_schema_validation
+
+  - id: LINT-024
+    name: missing_content_type
+    severity: low
+    category: best-practice
+    description: "ConvertRecord processors without explicit reader/writer record types"
+    check: missing_content_type
+
+  # ── Migration-specific ──
+  - id: LINT-025
+    name: nifi_specific_dependency
+    severity: medium
+    category: best-practice
+    description: "Processor depends on NiFi-specific features not available in Databricks"
+    check: nifi_specific_dependency
+
+  - id: LINT-026
+    name: custom_processor
+    severity: high
+    category: best-practice
+    description: "Custom/third-party processors require manual migration"
+    check: custom_processor
+
+  - id: LINT-027
+    name: site_to_site_usage
+    severity: high
+    category: connectivity
+    description: "Site-to-Site transport has no direct Databricks equivalent"
+    check: site_to_site_usage
+
+  - id: LINT-028
+    name: provenance_dependency
+    severity: medium
+    category: best-practice
+    description: "Flow relies on NiFi provenance events for tracking, needs alternative in Databricks"
+    check: provenance_dependency
+
+  - id: LINT-029
+    name: flowfile_attribute_overuse
+    severity: low
+    category: performance
+    description: "Excessive use of FlowFile attributes (>20 per processor) impacts performance"
+    check: attribute_overuse
+
+  - id: LINT-030
+    name: empty_processor_properties
+    severity: info
+    category: best-practice
+    description: "Processor has no configured properties (using all defaults)"
+    check: empty_properties

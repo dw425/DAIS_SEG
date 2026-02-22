@@ -1,6 +1,13 @@
-"""Final report builder — executive summary of migration."""
+"""Final report builder — executive summary of migration.
+
+Enhanced with Lakebridge-inspired compatibility matrix and effort estimation.
+"""
+
+import logging
 
 from app.models.pipeline import AnalysisResult, AssessmentResult, ParseResult, ValidationResult
+
+logger = logging.getLogger(__name__)
 
 
 def build_final_report(
@@ -28,6 +35,21 @@ def build_final_report(
         readiness = "RED"
         readiness_label = "Significant manual effort required"
 
+    # Enhanced reporting: compatibility matrix and effort estimation
+    compatibility = {}
+    effort = {}
+    try:
+        from app.engines.reporters.compatibility_matrix import compute_compatibility_matrix
+        compatibility = compute_compatibility_matrix(parse_result, assessment)
+    except Exception as exc:
+        logger.warning("Compatibility matrix generation failed: %s", exc)
+
+    try:
+        from app.engines.reporters.effort_estimator import compute_effort_estimate
+        effort = compute_effort_estimate(parse_result, assessment)
+    except Exception as exc:
+        logger.warning("Effort estimation failed: %s", exc)
+
     return {
         "readiness": readiness,
         "readiness_label": readiness_label,
@@ -40,6 +62,8 @@ def build_final_report(
         "coverage_pct": round(mapped / max(total, 1) * 100, 1),
         "risk_factors": _identify_risks(analysis, assessment),
         "recommendations": _build_recommendations(parse_result, analysis, assessment),
+        "compatibility_matrix": compatibility,
+        "effort_estimate": effort,
     }
 
 

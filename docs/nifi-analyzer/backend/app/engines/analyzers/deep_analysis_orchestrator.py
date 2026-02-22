@@ -1,9 +1,10 @@
-"""Orchestrator for 6-pass deep analysis engine.
+"""Orchestrator for 7-pass deep analysis engine.
 
-Runs all six analysis passes in dependency order:
+Runs all seven analysis passes in dependency order:
   Passes 1-2 (functional, processor) run first -- no cross-dependencies.
   Passes 3-5 (workflow, upstream, downstream) use the processor report.
   Pass 6 (line-by-line) runs last -- most expensive.
+  Pass 7 (lint) runs independently -- configurable checkstyle rules.
 
 Merges everything into a single DeepAnalysisResult with timing.
 """
@@ -40,6 +41,10 @@ from app.engines.analyzers.deep_line_by_line_analyzer import (
     LineByLineReport,
     analyze_line_by_line,
 )
+from app.engines.analyzers.flow_linter import (
+    LintReport,
+    lint_flow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +60,7 @@ class DeepAnalysisResult:
     upstream: UpstreamReport
     downstream: DownstreamReport
     line_by_line: LineByLineReport
+    lint: LintReport | None
     duration_ms: float
     summary: str
 
@@ -117,6 +123,13 @@ _SENTINEL_LINE_BY_LINE = LineByLineReport(
     overall_conversion_confidence=0.0,
 )
 
+_SENTINEL_LINT = LintReport(
+    findings=[],
+    rules_checked=0,
+    rules_triggered=0,
+    summary="Lint analysis failed",
+)
+
 
 def _safe_pass(name: str, func, sentinel, *args, **kwargs):
     """Run an analysis pass safely, returning a sentinel on failure."""
@@ -142,6 +155,7 @@ def _generate_summary(
     upstream: UpstreamReport,
     downstream: DownstreamReport,
     line_by_line: LineByLineReport,
+    lint_report: LintReport | None,
     duration_ms: float,
 ) -> str:
     """Generate a human-readable summary of the deep analysis."""
@@ -226,6 +240,15 @@ def _generate_summary(
     lines.append(f"  Conversion Confidence: {line_by_line.overall_conversion_confidence:.1%}")
     lines.append("")
 
+    # Lint summary
+    if lint_report and lint_report.findings:
+        lines.append(f"Flow Lint: {len(lint_report.findings)} finding(s)")
+        lines.append(f"  Critical: {lint_report.critical_count}, High: {lint_report.high_count}, "
+                     f"Medium: {lint_report.medium_count}, Low: {lint_report.low_count}")
+    elif lint_report:
+        lines.append("Flow Lint: No issues found")
+    lines.append("")
+
     lines.append(f"Total Duration: {duration_ms:.0f} ms")
     lines.append("=" * 40)
 
@@ -240,7 +263,7 @@ def run_deep_analysis(
     parsed: ParseResult,
     analysis_result: AnalysisResult | None = None,
 ) -> DeepAnalysisResult:
-    """Run all 6 analysis passes and return unified result.
+    """Run all 7 analysis passes and return unified result.
 
     Execution order:
       1. Functional analysis (pass 1) -- no dependencies
@@ -249,13 +272,14 @@ def run_deep_analysis(
       4. Upstream analysis (pass 4) -- uses analysis_result + processor report
       5. Downstream analysis (pass 5) -- uses analysis_result + processor report
       6. Line-by-line analysis (pass 6) -- most expensive, runs last
+      7. Flow lint (pass 7) -- configurable checkstyle rules
 
     Args:
         parsed: Normalized parse result from the parser engine.
         analysis_result: Optional existing AnalysisResult from run_analysis().
 
     Returns:
-        DeepAnalysisResult with all 6 reports, timing, and summary.
+        DeepAnalysisResult with all 7 reports, timing, and summary.
     """
     t_start = time.monotonic()
 
@@ -315,13 +339,21 @@ def run_deep_analysis(
         parsed,
     )
 
+    # --- Phase D: Flow lint (pass 7) ---
+    lint_report: LintReport = _safe_pass(
+        "lint",
+        lint_flow,
+        _SENTINEL_LINT,
+        parsed,
+    )
+
     # --- Merge and summarize ---
     duration_ms = (time.monotonic() - t_start) * 1000
 
     summary = _generate_summary(
         functional, proc_report, workflow,
         upstream, downstream, line_by_line,
-        duration_ms,
+        lint_report, duration_ms,
     )
 
     result = DeepAnalysisResult(
@@ -331,6 +363,7 @@ def run_deep_analysis(
         upstream=upstream,
         downstream=downstream,
         line_by_line=line_by_line,
+        lint=lint_report,
         duration_ms=round(duration_ms, 1),
         summary=summary,
     )

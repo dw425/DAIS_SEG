@@ -94,6 +94,7 @@ class AnalysisResult(CamelModel):
     attribute_translation: dict = {}
     connection_generation: dict = {}
     cicd_generation: dict = {}
+    sql_transpilation: dict = {}  # SQL dialect detection + transpilation results
 
 
 class MappingEntry(CamelModel):

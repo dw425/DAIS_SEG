@@ -3,6 +3,7 @@ import { usePipelineStore } from '../../store/pipeline';
 import { useUIStore } from '../../store/ui';
 import { usePipeline } from '../../hooks/usePipeline';
 import MigrationTimeline from '../viz/MigrationTimeline';
+import MermaidRenderer from '../viz/MermaidRenderer';
 import type { GapItem } from '../../types/pipeline';
 
 const SEVERITY_STYLES: Record<string, string> = {
@@ -16,6 +17,7 @@ export default function Step5Report() {
   const assessment = usePipelineStore((s) => s.assessment);
   const analysis = usePipelineStore((s) => s.analysis);
   const report = usePipelineStore((s) => s.report);
+  const lineage = usePipelineStore((s) => s.lineage);
   const status = useUIStore((s) => s.stepStatuses[4]);
   const { runReport } = usePipeline();
 
@@ -102,6 +104,14 @@ export default function Step5Report() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Data Lineage Diagram */}
+          {lineage?.mermaidMarkdown && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-300 mb-3">Data Lineage</h3>
+              <MermaidRenderer markdown={lineage.mermaidMarkdown} />
             </div>
           )}
 

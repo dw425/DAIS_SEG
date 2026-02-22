@@ -12,6 +12,7 @@ import type {
   ValidationResult,
   ValueAnalysis,
   DeepAnalysisResult,
+  LineageGraph,
 } from '../types/pipeline';
 import type { FullROIReport } from '../types/roi';
 
@@ -187,7 +188,7 @@ export function usePipeline() {
   const runAnalyze = useCallback(async () => {
     const latest = getLatest();
     if (!latest.parsed) return null;
-    return runStep<AnalysisResult>(
+    const result = await runStep<AnalysisResult>(
       1,
       () => api.deepAnalyzeFlow(getLatest().parsed) as Promise<AnalysisResult>,
       (r) => {
@@ -198,7 +199,29 @@ export function usePipeline() {
         }
       },
     );
+    // Auto-fetch lineage after analysis completes (fire-and-forget)
+    if (result) {
+      api.getLineage(getLatest().parsed)
+        .then((lineage) => pipeline.setLineage(lineage as LineageGraph))
+        .catch(() => { /* lineage is optional — silently skip */ });
+    }
+    return result;
   }, [pipeline, runStep, getLatest]);
+
+  /** Fetch data lineage for the current parsed flow */
+  const runLineage = useCallback(async () => {
+    const latest = getLatest();
+    if (!latest.parsed) return null;
+    try {
+      const lineage = await api.getLineage(latest.parsed) as LineageGraph;
+      pipeline.setLineage(lineage);
+      return lineage;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ui.addToast({ message: `Lineage failed: ${msg}`, type: 'error' });
+      return null;
+    }
+  }, [pipeline, ui, getLatest]);
 
   /** Step 3: Assess */
   const runAssess = useCallback(async () => {
@@ -311,6 +334,7 @@ export function usePipeline() {
     runValidate,
     runValueAnalysis,
     runROI,
+    runLineage,
     runAll,
   };
 }

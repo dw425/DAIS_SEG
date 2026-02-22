@@ -195,6 +195,13 @@ def track_lineage(
     critical_path = get_critical_path(graph)
     max_depth = get_lineage_depth(graph)
 
+    # Generate Mermaid markdown for visualization
+    mermaid_md = _generate_mermaid(graph, sources, sinks, critical_path)
+
+    # Build lineage nodes and edges for frontend visualization
+    lineage_nodes = _build_lineage_nodes(parse_result.processors, sources, sinks)
+    lineage_edges = _build_lineage_edges(parse_result.connections)
+
     logger.info("Lineage tracking: %d nodes, critical_path=%d, max_depth=%d, orphans=%d", len(graph), len(critical_path), max_depth, len(orphans))
     return {
         "graph": graph,
@@ -203,4 +210,103 @@ def track_lineage(
         "criticalPath": critical_path,
         "maxDepth": max_depth,
         "orphans": orphans,
+        "mermaidMarkdown": mermaid_md,
+        "lineageNodes": lineage_nodes,
+        "lineageEdges": lineage_edges,
     }
+
+
+def _generate_mermaid(
+    graph: dict[str, dict],
+    sources: list[str],
+    sinks: list[str],
+    critical_path: list[str],
+) -> str:
+    """Generate Mermaid flowchart markdown from lineage graph."""
+    lines = ["graph LR"]
+    node_ids: dict[str, str] = {}
+
+    # Assign safe IDs
+    for i, name in enumerate(graph.keys()):
+        safe_id = f"N{i}"
+        node_ids[name] = safe_id
+
+        # Style sources, sinks, and critical path nodes differently
+        short_name = name[:20] + ".." if len(name) > 20 else name
+        if name in sources:
+            lines.append(f"    {safe_id}[/{short_name}/]")
+        elif name in sinks:
+            lines.append(f"    {safe_id}[\\{short_name}\\]")
+        else:
+            lines.append(f"    {safe_id}[{short_name}]")
+
+    # Add edges
+    for name, info in graph.items():
+        src_id = node_ids.get(name, "")
+        for ds in info.get("downstream", []):
+            dst_id = node_ids.get(ds, "")
+            if src_id and dst_id:
+                lines.append(f"    {src_id} --> {dst_id}")
+
+    # Style classes
+    lines.append("")
+    if sources:
+        src_ids = " & ".join(node_ids.get(s, "") for s in sources if s in node_ids)
+        if src_ids:
+            lines.append(f"    classDef source fill:#22c55e20,stroke:#22c55e,color:#22c55e")
+            lines.append(f"    class {','.join(node_ids[s] for s in sources if s in node_ids)} source")
+    if sinks:
+        lines.append(f"    classDef sink fill:#f9731620,stroke:#f97316,color:#f97316")
+        lines.append(f"    class {','.join(node_ids[s] for s in sinks if s in node_ids)} sink")
+    if critical_path:
+        cp_ids = [node_ids[n] for n in critical_path if n in node_ids]
+        if cp_ids:
+            lines.append(f"    classDef critical fill:#ef444420,stroke:#ef4444,color:#ef4444")
+            lines.append(f"    class {','.join(cp_ids)} critical")
+
+    return "\n".join(lines)
+
+
+def _build_lineage_nodes(
+    processors: list[Processor],
+    sources: list[str],
+    sinks: list[str],
+) -> list[dict]:
+    """Build lineage nodes for the frontend LineageGraph component."""
+    # Classify node types by role
+    source_types = {"GetFile", "ConsumeKafka", "ConsumeKafka_2_6", "QueryDatabaseTable",
+                    "ListenHTTP", "GetSFTP", "GetFTP", "GetHTTP", "GenerateFlowFile",
+                    "ConsumeKafkaRecord_2_6", "GetS3Object", "FetchS3Object", "ListS3"}
+    sink_types = {"PutFile", "PublishKafka", "PublishKafka_2_6", "PutSQL",
+                  "PutDatabaseRecord", "PutS3Object", "PutSFTP", "PutHDFS",
+                  "PutKinesisStream", "PutElasticsearch5"}
+
+    nodes: list[dict] = []
+    for proc in processors:
+        if proc.name in sources or proc.type in source_types:
+            node_type = "source"
+        elif proc.name in sinks or proc.type in sink_types:
+            node_type = "sink"
+        else:
+            node_type = "transform"
+
+        nodes.append({
+            "id": proc.name,
+            "name": proc.name,
+            "type": node_type,
+            "processorType": proc.type,
+            "confidence": 0.0,  # Will be enriched by frontend
+        })
+    return nodes
+
+
+def _build_lineage_edges(connections: list[Connection]) -> list[dict]:
+    """Build lineage edges for the frontend LineageGraph component."""
+    edges: list[dict] = []
+    for conn in connections:
+        edges.append({
+            "source": conn.source_name,
+            "target": conn.destination_name,
+            "relationship": conn.relationship,
+        })
+    return edges

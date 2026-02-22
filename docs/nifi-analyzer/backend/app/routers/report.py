@@ -22,6 +22,8 @@ from app.engines.reporters.license_savings import compute_license_savings
 from app.engines.reporters.monte_carlo_roi import simulate_roi
 from app.engines.reporters.benchmarks import get_benchmarks
 from app.engines.analyzers.complexity_scorer import score_complexity
+from app.engines.reporters.compatibility_matrix import compute_compatibility_matrix
+from app.engines.reporters.effort_estimator import compute_effort_estimate
 
 from app.processing_status import processing_status
 
@@ -51,6 +53,10 @@ def report(req: ReportRequest) -> dict:
             result = _build_value(req)
         elif req.type == "roi":
             result = _build_roi(req)
+        elif req.type == "compatibility":
+            result = _build_compatibility(req)
+        elif req.type == "effort":
+            result = _build_effort(req)
         else:
             result = _build_migration(req)
         processing_status.finish()
@@ -387,3 +393,22 @@ def _build_roi(req: ReportRequest) -> dict:
         "complexity": complexity,
         "summary": summary,
     }
+
+
+def _build_compatibility(req: ReportRequest) -> dict:
+    """Build compatibility matrix report."""
+    parsed = req.parsed
+    assessment = req.assessment
+    if not parsed or not assessment:
+        return {"entries": [], "summary": {}, "byCategory": {}}
+    return compute_compatibility_matrix(parsed, assessment)
+
+
+def _build_effort(req: ReportRequest) -> dict:
+    """Build effort estimation report."""
+    parsed = req.parsed
+    assessment = req.assessment
+    if not parsed or not assessment:
+        return {"entries": [], "totalHours": 0, "criticalPathHours": 0,
+                "skillRequirements": {}, "teamSizeRecommendation": 1, "estimatedWeeks": 1}
+    return compute_effort_estimate(parsed, assessment)

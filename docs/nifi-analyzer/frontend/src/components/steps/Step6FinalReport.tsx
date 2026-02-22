@@ -10,7 +10,7 @@ export default function Step6FinalReport() {
   const status = useUIStore((s) => s.stepStatuses[5]);
   const { runFinalReport } = usePipeline();
   const report = usePipelineStore((s) => s.report);
-  const [activeTab, setActiveTab] = useState<'summary' | 'sections' | 'json'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | 'sections' | 'compatibility' | 'effort' | 'json'>('summary');
 
   const parsed = usePipelineStore((s) => s.parsed);
   const assessment = usePipelineStore((s) => s.assessment);
@@ -140,8 +140,8 @@ export default function Step6FinalReport() {
           )}
 
           {/* Tab navigation */}
-          <div className="flex gap-1 border-b border-border">
-            {(['summary', 'sections', 'json'] as const).map((tab) => (
+          <div className="flex gap-1 border-b border-border overflow-x-auto">
+            {(['summary', 'sections', 'compatibility', 'effort', 'json'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -177,11 +177,179 @@ export default function Step6FinalReport() {
             </div>
           )}
 
+          {activeTab === 'compatibility' && (
+            <CompatibilityMatrixView rawJson={finalReport.rawJson} />
+          )}
+
+          {activeTab === 'effort' && (
+            <EffortEstimateView rawJson={finalReport.rawJson} />
+          )}
+
           {activeTab === 'json' && (
             <JsonExplorer data={finalReport.rawJson || finalReport} rootLabel="finalReport" />
           )}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ── Compatibility Matrix View ──
+
+function CompatibilityMatrixView({ rawJson }: { rawJson: Record<string, unknown> }) {
+  const matrix = (rawJson?.compatibility_matrix ?? rawJson?.compatibilityMatrix ?? {}) as Record<string, unknown>;
+  const entries = (matrix.entries ?? []) as Array<Record<string, unknown>>;
+  const summary = (matrix.summary ?? {}) as Record<string, number>;
+
+  if (entries.length === 0) {
+    return <p className="text-sm text-gray-500 text-center py-8">No compatibility data available. Re-generate the final report.</p>;
+  }
+
+  const levelColors: Record<string, string> = {
+    native: 'bg-green-500/20 text-green-400',
+    partial: 'bg-amber-500/20 text-amber-400',
+    manual: 'bg-orange-500/20 text-orange-400',
+    unsupported: 'bg-red-500/20 text-red-400',
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Summary bar */}
+      <div className="grid grid-cols-4 gap-3">
+        {Object.entries(summary).map(([level, count]) => (
+          <div key={level} className="rounded-lg bg-gray-800/50 border border-border p-3 text-center">
+            <p className={`text-2xl font-bold tabular-nums ${levelColors[level]?.split(' ')[1] ?? 'text-gray-400'}`}>{count}</p>
+            <p className="text-xs text-gray-500 mt-1 capitalize">{level}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Matrix table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border">
+              <th className="text-left text-xs text-gray-500 py-2 px-3">Processor Type</th>
+              <th className="text-left text-xs text-gray-500 py-2 px-3">Category</th>
+              <th className="text-left text-xs text-gray-500 py-2 px-3">Target</th>
+              <th className="text-left text-xs text-gray-500 py-2 px-3">Compatibility</th>
+              <th className="text-left text-xs text-gray-500 py-2 px-3">Gap</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((entry, i) => {
+              const level = String(entry.compatibilityLevel ?? 'unknown');
+              return (
+                <tr key={i} className="border-b border-border/50 hover:bg-gray-800/30">
+                  <td className="py-2 px-3 text-gray-200 font-mono text-xs">{String(entry.processorType)}</td>
+                  <td className="py-2 px-3 text-gray-400 text-xs capitalize">{String(entry.sourceCategory)}</td>
+                  <td className="py-2 px-3 text-gray-400 text-xs">{String(entry.targetEquivalent || '-')}</td>
+                  <td className="py-2 px-3">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${levelColors[level] ?? 'bg-gray-500/20 text-gray-400'}`}>
+                      {level}
+                    </span>
+                  </td>
+                  <td className="py-2 px-3 text-gray-500 text-xs max-w-xs truncate">{String(entry.gapDetails || '-')}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Effort Estimate View ──
+
+function EffortEstimateView({ rawJson }: { rawJson: Record<string, unknown> }) {
+  const effort = (rawJson?.effort_estimate ?? rawJson?.effortEstimate ?? {}) as Record<string, unknown>;
+  const entries = (effort.entries ?? []) as Array<Record<string, unknown>>;
+  const totalHours = Number(effort.totalHours ?? 0);
+  const criticalPathHours = Number(effort.criticalPathHours ?? 0);
+  const teamSize = Number(effort.teamSizeRecommendation ?? 1);
+  const weeks = Number(effort.estimatedWeeks ?? 0);
+  const skills = (effort.skillRequirements ?? {}) as Record<string, number>;
+
+  if (entries.length === 0) {
+    return <p className="text-sm text-gray-500 text-center py-8">No effort data available. Re-generate the final report.</p>;
+  }
+
+  const complexityColors: Record<string, string> = {
+    low: 'text-green-400',
+    medium: 'text-amber-400',
+    high: 'text-orange-400',
+    critical: 'text-red-400',
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Summary metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="rounded-lg bg-gray-800/50 border border-border p-3 text-center">
+          <p className="text-2xl font-bold tabular-nums text-blue-400">{totalHours}h</p>
+          <p className="text-xs text-gray-500 mt-1">Total Hours</p>
+        </div>
+        <div className="rounded-lg bg-gray-800/50 border border-border p-3 text-center">
+          <p className="text-2xl font-bold tabular-nums text-red-400">{criticalPathHours}h</p>
+          <p className="text-xs text-gray-500 mt-1">Critical Path</p>
+        </div>
+        <div className="rounded-lg bg-gray-800/50 border border-border p-3 text-center">
+          <p className="text-2xl font-bold tabular-nums text-purple-400">{teamSize}</p>
+          <p className="text-xs text-gray-500 mt-1">Team Size</p>
+        </div>
+        <div className="rounded-lg bg-gray-800/50 border border-border p-3 text-center">
+          <p className="text-2xl font-bold tabular-nums text-cyan-400">{weeks}w</p>
+          <p className="text-xs text-gray-500 mt-1">Estimated Weeks</p>
+        </div>
+      </div>
+
+      {/* Skill requirements */}
+      {Object.keys(skills).length > 0 && (
+        <div>
+          <h4 className="text-xs text-gray-500 mb-2">Required Skills</h4>
+          <div className="flex flex-wrap gap-1">
+            {Object.entries(skills).sort(([, a], [, b]) => b - a).map(([skill, count]) => (
+              <span key={skill} className="px-2 py-0.5 bg-purple-500/10 text-purple-400 rounded text-xs">
+                {skill} ({count})
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Per-processor effort table */}
+      <div className="overflow-x-auto max-h-80 overflow-y-auto">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 bg-gray-900">
+            <tr className="border-b border-border">
+              <th className="text-left text-xs text-gray-500 py-2 px-3">Processor</th>
+              <th className="text-left text-xs text-gray-500 py-2 px-3">Type</th>
+              <th className="text-right text-xs text-gray-500 py-2 px-3">Hours</th>
+              <th className="text-left text-xs text-gray-500 py-2 px-3">Complexity</th>
+              <th className="text-left text-xs text-gray-500 py-2 px-3">Critical</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((entry, i) => {
+              const complexity = String(entry.complexity ?? 'low');
+              return (
+                <tr key={i} className="border-b border-border/50 hover:bg-gray-800/30">
+                  <td className="py-1.5 px-3 text-gray-200 text-xs">{String(entry.processorName)}</td>
+                  <td className="py-1.5 px-3 text-gray-400 text-xs font-mono">{String(entry.processorType)}</td>
+                  <td className="py-1.5 px-3 text-right text-gray-300 text-xs tabular-nums">{String(entry.hoursEstimate)}h</td>
+                  <td className="py-1.5 px-3">
+                    <span className={`text-xs ${complexityColors[complexity] ?? 'text-gray-400'}`}>{complexity}</span>
+                  </td>
+                  <td className="py-1.5 px-3 text-xs">
+                    {entry.isOnCriticalPath ? <span className="text-red-400">Yes</span> : <span className="text-gray-600">-</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

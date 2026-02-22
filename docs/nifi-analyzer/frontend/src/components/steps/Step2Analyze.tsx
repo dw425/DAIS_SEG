@@ -6,6 +6,8 @@ import TierDiagram from '../shared/TierDiagram';
 import TierDiagramSearch from '../viz/TierDiagramSearch';
 import ConfidenceChart from '../viz/ConfidenceChart';
 import SecurityTreemap from '../viz/SecurityTreemap';
+import LineageGraph from '../viz/LineageGraph';
+import MermaidRenderer from '../viz/MermaidRenderer';
 import type {
   DeepAnalysisResult,
   FunctionalReport,
@@ -14,6 +16,9 @@ import type {
   UpstreamReport,
   DownstreamReport,
   LineByLineReport,
+  LintReport,
+  LintFinding,
+  LineageGraph as LineageGraphData,
 } from '../../types/pipeline';
 
 type PassName = 'functional' | 'processors' | 'workflow' | 'upstream' | 'downstream' | 'line_by_line';
@@ -31,9 +36,11 @@ export default function Step2Analyze() {
   const parsed = usePipelineStore((s) => s.parsed);
   const analysis = usePipelineStore((s) => s.analysis);
   const deepAnalysis = usePipelineStore((s) => s.deepAnalysis);
+  const lineage = usePipelineStore((s) => s.lineage);
   const status = useUIStore((s) => s.stepStatuses[1]);
   const { runAnalyze } = usePipeline();
   const [expandedPass, setExpandedPass] = useState<PassName | null>(null);
+  const [lineageView, setLineageView] = useState<'graph' | 'mermaid'>('graph');
 
   const hasCycles = (analysis?.cycles?.length ?? 0) > 0;
   const depNodeCount = Object.keys(analysis?.dependencyGraph ?? {}).length;
@@ -114,6 +121,59 @@ export default function Step2Analyze() {
                   onToggle={() => togglePass(pass)}
                 />
               ))}
+            </div>
+          )}
+
+          {/* Flow Lint Panel */}
+          {deep?.lint && deep.lint.findings.length > 0 && (
+            <LintPanel lint={deep.lint} />
+          )}
+
+          {/* Data Lineage Visualization */}
+          {lineage && lineage.nodes && lineage.nodes.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium text-gray-300">Data Lineage</h3>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setLineageView('graph')}
+                    className={`px-3 py-1 rounded text-xs transition ${lineageView === 'graph' ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                  >Interactive Graph</button>
+                  <button
+                    onClick={() => setLineageView('mermaid')}
+                    className={`px-3 py-1 rounded text-xs transition ${lineageView === 'mermaid' ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                  >Mermaid Diagram</button>
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-3 mb-3">
+                <div className="rounded-lg bg-gray-800/50 border border-border p-3 text-center">
+                  <p className="text-lg font-bold text-green-400 tabular-nums">{lineage.nodes.filter((n) => n.type === 'source').length}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Sources</p>
+                </div>
+                <div className="rounded-lg bg-gray-800/50 border border-border p-3 text-center">
+                  <p className="text-lg font-bold text-blue-400 tabular-nums">{lineage.nodes.filter((n) => n.type === 'transform').length}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Transforms</p>
+                </div>
+                <div className="rounded-lg bg-gray-800/50 border border-border p-3 text-center">
+                  <p className="text-lg font-bold text-orange-400 tabular-nums">{lineage.nodes.filter((n) => n.type === 'sink').length}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Sinks</p>
+                </div>
+                <div className="rounded-lg bg-gray-800/50 border border-border p-3 text-center">
+                  <p className="text-lg font-bold text-red-400 tabular-nums">{lineage.criticalPath.length}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Critical Path</p>
+                </div>
+              </div>
+              {lineageView === 'graph' ? (
+                <LineageGraph data={lineage} />
+              ) : (
+                lineage.mermaidMarkdown ? (
+                  <MermaidRenderer markdown={lineage.mermaidMarkdown} />
+                ) : (
+                  <div className="rounded-lg border border-border bg-gray-800/30 p-8 text-center text-gray-500 text-sm">
+                    No Mermaid diagram available
+                  </div>
+                )
+              )}
             </div>
           )}
 
@@ -562,6 +622,98 @@ function LineByLinePassView({ report }: { report: LineByLineReport }) {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Flow Lint Panel ──
+
+function LintPanel({ lint }: { lint: LintReport }) {
+  const [expanded, setExpanded] = useState(false);
+  const [filterSeverity, setFilterSeverity] = useState<string | null>(null);
+
+  const filtered = filterSeverity
+    ? lint.findings.filter((f) => f.severity === filterSeverity)
+    : lint.findings;
+
+  const severityStyles: Record<string, { badge: string; border: string; bg: string }> = {
+    critical: { badge: 'bg-red-500/20 text-red-400', border: 'border-red-500/30', bg: 'bg-red-500/5' },
+    high: { badge: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/30', bg: 'bg-orange-500/5' },
+    medium: { badge: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/30', bg: 'bg-amber-500/5' },
+    low: { badge: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/30', bg: 'bg-blue-500/5' },
+    info: { badge: 'bg-gray-500/20 text-gray-400', border: 'border-gray-500/30', bg: 'bg-gray-500/5' },
+  };
+
+  return (
+    <div className="rounded-lg border border-amber-500/30 overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-3 p-3 bg-amber-500/10 hover:bg-amber-500/15 transition text-left"
+      >
+        <span className="w-6 h-6 rounded flex items-center justify-center text-xs font-bold text-amber-400 bg-amber-500/20">!</span>
+        <span className="text-sm font-medium text-amber-400 flex-1">
+          Flow Lint — {lint.counts.total} finding(s)
+        </span>
+        <div className="flex gap-1">
+          {lint.counts.critical > 0 && <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-500/20 text-red-400">{lint.counts.critical} critical</span>}
+          {lint.counts.high > 0 && <span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-500/20 text-orange-400">{lint.counts.high} high</span>}
+          {lint.counts.medium > 0 && <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-400">{lint.counts.medium} med</span>}
+        </div>
+        <svg className={`w-4 h-4 text-amber-400 transition-transform ${expanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {expanded && (
+        <div className="p-4 bg-gray-900/50 border-t border-gray-700/30 space-y-3">
+          <p className="text-xs text-gray-500">{lint.summary}</p>
+          {/* Severity filter pills */}
+          <div className="flex gap-1">
+            <button
+              onClick={() => setFilterSeverity(null)}
+              className={`px-2 py-0.5 rounded text-[10px] transition ${!filterSeverity ? 'bg-gray-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+            >All ({lint.counts.total})</button>
+            {(['critical', 'high', 'medium', 'low', 'info'] as const).map((sev) => {
+              const count = lint.counts[sev];
+              if (count === 0) return null;
+              return (
+                <button
+                  key={sev}
+                  onClick={() => setFilterSeverity(filterSeverity === sev ? null : sev)}
+                  className={`px-2 py-0.5 rounded text-[10px] transition ${filterSeverity === sev ? severityStyles[sev].badge : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                >{sev} ({count})</button>
+              );
+            })}
+          </div>
+          {/* Findings list */}
+          <div className="max-h-96 overflow-y-auto space-y-2">
+            {filtered.map((f, i) => {
+              const style = severityStyles[f.severity] ?? severityStyles.info;
+              return (
+                <div key={i} className={`rounded-lg border ${style.border} ${style.bg} p-3`}>
+                  <div className="flex items-start gap-2">
+                    <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${style.badge}`}>
+                      {f.severity}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono text-gray-500">{f.ruleId}</span>
+                        <span className="text-xs text-gray-500">{f.category}</span>
+                      </div>
+                      <p className="text-sm text-gray-200 mt-0.5">{f.message}</p>
+                      {f.processor && (
+                        <p className="text-[10px] text-gray-500 mt-0.5 font-mono">Processor: {f.processor}</p>
+                      )}
+                      {f.suggestion && (
+                        <p className="text-[10px] text-green-400/70 mt-1 italic">Fix: {f.suggestion}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
